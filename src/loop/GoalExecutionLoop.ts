@@ -2425,7 +2425,7 @@ export class GoalExecutionLoop {
         // deferSendDocument só aceita um artefato por caminho único nesta execução.
         const goalChannelContext: ChannelContext = {
             ...channelContext,
-            goalTrace: { goalId: goal.id, stepId: step.id, stepDescription: (step.description ?? '').slice(0, 120), planGeneration: currentGeneration },
+            goalTrace: { goalId: goal.id, stepId: step.id, stepDescription: (step.description ?? '').slice(0, 120), planGeneration: currentGeneration, userRequest: goal.userIntent },
             priorStepEvidence,
             deliveryTracking: {
                 deferSendDocument: (args) => {

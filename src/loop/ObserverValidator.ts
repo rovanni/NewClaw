@@ -122,6 +122,10 @@ export interface EvidenceItem {
 
 /** Quanto de cada evidência o juiz de grounding enxerga (o resto é cortado e MARCADO no prompt). */
 const GROUNDING_EVIDENCE_CHARS = 2000;
+/** Limites do modo sombra de evidência ampliada (`GROUNDING_EVIDENCE_SHADOW`) — só observação, nunca o julgamento real. */
+const GROUNDING_SHADOW_EVIDENCE_CHARS = 4000;
+const GROUNDING_SHADOW_ARGS_CHARS = 6000;
+const GROUNDING_SHADOW_REQUEST_CHARS = 4000;
 
 // ── Observabilidade do juiz de grounding (`[GROUNDING-TRACE]`) ───────────────────────────────
 // Só fatos, nenhuma interpretação: o que o juiz recebeu (tamanho de cada evidência e se foi
@@ -143,8 +147,23 @@ export interface GroundingTraceContext {
     stepId?: string;
     stepDescription?: string;
     planGeneration?: number;
-    /** `initial` = julgamento da resposta do turno; `partial-revalidation` = revalidação da resposta parcial. */
-    phase?: 'initial' | 'partial-revalidation';
+    /**
+     * O pedido ORIGINAL do usuário. Só é lido pelo modo sombra de evidência ampliada
+     * (`GROUNDING_EVIDENCE_SHADOW`); o julgamento real nunca o recebe como evidência e ele não vai
+     * para o log (só o tamanho).
+     */
+    userRequest?: string;
+    /**
+     * `initial` = julgamento da resposta do turno; `partial-revalidation` = revalidação da resposta
+     * parcial; `shadow-extended` = a execução em sombra com evidência ampliada (nunca vira decisão).
+     */
+    phase?: 'initial' | 'partial-revalidation' | 'shadow-extended';
+}
+
+/** Limites de corte da evidência no prompt do juiz. O padrão é o do julgamento real; o modo sombra os amplia. */
+interface GroundingEvidenceLimits {
+    evidenceChars?: number;
+    argsChars?: number;
 }
 
 interface GroundingEvidenceFact {
@@ -595,7 +614,11 @@ export class ObserverValidator {
         signal?: AbortSignal,
         /** Só observabilidade (`[GROUNDING-TRACE]`): quem chama e em que fase. Não influencia o julgamento. */
         traceCtx?: GroundingTraceContext,
+        /** Só o modo sombra passa isto; o julgamento real usa sempre os limites padrão. */
+        limits?: GroundingEvidenceLimits,
     ): Promise<GroundingVerdict> {
+        const evidenceCharsLimit = limits?.evidenceChars ?? GROUNDING_EVIDENCE_CHARS;
+        const argsCharsLimit = limits?.argsChars ?? 200;
         const t0 = Date.now();
         const orcamento = this.providerFactory.getBudgetAuxiliar('validacao');
         const base = { budgetMs: orcamento.timeoutMs, budgetOrigin: orcamento.origem };
@@ -607,8 +630,8 @@ export class ObserverValidator {
             tool: e.tool,
             inputChars: (e.input ?? '').length,
             outputChars: e.output.length,
-            sentChars: Math.min(e.output.length, GROUNDING_EVIDENCE_CHARS),
-            truncated: e.output.length > GROUNDING_EVIDENCE_CHARS,
+            sentChars: Math.min(e.output.length, evidenceCharsLimit),
+            truncated: e.output.length > evidenceCharsLimit,
         }));
         const emit = (outcome: string, extra: Partial<GroundingTraceRecord> = {}): void =>
             ObserverValidator.traceGrounding({
@@ -639,7 +662,7 @@ export class ObserverValidator {
         //
         // Por isso a resposta entra inteira e, se o conjunto não couber, o resultado é
         // UNVALIDATED (abaixo), nunca um julgamento parcial.
-        const EVIDENCIA_CHARS = GROUNDING_EVIDENCE_CHARS, ARGS_CHARS = 200;
+        const EVIDENCIA_CHARS = evidenceCharsLimit, ARGS_CHARS = argsCharsLimit;
         const corta = (texto: string, limite: number, marca: string): string =>
             texto.length > limite ? `${texto.slice(0, limite)}\n${marca}` : texto;
 
@@ -714,6 +737,7 @@ export class ObserverValidator {
                     NOT_EVALUABLE: parsed.filter(c => c.verdict === 'NOT_EVALUABLE').length,
                 },
             });
+            this.maybeObserveExtendedEvidence(response, evidences, traceCtx, { state, claims: parsed });
             return { state, claims: parsed, reason: ObserverValidator.describeGrounding(state, parsed), elapsedMs: Date.now() - t0, ...base };
         } catch (err) {
             // Timeout, abort, erro de rede, provedor/modelo indisponível — todos significam a
@@ -722,6 +746,61 @@ export class ObserverValidator {
             emit('judge_error', { state: 'UNVALIDATED', judgeError: String(err).slice(0, 120) });
             return { state: 'UNVALIDATED', claims: [], reason: `juiz não concluiu: ${String(err).slice(0, 120)}`, elapsedMs: Date.now() - t0, ...base };
         }
+    }
+
+    // ── Modo sombra de evidência ampliada (Sprint 3, issue 048) ──────────────────────────────────
+    //
+    // Caso real (26/09/2026): 2 de 12 afirmações `NOT_EVALUABLE` derrubaram a resposta inteira — uma sobre
+    // conteúdo que o modelo escreveu num `write` (o juiz só via "Criado… 204 linhas"; os argumentos chegam
+    // cortados em 200 chars) e outra sobre o próprio pedido do usuário (que não é evidência). Antes de
+    // mudar o que o juiz enxerga em produção, mede-se: com `GROUNDING_EVIDENCE_SHADOW=true` o mesmo
+    // julgamento roda DE NOVO em segundo plano com (a) argumentos e evidência com limites maiores e (b) o
+    // pedido do usuário como evidência `U1`, e o resultado vira UMA linha `[GROUNDING-SHADOW]`
+    // comparando com o veredito real. O veredito real já foi devolvido e nada da sombra o altera. O
+    // custo é uma chamada extra ao juiz por julgamento (opt-in, desligado por padrão).
+
+    private maybeObserveExtendedEvidence(
+        response: string,
+        evidences: EvidenceItem[],
+        traceCtx: GroundingTraceContext | undefined,
+        real: { state: GroundingState; claims: GroundedClaim[] },
+    ): void {
+        if (process.env.GROUNDING_EVIDENCE_SHADOW !== 'true') return;
+        if (!traceCtx || traceCtx.phase === 'shadow-extended' || !traceCtx.userRequest) return; // sem recursão
+        void this.runExtendedEvidenceShadow(response, evidences, traceCtx, real).catch(() => { /* nunca afeta o real */ });
+    }
+
+    private async runExtendedEvidenceShadow(
+        response: string,
+        evidences: EvidenceItem[],
+        traceCtx: GroundingTraceContext,
+        real: { state: GroundingState; claims: GroundedClaim[] },
+    ): Promise<void> {
+        const userRequest = traceCtx.userRequest ?? '';
+        const capText = (text: string, limit: number): string => text.slice(0, limit);
+        const extended: EvidenceItem[] = [
+            ...evidences,
+            { id: 'U1', tool: 'pedido_do_usuario', output: capText(userRequest, GROUNDING_SHADOW_REQUEST_CHARS) },
+        ];
+        const t0 = Date.now();
+        const verdict = await this.validateGrounding(response, extended, undefined,
+            { ...traceCtx, phase: 'shadow-extended' },
+            { evidenceChars: GROUNDING_SHADOW_EVIDENCE_CHARS, argsChars: GROUNDING_SHADOW_ARGS_CHARS });
+        const counts = (claims: GroundedClaim[]) => ({
+            SUPPORTED: claims.filter(c => c.verdict === 'SUPPORTED').length,
+            NOT_SUPPORTED: claims.filter(c => c.verdict === 'NOT_SUPPORTED').length,
+            NOT_EVALUABLE: claims.filter(c => c.verdict === 'NOT_EVALUABLE').length,
+        });
+        log.info('[GROUNDING-SHADOW] ' + JSON.stringify({
+            v: 1,
+            goalId: traceCtx.goalId, stepId: traceCtx.stepId, traceId: traceCtx.traceId, planGeneration: traceCtx.planGeneration,
+            realState: real.state, realCounts: counts(real.claims),
+            shadowState: verdict.state, shadowCounts: counts(verdict.claims),
+            stateChanged: real.state !== verdict.state,
+            shadowNotSupported: verdict.claims.filter(c => c.verdict !== 'SUPPORTED').map(c => ({ claim: c.claim.slice(0, 200), verdict: c.verdict, evidence: c.evidence })),
+            addedEvidence: { userRequestChars: userRequest.length, userRequestSentChars: Math.min(userRequest.length, GROUNDING_SHADOW_REQUEST_CHARS), argsCharsLimit: GROUNDING_SHADOW_ARGS_CHARS, evidenceCharsLimit: GROUNDING_SHADOW_EVIDENCE_CHARS },
+            shadowElapsedMs: Date.now() - t0,
+        }));
     }
 
     /** Emite `[GROUNDING-TRACE]` (ver o bloco de tipos no topo do arquivo). Nunca lança. */

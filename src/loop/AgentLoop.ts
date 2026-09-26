@@ -1057,7 +1057,7 @@ export class AgentLoop {
             const evidences = [...AgentLoop.evidencesFromTrace(trace), ...(channelContext?.priorStepEvidence ?? [])]
                 .map((e, i) => ({ ...e, id: `E${i + 1}` }));
             try {
-                const g = await this.observer.validateGrounding(response, evidences, signal, { traceId: trace.id, conversationId, phase: 'initial', ...channelContext?.goalTrace });
+                const g = await this.observer.validateGrounding(response, evidences, signal, { traceId: trace.id, conversationId, phase: 'initial', userRequest: userText, ...channelContext?.goalTrace });
                 if (g.state !== 'VALIDATED' && g.state !== 'NOT_APPLICABLE') {
                     log.warn(`[${this.ts()}] [GROUNDING] estado=${g.state} — bloqueando entrega (${g.reason})`);
                     this.reflectionMemory.record({
