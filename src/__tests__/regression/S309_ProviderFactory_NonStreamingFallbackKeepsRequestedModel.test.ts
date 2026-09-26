@@ -14,6 +14,8 @@
  *   2 → sem modelo pedido: o fallback usa o padrão (comportamento de sempre).
  *   3 → o modelo pedido não vaza para o padrão de outra chamada (a próxima, sem pedido, volta ao padrão).
  *   4 → o log do fallback diz qual modelo está usando.
+ *   5 → a tentativa FALHADA e a linha [LLM-CALL] registram o modelo pedido, não o padrão (o `catch` recalculava
+ *       o modelo da instância compartilhada e o diagnóstico mostrava `model=<padrão>` para uma chamada leve).
  *
  * Execução: npx ts-node src/__tests__/regression/S309_ProviderFactory_NonStreamingFallbackKeepsRequestedModel.test.ts
  */
@@ -97,6 +99,16 @@ async function main(): Promise<void> {
             assert(fallback.length === 1 && fallback[0] === 'modelo-padrao', 'sem modelo pedido, o fallback usa o padrão configurado', fallback);
             const log = lines.map(strip).find(l => l.includes('trying non-streaming fallback')) ?? '';
             assert(log.includes('model=modelo-padrao'), 'o log mostra o modelo padrão', log.slice(0, 200));
+        }
+
+        console.log('\n=== S309-5 — o registro de tentativas e o [LLM-CALL] mostram o modelo PEDIDO ===');
+        {
+            fake.seen.length = 0;
+            const { value: r, lines } = await captureLogs(() => factory.chatWithFallback(messages, undefined, 'ollama', 20000, undefined, 'modelo-leve', { diag: { component: 'S309', role: 'observer', phase: 'grounding' } }));
+            const failedAttempt = r.attempts.find(a => a.status === 'error' || a.status === 'timeout');
+            assert(failedAttempt?.model === 'modelo-leve', 'a tentativa falhada registra o modelo pedido (antes: modelo-padrao)', r.attempts);
+            const llmCall = lines.map(strip).find(l => l.includes('[LLM-CALL]') && l.includes('component=S309')) ?? '';
+            assert(llmCall.includes('model=modelo-leve') && !llmCall.includes('model=modelo-padrao'), '[LLM-CALL] mostra model=modelo-leve', llmCall.slice(0, 220));
         }
 
         console.log('\n=== S309-4 — a instância compartilhada não foi alterada (concorrência) ===');

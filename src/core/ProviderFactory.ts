@@ -403,6 +403,9 @@ export class ProviderFactory {
                     externalSignal.addEventListener('abort', onExternalAbort, { once: true });
                 }
 
+                // Modelo da instância DESTA requisição, para o registro de tentativas — o `catch` abaixo não
+                // enxerga as constantes do `try`.
+                let attemptModel: string | undefined;
                 try {
                     const sharedProvider = this.providers.get(providerName);
                     if (!sharedProvider) break;
@@ -412,6 +415,7 @@ export class ProviderFactory {
                         ? this.getProviderWithModel(modelOverride, providerName)
                         : sharedProvider;
                     const modelUsed = (provider instanceof OllamaProvider) ? provider.getModel() : (provider as { model?: string }).model || provider.name;
+                    attemptModel = modelUsed;
 
                     if (attempt > 0) {
                         log.info(`[${attemptId}] Retry ${attempt}/${MAX_RETRIES} after ${RETRY_BACKOFF_MS}ms backoff`);
@@ -540,8 +544,11 @@ export class ProviderFactory {
                         return { status: 'cancelled', content: '', fallbackReason: 'cancelled', fallbackMessage: 'Operação cancelada.', attempts: attemptLog };
                     }
 
+                    // O modelo registrado numa tentativa FALHADA é o da instância da requisição (`attemptModel`), não o
+                    // da instância compartilhada: recalculá-lo daqui gravava o modelo PADRÃO em toda tentativa falhada e
+                    // o `[LLM-CALL]` mostrava `model=glm-5.3` para uma chamada feita com o modelo leve (issue 048).
                     const prov = this.providers.get(providerName);
-                    const modelUsed = (prov instanceof OllamaProvider) ? prov.getModel() : (prov as { model?: string })?.model || providerName;
+                    const modelUsed = attemptModel ?? ((prov instanceof OllamaProvider) ? prov.getModel() : (prov as { model?: string })?.model || providerName);
                     const isTimeout = errorMessage(error)?.includes('Timeout');
                     // 'Empty response from stream' (OllamaProvider) é lançado deliberadamente
                     // "para que ProviderFactory possa retentar" (ver comentário na origem) — mas
