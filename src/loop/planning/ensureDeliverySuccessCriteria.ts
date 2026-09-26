@@ -119,12 +119,24 @@ export function ensureDeliverySuccessCriteria(
  * prices"), `memory_operation` ("retrieving from memory" é claramente uma pergunta; "saving"
  * também se beneficia de uma confirmação real em vez de um resumo de processo — custo de incluir
  * é uma validação LLM a mais, nunca uma resposta errada), `conversation` ("general chat"),
- * `vision` ("analyzing images... OCR" sempre produz uma descrição). EXCLUÍDAS: `system_operation`/
+ * `vision` ("analyzing images... OCR" sempre produz uma descrição), e `creation` (adicionada no commit
+ * consolidado `849b881`, 16/08/2026, sem documentação aqui até a issue 048): um pedido de CRIAÇÃO sem
+ * ferramenta de entrega ("escreva um poema") tem o texto como entregável, então precisa de uma resposta.
+ * EXCLUÍDAS: `system_operation`/
  * `destructive` (ação pura, sem pergunta embutida — exatamente o caso que S30-6/7/8 já protegem
  * na função-irmã, e a mesma exceção que a descrição original de `response_produced` documenta em
  * GoalPlanner.ts: "não use para pedidos de AÇÃO pura sem pergunta embutida"), `audio` (já tem seu
  * próprio critério `tool_succeeded(send_audio)` cobrindo a entrega), `greeting`/`confirmation`/
  * `rejection` (raramente chegam ao ciclo de Goal — resolvidos inline por `isGoal=false`).
+ *
+ * EXCEÇÃO ESTRUTURAL (issue 048, Sprint 2): quando o plano JÁ contém uma ferramenta de entrega
+ * (`send_document`/`send_audio`, as mesmas `DELIVERY_TOOLS` do módulo), o entregável é o artefato — não
+ * se acrescenta `response_produced`. Reprodução real (26/09/2026): "crie o programa e me envie o .py",
+ * categoria `creation`, `.py` entregue em 4,4 min; o critério injetado manteve o goal trabalhando por
+ * mais 25 min em redação/validação de um texto que ninguém pediu. A checagem é presença de ferramenta
+ * no plano, nunca interpretação do pedido. Se um replan posterior abandonar a entrega, quem cobre é
+ * `delivery_not_silently_abandoned` (S244) — desenhado exatamente para categorias sem
+ * `response_produced`. `steps` é opcional: omitido, o comportamento é o de antes.
  *
  * `category` opcional (undefined quando o router falhou e o caminho fail-open do GoalOrchestrator
  * foi usado, ou quando o chamador — ex: avanço de marco de construção — não tem uma classificação
@@ -138,9 +150,12 @@ const RESPONSE_CONTRACT_CATEGORIES = new Set<IntentCategory>([
 export function ensureResponseContractCriterion(
     category: IntentCategory | undefined,
     successCriteria: SuccessCriterion[],
+    steps: PlanStep[] = [],
 ): SuccessCriterion[] {
     if (!category || !RESPONSE_CONTRACT_CATEGORIES.has(category)) return successCriteria;
     if (successCriteria.some(c => c.check === 'response_produced')) return successCriteria; // LLM já declarou
+    // O plano já entrega um artefato: ele É a resposta (ver "EXCEÇÃO ESTRUTURAL" acima).
+    if (steps.some(s => s.toolName !== undefined && (DELIVERY_TOOLS as readonly string[]).includes(s.toolName))) return successCriteria;
 
     return [
         ...successCriteria,

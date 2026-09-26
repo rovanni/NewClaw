@@ -350,6 +350,7 @@ export class GoalExecutionLoop {
             ensureResponseContractCriterion(
                 intentCategory,
                 ensureDeliverySuccessCriteria(initialPlan, planResult.successCriteria ?? []),
+                initialPlan,
             ),
         );
         if (initialCriteria.length > 0) {
