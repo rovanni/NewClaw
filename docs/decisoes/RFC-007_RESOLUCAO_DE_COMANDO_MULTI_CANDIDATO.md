@@ -1,8 +1,16 @@
 # RFC-007 — Resolução de Comando Multi-Candidato (quando "existe no PATH" não significa "funciona")
 
-**Status:** PROPOSTA — aguardando revisão do usuário. Não implementado. Escrita seguindo a mesma
-sequência da RFC-003 (documentação vira fonte de verdade antes de existir código), em resposta a
-pedido explícito do usuário para generalizar o achado da issue 037.
+**Status:** IMPLEMENTADA (26/09/2026, commit `2bc013d`, teste S300) — aprovada com ajustes. Ver
+`docs/analises-arquiteturais/CAMPANHA_CONCLUSAO_DO_OBJETIVO_E_LATENCIA_2026-09-26.md`. Validação: os probes
+reais no Windows reproduziram `py -3=true | python=true | python3=false` (o stub da Store); o Planner passou a
+receber o fato (`commands_validated`) e, em execuções reais, escolheu `python`/`py -3`. Numa execução o plano
+inicial ainda escreveu `python3` (o desenho é fato, não ordem) e os dois replans seguintes usaram `py -3`.
+Fora de escopo, como aprovado: descoberta automática de candidatos, catálogo global de aliases, reescrita
+automática de comandos, persistência em OperationalKnowledge, alteração do fluxo geral de `exec_command`.
+
+*Texto original da proposta (escrita seguindo a mesma sequência da RFC-003 — documentação vira fonte de
+verdade antes de existir código — em resposta a pedido explícito do usuário para generalizar o achado da
+issue 037):*
 
 **Autor:** Investigação assistida (Claude Code), campanha "sistema não utilizável", 22/09/2026.
 
