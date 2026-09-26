@@ -157,13 +157,15 @@ export interface GroundingTraceContext {
      * `initial` = julgamento da resposta do turno; `partial-revalidation` = revalidação da resposta
      * parcial; `shadow-extended` = a execução em sombra com evidência ampliada (nunca vira decisão).
      */
-    phase?: 'initial' | 'partial-revalidation' | 'shadow-extended';
+    phase?: 'initial' | 'partial-revalidation' | 'shadow-extended' | 'shadow-model';
 }
 
 /** Limites de corte da evidência no prompt do juiz. O padrão é o do julgamento real; o modo sombra os amplia. */
 interface GroundingEvidenceLimits {
     evidenceChars?: number;
     argsChars?: number;
+    /** Só o modo sombra de modelo passa isto: julga com OUTRO modelo (mesma evidência, mesmo prompt). */
+    model?: string;
 }
 
 interface GroundingEvidenceFact {
@@ -709,7 +711,7 @@ export class ObserverValidator {
             // Issue 038: mesmo motivo do outro call site de grounding acima — reasoningIntensive
             // evita que o juiz seja abortado pelo teto de "thinking" pensado para chat curto.
             const fallbackResult = await this.providerFactory.chatWithFallback(
-                [{ role: 'user', content: prompt }], undefined, undefined, orcamento.timeoutMs, signal, this.observerModel,
+                [{ role: 'user', content: prompt }], undefined, undefined, orcamento.timeoutMs, signal, limits?.model ?? this.observerModel,
                 { reasoningIntensive: true, diag: { component: 'ObserverValidator', role: 'observer', phase: 'grounding' } },
             );
 
@@ -738,6 +740,7 @@ export class ObserverValidator {
                 },
             });
             this.maybeObserveExtendedEvidence(response, evidences, traceCtx, { state, claims: parsed });
+            this.maybeObserveLightModel(response, evidences, traceCtx, { state, claims: parsed, elapsedMs: Date.now() - t0 });
             return { state, claims: parsed, reason: ObserverValidator.describeGrounding(state, parsed), elapsedMs: Date.now() - t0, ...base };
         } catch (err) {
             // Timeout, abort, erro de rede, provedor/modelo indisponível — todos significam a
@@ -766,7 +769,7 @@ export class ObserverValidator {
         real: { state: GroundingState; claims: GroundedClaim[] },
     ): void {
         if (process.env.GROUNDING_EVIDENCE_SHADOW !== 'true') return;
-        if (!traceCtx || traceCtx.phase === 'shadow-extended' || !traceCtx.userRequest) return; // sem recursão
+        if (!traceCtx || traceCtx.phase === 'shadow-extended' || traceCtx.phase === 'shadow-model' || !traceCtx.userRequest) return; // sem recursão (nenhuma sombra dispara outra)
         void this.runExtendedEvidenceShadow(response, evidences, traceCtx, real).catch(() => { /* nunca afeta o real */ });
     }
 
@@ -786,11 +789,7 @@ export class ObserverValidator {
         const verdict = await this.validateGrounding(response, extended, undefined,
             { ...traceCtx, phase: 'shadow-extended' },
             { evidenceChars: GROUNDING_SHADOW_EVIDENCE_CHARS, argsChars: GROUNDING_SHADOW_ARGS_CHARS });
-        const counts = (claims: GroundedClaim[]) => ({
-            SUPPORTED: claims.filter(c => c.verdict === 'SUPPORTED').length,
-            NOT_SUPPORTED: claims.filter(c => c.verdict === 'NOT_SUPPORTED').length,
-            NOT_EVALUABLE: claims.filter(c => c.verdict === 'NOT_EVALUABLE').length,
-        });
+        const counts = ObserverValidator.countClaims;
         log.info('[GROUNDING-SHADOW] ' + JSON.stringify({
             v: 1,
             goalId: traceCtx.goalId, stepId: traceCtx.stepId, traceId: traceCtx.traceId, planGeneration: traceCtx.planGeneration,
@@ -801,6 +800,61 @@ export class ObserverValidator {
             addedEvidence: { userRequestChars: userRequest.length, userRequestSentChars: Math.min(userRequest.length, GROUNDING_SHADOW_REQUEST_CHARS), argsCharsLimit: GROUNDING_SHADOW_ARGS_CHARS, evidenceCharsLimit: GROUNDING_SHADOW_EVIDENCE_CHARS },
             shadowElapsedMs: Date.now() - t0,
         }));
+    }
+
+    // ── Modo sombra de modelo (Sprint 5, issue 048) ──────────────────────────────────────────────
+    //
+    // Sprint 4 (medição): o custo dominante do juiz é o VOLUME de raciocínio do modelo pesado (165.000
+    // chars, 383 s no prompt real de 229 s), e um modelo leve fez o mesmo prompt em 52 s — mas decompôs em
+    // 19 afirmações com 4 NOT_EVALUABLE (o pesado: 12 e 2), então NÃO é equivalente. Equivalência só se
+    // demonstra com tráfego real. Com `GROUNDING_SHADOW_MODEL=<modelo>` (opt-in; vazio = desligado) o
+    // MESMO julgamento — mesma resposta, mesma evidência, mesmo prompt — roda de novo em segundo plano
+    // com esse modelo e vira UMA linha `[GROUNDING-SHADOW-MODEL]` (estado, contagens, tempo dos dois).
+    // Diferente da sombra de evidência (que amplia o que o juiz vê), aqui a ÚNICA variável é o modelo,
+    // para a diferença ser atribuível a ele. O veredito real já foi devolvido; nada da sombra o altera.
+
+    private maybeObserveLightModel(
+        response: string,
+        evidences: EvidenceItem[],
+        traceCtx: GroundingTraceContext | undefined,
+        real: { state: GroundingState; claims: GroundedClaim[]; elapsedMs: number },
+    ): void {
+        const model = (process.env.GROUNDING_SHADOW_MODEL ?? '').trim();
+        if (!model) return;
+        if (!traceCtx || traceCtx.phase === 'shadow-extended' || traceCtx.phase === 'shadow-model') return; // sem recursão
+        void this.runLightModelShadow(response, evidences, traceCtx, real, model).catch(() => { /* nunca afeta o real */ });
+    }
+
+    private async runLightModelShadow(
+        response: string,
+        evidences: EvidenceItem[],
+        traceCtx: GroundingTraceContext,
+        real: { state: GroundingState; claims: GroundedClaim[]; elapsedMs: number },
+        model: string,
+    ): Promise<void> {
+        const t0 = Date.now();
+        const verdict = await this.validateGrounding(response, evidences, undefined,
+            { ...traceCtx, phase: 'shadow-model' }, { model });
+        const shadowUnsupported = verdict.claims.filter(c => c.verdict !== 'SUPPORTED');
+        log.info('[GROUNDING-SHADOW-MODEL] ' + JSON.stringify({
+            v: 1,
+            goalId: traceCtx.goalId, stepId: traceCtx.stepId, traceId: traceCtx.traceId, planGeneration: traceCtx.planGeneration,
+            phase: traceCtx.phase ?? 'initial',
+            realModel: this.observerModel || null, shadowModel: model,
+            realState: real.state, realCounts: ObserverValidator.countClaims(real.claims), realElapsedMs: real.elapsedMs,
+            shadowState: verdict.state, shadowCounts: ObserverValidator.countClaims(verdict.claims), shadowElapsedMs: Date.now() - t0,
+            stateAgrees: real.state === verdict.state,
+            realNotSupported: real.claims.filter(c => c.verdict !== 'SUPPORTED').map(c => ({ claim: c.claim.slice(0, 160), verdict: c.verdict })),
+            shadowNotSupported: shadowUnsupported.map(c => ({ claim: c.claim.slice(0, 160), verdict: c.verdict })),
+        }));
+    }
+
+    private static countClaims(claims: GroundedClaim[]): { SUPPORTED: number; NOT_SUPPORTED: number; NOT_EVALUABLE: number } {
+        return {
+            SUPPORTED: claims.filter(c => c.verdict === 'SUPPORTED').length,
+            NOT_SUPPORTED: claims.filter(c => c.verdict === 'NOT_SUPPORTED').length,
+            NOT_EVALUABLE: claims.filter(c => c.verdict === 'NOT_EVALUABLE').length,
+        };
     }
 
     /** Emite `[GROUNDING-TRACE]` (ver o bloco de tipos no topo do arquivo). Nunca lança. */
