@@ -490,6 +490,8 @@ export class CapabilityRegistry {
 
     private readonly probe = new CapabilityProbe();
     private readonly envProbe = new EnvironmentProbe();
+    /** RFC-007: espelho do último probe (evidência por família de comando); sem persistência. */
+    private resolvedCommands: Record<string, { resolved: string | null; failed: string[] }> = {};
 
     private cache: CachedData = {
         os:        null,
@@ -543,6 +545,7 @@ export class CapabilityRegistry {
             for (const [name, available] of Object.entries(caps.tools)) {
                 toolCaps[name] = { available, confidence: 0.99, source: 'probe', checkedAt: caps.probeTimestamp };
             }
+            this.resolvedCommands = caps.resolvedCommands;
             this.cache.tools = { data: toolCaps, ts: Date.now() };
             log.debug('[Registry] tools refreshed');
         } catch (err) {
@@ -723,6 +726,10 @@ export class CapabilityRegistry {
             const unavailable = Object.entries(tools).filter(([, s]) => !s.available).map(([k]) => k);
             if (available.length > 0)   lines.push(`• Ferramentas: ${available.join(', ')}`);
             if (unavailable.length > 0) lines.push(`• Indisponíveis (não usar): ${unavailable.join(', ')}`);
+            for (const [family, r] of Object.entries(this.resolvedCommands)) {
+                const failed = r.failed.length > 0 ? ` | falharam: ${r.failed.join(', ')}` : '';
+                lines.push(`• Comando validado (${family}): ${r.resolved ?? 'nenhum'}${failed}`);
+            }
         }
 
         const net = this.cache.network?.data;

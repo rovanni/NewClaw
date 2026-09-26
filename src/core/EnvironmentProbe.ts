@@ -12,7 +12,7 @@
 
 import { createLogger } from '../shared/AppLogger';
 import { ToolRegistry } from './ToolRegistry';
-import { probeToolCmd, resolvePython3Runtime, defaultPython3Candidates, runPython3Import, isBashFunctional, probeNodeRequire } from '../utils/crossPlatform';
+import { probeToolCmd, resolveWorkingCommand, probePython3Runtime, commandCandidateLabel, defaultPython3Candidates, runPython3Import, isBashFunctional, probeNodeRequire } from '../utils/crossPlatform';
 import { KNOWN_DEPS } from '../loop/GoalEvaluator';
 
 const log = createLogger('EnvironmentProbe');
@@ -24,6 +24,12 @@ export interface EnvironmentCapabilities {
     tools: Record<string, boolean>;
     /** Pacotes Python disponíveis (import passivo). */
     pythonPkgs: Record<string, boolean>;
+    /**
+     * RFC-007 — evidência factual de resolução de comando por família (ex.: `python3`): qual
+     * candidato funcionou (`resolved`, null se nenhum) e quais falharam por execução real.
+     * Derivada dos mesmos probes que preenchem `tools`; não é estado persistido nem nova fonte.
+     */
+    resolvedCommands: Record<string, { resolved: string | null; failed: string[] }>;
     probeTimestamp: number;
     /** Bloco de texto pronto para injeção em prompts de planejamento. */
     summary: string;
@@ -81,6 +87,12 @@ const PYTHON_PKGS_TO_PROBE = ['pptx', 'docx', 'PIL', 'markdown'];
 
 // Cache global — partilhado entre todas as instâncias no mesmo processo.
 let cachedCapabilities: EnvironmentCapabilities | null = null;
+
+/** Linha factual `[AMBIENTE]` de resolução de comando — evidência para o Planner, nunca ordem. */
+function formatResolvedCommandLine(family: string, r: { resolved: string | null; failed: string[] }): string {
+    const failed = r.failed.length > 0 ? ` | falharam: ${r.failed.join(', ')}` : '';
+    return `[AMBIENTE] Comando validado por execução (${family}): ${r.resolved ?? 'nenhum'}${failed}`;
+}
 
 export class EnvironmentProbe {
 
@@ -145,16 +157,26 @@ export class EnvironmentProbe {
             // sem um helper de shell escaping, que não existe no projeto — execFile com
             // array de args evita esse problema por construção).
             const pythonPkgs: Record<string, boolean> = {};
-            const pythonRuntime = await resolvePython3Runtime(defaultPython3Candidates());
+            // Exaustivo: o veredito de CADA nome (`python3`, `python`, `py -3`) é o fato entregue ao
+            // Planner — no Windows `python` pode funcionar enquanto `python3` é o stub da Store.
+            const pythonResolution = await resolveWorkingCommand(defaultPython3Candidates(), probePython3Runtime, { exhaustive: true });
+            const pythonRuntime = pythonResolution.resolved;
 
-            // 'python3'/'python' em `tools` refletem o MESMO runtime validado por execução real
-            // acima (nunca o resultado de `where`/`command -v`, que o stub do Windows Store
-            // engana) — mesmo padrão de 'bash'/isBashFunctional(). Isso é o que chega ao
-            // GoalPlanner via CapabilityRegistry.getCapabilitySummary() ("Indisponíveis (não
-            // usar): ..."), então um Windows sem Python real agora aparece como tal ANTES do
-            // plano ser montado, em vez de só ser descoberto depois de vários exec_command falhos.
-            tools['python3'] = pythonRuntime !== null;
-            tools['python']  = pythonRuntime !== null;
+            // 'python3'/'python' em `tools` refletem o veredito de EXECUÇÃO REAL de cada nome
+            // (nunca `where`/`command -v`, que o stub do Windows Store engana) — mesmo padrão de
+            // 'bash'/isBashFunctional(). Um nome só é "disponível" se ELE funciona: antes ambos
+            // herdavam `runtime !== null`, e "python3 disponível" era falso onde só `python` roda.
+            const pythonVerdict = (name: string): boolean =>
+                pythonResolution.tested.some(t => t.candidate.command === name && t.ok);
+            tools['python3'] = pythonVerdict('python3');
+            tools['python']  = pythonVerdict('python');
+
+            const resolvedCommands: EnvironmentCapabilities['resolvedCommands'] = {
+                python3: {
+                    resolved: pythonRuntime ? commandCandidateLabel(pythonRuntime) : null,
+                    failed: pythonResolution.tested.filter(t => !t.ok).map(t => commandCandidateLabel(t.candidate)),
+                },
+            };
 
             if (pythonRuntime) {
                 const pkgResults = await Promise.all(
@@ -174,12 +196,13 @@ export class EnvironmentProbe {
             const summaryLines = [
                 `[AMBIENTE] Ferramentas disponíveis: ${available.length > 0 ? available.join(', ') : 'nenhuma detectada'}`,
                 unavailable.length > 0 ? `[AMBIENTE] Ferramentas INDISPONÍVEIS (não tente usá-las): ${unavailable.join(', ')}` : '',
+                ...Object.entries(resolvedCommands).map(([family, r]) => formatResolvedCommandLine(family, r)),
                 availablePy.length > 0 ? `[AMBIENTE] Python packages disponíveis: ${availablePy.join(', ')}` : '',
             ].filter(Boolean);
 
             const summary = summaryLines.join('\n');
 
-            cachedCapabilities = { tools, pythonPkgs, probeTimestamp: Date.now(), summary };
+            cachedCapabilities = { tools, pythonPkgs, resolvedCommands, probeTimestamp: Date.now(), summary };
             log.info(`[EnvironmentProbe] probe ok: available=[${available.join(',')}] py=[${availablePy.join(',')}]`);
             return cachedCapabilities;
 
@@ -198,6 +221,6 @@ export class EnvironmentProbe {
     }
 
     private emptyCapabilities(): EnvironmentCapabilities {
-        return { tools: {}, pythonPkgs: {}, probeTimestamp: Date.now(), summary: '' };
+        return { tools: {}, pythonPkgs: {}, resolvedCommands: {}, probeTimestamp: Date.now(), summary: '' };
     }
 }

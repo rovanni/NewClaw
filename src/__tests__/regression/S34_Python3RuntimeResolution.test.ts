@@ -206,15 +206,16 @@ console.log('\n=== S34-11 — EnvironmentProbe.probe(): resolvePython3Runtime ch
 {
     const envProbePath = path.join(process.cwd(), 'src', 'core', 'EnvironmentProbe.ts');
     const src = fs.readFileSync(envProbePath, 'utf-8');
-    const calls = src.match(/resolvePython3Runtime\(/g) ?? [];
-    assert(calls.length === 1, `resolvePython3Runtime( aparece exatamente 1 vez no source (obtido: ${calls.length})`, calls.length);
+    // RFC-007: o motor genérico resolveWorkingCommand substituiu a chamada direta (resolvePython3Runtime é wrapper).
+    const calls = src.match(/resolveWorkingCommand\(defaultPython3Candidates\(\)/g) ?? [];
+    assert(calls.length === 1, `resolveWorkingCommand(defaultPython3Candidates() aparece exatamente 1 vez no source (obtido: ${calls.length})`, calls.length);
 }
 
 console.log('\n=== S34-12 — 4 pacotes reutilizam a MESMA variável de runtime já resolvida ===');
 {
     const envProbePath = path.join(process.cwd(), 'src', 'core', 'EnvironmentProbe.ts');
     const src = fs.readFileSync(envProbePath, 'utf-8');
-    assert(/const pythonRuntime = await resolvePython3Runtime/.test(src), 'runtime resolvido uma vez em variável própria', null);
+    assert(/const pythonRuntime = pythonResolution\.resolved/.test(src), 'runtime resolvido uma vez em variável própria', null);
     assert(/PYTHON_PKGS_TO_PROBE\.map\(async \(p\).*runPython3Import\(pythonRuntime, p\)/.test(src), 'os 4 pacotes chamam runPython3Import(pythonRuntime, p) — reusando a mesma variável, não resolvendo de novo', null);
 }
 
@@ -226,7 +227,7 @@ console.log('\n=== S34-13 — ausência de runtime: 4 pacotes false, probes não
     // Confirma que o probe de ferramentas (tools) roda ANTES e é independente da resolução Python —
     // não há branch condicional envolvendo `tools` a partir do resultado de resolvePython3Runtime.
     const toolProbeIdx = src.indexOf('const result = await execTool.execute');
-    const pythonProbeIdx = src.indexOf('resolvePython3Runtime(');
+    const pythonProbeIdx = src.indexOf('resolveWorkingCommand(defaultPython3Candidates()');
     assert(toolProbeIdx > 0 && pythonProbeIdx > toolProbeIdx, 'probe de ferramentas (tools) executa e conclui antes da resolução Python — nunca abortado por ela', { toolProbeIdx, pythonProbeIdx });
 }
 
@@ -237,7 +238,7 @@ console.log('\n=== S34-14 — timeout: pequeno e explícito, candidato tratado c
     const srcPath = path.join(process.cwd(), 'src', 'utils', 'crossPlatform.ts');
     const src = fs.readFileSync(srcPath, 'utf-8');
     assert(/PYTHON3_PROBE_TIMEOUT_MS\s*=\s*3000/.test(src), 'timeout pequeno e explícito (3000ms), mesmo valor já usado por which() no mesmo arquivo', null);
-    assert(/timeout:\s*PYTHON3_PROBE_TIMEOUT_MS/.test(src), 'timeout é passado ao execFile — spawn que trava é tratado como inválido (error !== null)', null);
+    assert(/timeout:\s*timeoutMs/.test(src) && /PYTHON3_PROBE_TIMEOUT_MS\)/.test(src), 'timeout (via runCommandCheck) é passado ao execFile — spawn que trava é tratado como inválido (error !== null)', null);
 }
 
 // ── 15: regressão do parsing — pptx/docx/PIL/markdown preservados ──
@@ -264,11 +265,12 @@ console.log('\n=== S34-16 — tools.python3/tools.python derivam de pythonRuntim
     const envProbePath = path.join(process.cwd(), 'src', 'core', 'EnvironmentProbe.ts');
     const src = fs.readFileSync(envProbePath, 'utf-8');
     assert(!/'pandoc', 'marp', 'python3'/.test(src), '"python3" removido do array TOOLS_TO_PROBE (não é mais checado via where/command -v)', null);
-    assert(/tools\['python3'\]\s*=\s*pythonRuntime\s*!==\s*null/.test(src), 'tools.python3 é atribuído a partir do pythonRuntime já resolvido (mesmo padrão de tools.bash/isBashFunctional)', null);
-    assert(/tools\['python'\]\s*=\s*pythonRuntime\s*!==\s*null/.test(src), 'tools.python (chave nova, antes inexistente) também deriva do runtime validado', null);
+    // RFC-007: cada nome recebe o SEU veredito de execução real (antes ambos herdavam runtime !== null).
+    assert(/tools\['python3'\]\s*=\s*pythonVerdict\('python3'\)/.test(src), 'tools.python3 deriva do veredito de execução do próprio nome python3', null);
+    assert(/tools\['python'\]\s*=\s*pythonVerdict\('python'\)/.test(src), 'tools.python deriva do veredito de execução do próprio nome python', null);
     // Garante que a atribuição acontece DEPOIS de resolvePython3Runtime (não usa um valor stale).
-    const pyRuntimeIdx = src.indexOf('const pythonRuntime = await resolvePython3Runtime');
-    const toolsPy3Idx  = src.indexOf("tools['python3'] = pythonRuntime");
+    const pyRuntimeIdx = src.indexOf('const pythonRuntime = pythonResolution.resolved');
+    const toolsPy3Idx  = src.indexOf("tools['python3'] = pythonVerdict");
     assert(pyRuntimeIdx > 0 && toolsPy3Idx > pyRuntimeIdx, 'atribuição de tools.python3 ocorre depois da resolução do runtime, nunca antes', { pyRuntimeIdx, toolsPy3Idx });
 }
 

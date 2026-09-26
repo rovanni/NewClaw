@@ -43,6 +43,7 @@ interface ParsedCapabilities {
     gpuLabel:      string;
     nodeVersion:   string;
     containerized: string;
+    validatedCommands: string[];
 }
 
 interface MetricsAccumulator {
@@ -179,9 +180,14 @@ export class PromptComposer {
         let gpuLabel      = '';
         let nodeVersion   = '';
         let containerized = '';
+        const validatedCommands: string[] = [];
 
         for (const line of lines) {
-            if (/indisponíveis/i.test(line)) {
+            if (/^[•\-]?\s*Comando validado \(/i.test(line)) {
+                // • Comando validado (python3): python | falharam: python3  (RFC-007 — evidência, não ordem)
+                const cm = line.match(/\(([^)]+)\):\s*(.+)$/);
+                if (cm) validatedCommands.push(`${cm[1]}: ${cm[2].replace(/\s*\|\s*falharam:\s*/i, ' | failed: ')}`);
+            } else if (/indisponíveis/i.test(line)) {
                 const m = line.match(/:\s*(.+)$/);
                 if (m) unavailableTools = m[1].split(',').map(s => s.trim()).filter(Boolean);
             } else if (/^[•\-]?\s*ferramentas:/i.test(line)) {
@@ -236,7 +242,7 @@ export class PromptComposer {
             pip, npm, sudo,
             osPlatform, osShell, osArch, osPkg,
             cpuCores, ramFreeMB, diskFreeMB, gpuAvailable, gpuLabel,
-            nodeVersion, containerized,
+            nodeVersion, containerized, validatedCommands,
         };
     }
 
@@ -286,6 +292,12 @@ export class PromptComposer {
                 parts.push(`  ok: [${caps.availableTools.join(',')}]`);
             if (relevantBlocked.length > 0)
                 parts.push(`  blocked: [${relevantBlocked.join(',')}]`);
+        }
+
+        // ── Comandos validados por execução (RFC-007): fato, a decisão é do Planner ──
+        if (caps.validatedCommands.length > 0) {
+            parts.push('commands_validated:');
+            for (const c of caps.validatedCommands) parts.push(`  ${c}`);
         }
 
         // ── OS ────────────────────────────────────────────────────────────────

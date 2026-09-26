@@ -61,11 +61,13 @@ const BASH_PROBE_TIMEOUT_MS = 3000;
  * Em Linux/macOS, bash é o shell nativo — `commandExists` já é confiável e não precisa do
  * probe de execução real.
  */
-export function isBashFunctional(): Promise<boolean> {
-    if (!isWindows) return Promise.resolve(commandExists('bash'));
-    return new Promise((resolve) => {
-        execFile('bash', ['-c', 'exit 0'], { timeout: BASH_PROBE_TIMEOUT_MS, windowsHide: true }, (error) => resolve(!error));
-    });
+export async function isBashFunctional(): Promise<boolean> {
+    if (!isWindows) return commandExists('bash');
+    const { resolved } = await resolveWorkingCommand(
+        [{ command: 'bash', argsPrefix: [] }],
+        (candidate) => runCommandCheck(candidate, ['-c', 'exit 0'], BASH_PROBE_TIMEOUT_MS),
+    );
+    return resolved !== null;
 }
 
 /**
@@ -188,31 +190,77 @@ export function probeToolCmd(tool: string): string {
 // é um executável, é `py` chamado com o argumento `-3`) e um path absoluto com
 // espaços, sem exigir shell parsing nenhum.
 
-export interface Python3Runtime {
+/**
+ * Contrato de um candidato de comando (RFC-007): executável + prefixo de argumentos, nunca uma
+ * string única para parsear. `Python3Runtime` é o mesmo contrato sob o nome histórico.
+ */
+export interface CommandCandidate {
     command: string;
     argsPrefix: string[];
+}
+
+export type Python3Runtime = CommandCandidate;
+
+/** Rótulo legível de um candidato (`py -3`, `python`) — só para exibição/evidência. */
+export function commandCandidateLabel(candidate: CommandCandidate): string {
+    return [candidate.command, ...candidate.argsPrefix].join(' ');
 }
 
 const PYTHON3_PROBE_TIMEOUT_MS = 3000;
 
 /**
- * Roda `<command> <argsPrefix> -c <payload>` via execFile (sem shell — array de
- * args, não string; preserva paths com espaços e `py -3` sem split algum) e
- * decide validade só pelo exit code, nunca por texto de stdout/stderr (evita
- * dependência de localização/encoding). Assíncrona: EnvironmentProbe.probe()
- * já é async, e um candidato inválido pode travar (alias, launcher) — usar
- * execFileSync aqui bloquearia o event loop do processo inteiro por até
- * PYTHON3_PROBE_TIMEOUT_MS a cada candidato testado.
+ * Roda `<command> <argsPrefix> <args>` via execFile (sem shell — array de args, não string;
+ * preserva paths com espaços e `py -3` sem split algum) e decide validade só pelo exit code,
+ * nunca por texto de stdout/stderr (evita dependência de localização/encoding). Assíncrona:
+ * um candidato inválido pode travar (alias, launcher) — execFileSync bloquearia o event loop
+ * do processo inteiro por até `timeoutMs` a cada candidato testado.
  */
-function runPython3Check(runtime: Python3Runtime, payload: string): Promise<boolean> {
+function runCommandCheck(candidate: CommandCandidate, args: string[], timeoutMs: number): Promise<boolean> {
     return new Promise((resolve) => {
         execFile(
-            runtime.command,
-            [...runtime.argsPrefix, '-c', payload],
-            { timeout: PYTHON3_PROBE_TIMEOUT_MS, windowsHide: true },
+            candidate.command,
+            [...candidate.argsPrefix, ...args],
+            { timeout: timeoutMs, windowsHide: true },
             (error) => resolve(!error),
         );
     });
+}
+
+function runPython3Check(runtime: Python3Runtime, payload: string): Promise<boolean> {
+    return runCommandCheck(runtime, ['-c', payload], PYTHON3_PROBE_TIMEOUT_MS);
+}
+
+/** Resultado factual da resolução: quem funcionou e o veredito de cada candidato realmente testado. */
+export interface CommandResolution<C extends CommandCandidate> {
+    resolved: C | null;
+    tested: Array<{ candidate: C; ok: boolean }>;
+}
+
+/**
+ * Motor genérico (RFC-007): descobre, por execução real, qual candidato funciona. Não interpreta
+ * a intenção de nenhum comando e não reescreve nada — só entrega evidência.
+ *
+ * Padrão: em ordem, com short-circuit (candidatos após o primeiro sucesso nunca são testados, e
+ * portanto não constam de `tested` — ausência de veredito, nunca "falhou").
+ * `exhaustive`: testa todos em paralelo, para quem precisa do veredito por nome; `resolved` continua
+ * sendo o primeiro válido na ordem dada. Desacoplado de child_process por injeção de `probe`.
+ */
+export async function resolveWorkingCommand<C extends CommandCandidate>(
+    candidates: C[],
+    probe: (candidate: C) => Promise<boolean>,
+    options: { exhaustive?: boolean } = {},
+): Promise<CommandResolution<C>> {
+    if (options.exhaustive) {
+        const verdicts = await Promise.all(candidates.map(async (candidate) => ({ candidate, ok: await probe(candidate) })));
+        return { resolved: verdicts.find(v => v.ok)?.candidate ?? null, tested: verdicts };
+    }
+    const tested: Array<{ candidate: C; ok: boolean }> = [];
+    for (const candidate of candidates) {
+        const ok = await probe(candidate);
+        tested.push({ candidate, ok });
+        if (ok) return { resolved: candidate, tested };
+    }
+    return { resolved: null, tested };
 }
 
 /**
@@ -286,10 +334,7 @@ export async function resolvePython3Runtime(
     candidates: Python3Runtime[],
     probe: (runtime: Python3Runtime) => Promise<boolean> = probePython3Runtime,
 ): Promise<Python3Runtime | null> {
-    for (const candidate of candidates) {
-        if (await probe(candidate)) return candidate;
-    }
-    return null;
+    return (await resolveWorkingCommand(candidates, probe)).resolved;
 }
 
 /** Cross-platform /dev/null path. */

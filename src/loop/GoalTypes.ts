@@ -243,6 +243,8 @@ export interface GoalProgressModel {
 export interface EnvironmentCapabilities {
     tools: Record<string, boolean>;
     pythonPkgs: Record<string, boolean>;
+    /** RFC-007: veredito por família de comando (qual candidato funcionou / quais falharam). */
+    resolvedCommands?: Record<string, { resolved: string | null; failed: string[] }>;
     probeTimestamp: number;
     /** Bloco de texto pronto para injeção em prompts de planejamento. */
     summary: string;
