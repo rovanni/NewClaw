@@ -587,9 +587,20 @@ export class ProviderFactory {
         const naoStreamingSubstituiria = preferredProvider !== 'ollama';
         const podeTentarNaoStreaming = !semSubstituicao || !naoStreamingSubstituiria;
         if (podeTentarNaoStreaming && attemptLog.every(a => a.status === 'timeout' || a.status === 'error')) {
-            const ollamaProvider = this.providers.get('ollama');
+            const sharedOllama = this.providers.get('ollama');
+            // O fallback sem streaming respeita o MODELO que o chamador pediu, como o streaming já respeita
+            // (linha do `getProviderWithModel` acima). Antes ele usava a instância compartilhada, com o modelo
+            // PADRÃO, e trocava em silêncio o modelo configurado para o juiz/planejador/revisor: com
+            // OBSERVER_MODEL=glm-5.3-flash, o streaming estourava o orçamento de raciocínio e a refação rodava
+            // no glm-5.3 pesado, que dava timeout (replay do incidente, 26/09/2026, issue 048). Só vale quando o
+            // modelo pedido pertence ao Ollama (`modelOverrideOwner`): um nome de modelo de outro provedor não
+            // faz sentido para ele e continua indo com o padrão.
+            const requestedForOllama = (modelOverride && modelOverrideOwner === 'ollama')
+                ? this.getProviderWithModel(modelOverride, 'ollama')
+                : undefined;
+            const ollamaProvider = requestedForOllama instanceof OllamaProvider ? requestedForOllama : sharedOllama;
             if (ollamaProvider instanceof OllamaProvider) {
-                log.info(`[${requestId}] All streaming attempts failed — trying non-streaming fallback`);
+                log.info(`[${requestId}] All streaming attempts failed — trying non-streaming fallback (model=${ollamaProvider.getModel()})`);
                 // Mesmo tratamento do laço acima: este bloco também substitui o recurso declarado, e
                 // anunciar num caminho e calar no outro seria o defeito que a Sprint 021 encontrou
                 // aqui (gate aplicado a uma das duas substituições).
