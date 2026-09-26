@@ -230,6 +230,7 @@ export class SessionManager {
                 await this.applyCheckpoint(sid, transcript, checkpointData);
             }
             const seq = await transcript.appendAsync('user', content, meta);
+            this.ensureConversation(key);
             this.memory.addMessage(this.conversationId(key), 'user', content);
             log.info(`${sid} user seq=${seq} len=${content.length}`);
             // CMI: fire-and-forget, nunca bloqueia o response
@@ -244,6 +245,7 @@ export class SessionManager {
         return this.withMutex(sid, async () => {
             const transcript = await this.getOrCreateSession(key);
             const seq = await transcript.appendAsync('assistant', content, meta);
+            this.ensureConversation(key);
             this.memory.addMessage(this.conversationId(key), 'assistant', content, attachments);
             log.info(`${sid} assistant seq=${seq} len=${content.length} tokens≈${Math.round(estimateTokens(content))}`);
             // CMI: fire-and-forget
@@ -729,6 +731,17 @@ export class SessionManager {
     /**
      * Ensure conversation exists in MemoryManager DB.
      * addMessage has a FOREIGN KEY constraint — conversation_id must exist first.
+     */
+    /**
+     * Garante que a linha da conversa existe NO BANCO. Idempotente (um SELECT por chamada).
+     *
+     * Roda antes de CADA gravação de mensagem, não só quando a sessão é criada em memória: a sessão em
+     * cache sobrevive a uma exclusão da conversa (`DELETE /api/conversations`, "Limpar Histórico",
+     * restauração de backup), e aí a próxima mensagem falhava com `FOREIGN KEY constraint failed`
+     * ("Erro ao processar mensagem"). Achado em execução real (issue 048): a conversa criada às 22:37 foi
+     * apagada pelo usuário no painel e a mensagem seguinte, no mesmo processo, foi perdida. Quem escreve
+     * é quem precisa da precondição — garanti-la só na criação da sessão deixava a exigência longe do
+     * ponto em que a falha acontece (`LOCALIDADE_DA_RECUPERACAO.md`).
      */
     private ensureConversation(key: SessionKey): void {
         const convId = this.conversationId(key);

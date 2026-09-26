@@ -171,7 +171,14 @@ export class GoalStore {
             goal.id,
             goal.sessionKey,
             goal.conversationId,
-            goal.userIntent.slice(0, 300),
+            // O pedido do usuário é gravado ÍNTEGRO. Ele era cortado em 300 chars aqui (desde o primeiro
+            // commit, sem motivo registrado), e como todo replan relê o goal do banco, o Planner passava
+            // a planejar sobre um pedido truncado — a frase decisiva de um pedido longo ("...me envio o
+            // arquivo .py", no fim de 1.509 chars) desaparecia do replan (issue 048, S-E). O primeiro plano
+            // já usa o texto integral (objeto em memória) e cada consumidor que precisa de uma versão curta
+            // (logs, mensagem de falha) corta no ponto de uso; a coluna é TEXT, sem limite. Cortar aqui de
+            // novo, mesmo com um teto "generoso", seria voltar a perder pedido em silêncio.
+            goal.userIntent,
             goal.objective.slice(0, 500),
             goal.status,
             JSON.stringify(goal.currentPlan ?? []),
