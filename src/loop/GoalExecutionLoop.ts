@@ -20,6 +20,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import { createLogger } from '../shared/AppLogger';
+import { buildHostAppContextBlock } from '../shared/hostAppContext';
 import { AgentLoop } from './AgentLoop';
 import { traceManager } from '../core/ExecutionTrace';
 import { GoalStore } from './GoalStore';
@@ -683,6 +684,19 @@ export class GoalExecutionLoop {
         initialReplans: number,
         initialFeedback?: string,
     ): Promise<GoalResult> {
+        // RFC-008 (RC1, sombra): mede o bloco de fatos do aplicativo hospedeiro que o Planner receberia,
+        // sem enviá-lo ao LLM. Opt-in explícito (HOST_CONTEXT=shadow, lido a cada chamada); o prompt NÃO é alterado.
+        if (process.env.HOST_CONTEXT === 'shadow') {
+            const hostBlock = buildHostAppContextBlock(channelContext.metadata);
+            if (hostBlock) {
+                log.info(
+                    `[HOST-CONTEXT] goal=${goal.id} hostApp=${String(channelContext.metadata?.hostApp)}` +
+                    ` blockChars=${hostBlock.length} lines=${hostBlock.split('\n').length}`
+                );
+                log.debug(`[HOST-CONTEXT] block:\n${hostBlock}`);
+            }
+        }
+
         // Telemetria: registra goal ativo para detectar compressão concorrente
         const { channel: goalChannel, userId: goalUserId } = parseSessionKey(goal.sessionKey);
         const goalSessionKey = { channel: goalChannel || 'unknown', userId: goalUserId || 'unknown' };
