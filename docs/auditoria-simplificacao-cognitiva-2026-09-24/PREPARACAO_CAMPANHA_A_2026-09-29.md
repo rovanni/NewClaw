@@ -151,3 +151,29 @@ Lembretes de processo (memória do projeto): sem `git stash` durante regressão;
 4. Ler as duas projeções existentes (validador e `stepOutputs`) e decidir sobre módulo-folha
    compartilhado **antes** ou **depois** de S-A2?
 5. Ordem para S-A0: pode ler o banco de produção local (somente leitura)?
+
+---
+
+## 8. Execução (29/09/2026) — S-A0, S-A1, S-A2
+
+Decisões recebidas: **sombra agora** (Decisão 0) e **leitura do banco autorizada**. Tetos (5 · 300 · 1 200)
+e "início + fim" seguiram o proposto — não houve objeção; a decisão 4 (módulo-folha) segue **adiada**.
+
+**S-A0 (leitura de uma cópia do banco de produção, `C:\Users\lucia\NewClaw\data`; a instância em uso não foi tocada)** —
+goal `goal_1790214597600_ov9eh`, 12 attempts:
+
+- Replan após o attempt 8 (a `read` de `aulas_extraidas.md`, que falhou): o bloco tem 1 073 chars e traz
+  `Passo 7 — exec_command — python extrator_aulas.py → Extração concluída: tmp/extracao_aulas.txt`. **Critério 1 atendido** —
+  e é justamente o ponto em que o replanner escolheu o caminho errado.
+- Replan após o attempt 12: 925 chars; o Passo 7 saiu pelo teto, mas o Passo 11 (`read tmp/extracao_aulas.txt`) carrega o caminho.
+- **Achado para S-A3:** os passos `agentloop` ocupam o orçamento com texto sintetizado (mensagens de descarte do
+  Grounding, "Pode pedir de novo?", resumos), que não é fato de ferramenta — e pode induzir o Planner em erro. Isto toca a
+  Campanha D (descarte do Grounding vira texto genérico). **Não ajustei o teto nem a seleção com base num único caso**;
+  a sombra deve dizer se é padrão.
+
+**S-A1/S-A2 (código):** `buildAttemptFactsBlock()` + constantes em `src/loop/GoalPlanner.ts` (sem arquivo novo, como no Gate);
+gancho `REPLAN_FACTS=shadow` em `replan()` que só loga `[REPLAN-FACTS] goal attempts factsChars promptChars ratio` — o
+prompt enviado ao LLM não muda. Cobertura: `S310` (17 asserções, incl. controle negativo e 100 attempts). `tsc` limpo, suíte **309/309**.
+
+**Ainda não feito:** etapa 4 da diretriz (execução real em instância isolada com LLM real) — só cabe quando houver decisão de ligar
+(S-A4); S-A3 depende de acumular logs reais com `REPLAN_FACTS=shadow` ligado na sua instância.
