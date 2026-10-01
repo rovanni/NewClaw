@@ -9,7 +9,7 @@
 
 import { ToolExecutor, ToolResult } from '../loop/agentLoopTypes';
 import { execFile } from 'child_process';
-import { mkdirSync, existsSync, unlinkSync, readFileSync } from 'fs';
+import { mkdirSync, existsSync, unlinkSync, readFileSync, writeFileSync } from 'fs';
 import path from 'path';
 import { createLogger } from '../shared/AppLogger';
 import { errorMessage } from '../shared/errors';
@@ -66,6 +66,7 @@ export class SendAudioTool implements ToolExecutor {
     private bus: MessageBus;
     private lastSendTime: number = 0;
     private static readonly MIN_INTERVAL_MS = 10000; // 10s debounce
+    private static readonly KOKORO_TIMEOUT_MS = 120000; // inferência local em CPU pode ser lenta
 
     constructor(bus: MessageBus) {
         this.bus = bus;
@@ -190,6 +191,8 @@ export class SendAudioTool implements ToolExecutor {
     /**
      * Gera o arquivo de áudio, em ordem de preferência, e retorna o caminho do arquivo
      * realmente produzido (extensão varia por engine):
+     *  -1. Servidor TTS compatível com a API OpenAI (`KOKORO_TTS_URL`, `S311`) — só tentado quando o
+     *      operador declarou a URL; se falhar, o usuário é avisado de que o texto saiu da máquina.
      *   0. Piper (subprocesso, offline, 100% local) — só tentado quando o operador já baixou
      *      os modelos (PIPER_MODELS_DIR) explicitamente; presença dos arquivos É o sinal de
      *      intenção, nunca assumido por padrão. Elimina a dependência do serviço da Microsoft
@@ -219,6 +222,24 @@ export class SendAudioTool implements ToolExecutor {
         // (`SOBERANIA_DA_CONFIGURACAO.md` §1.2). Sem Piper declarado não há nada a anunciar — o
         // usuário não escolheu recurso nenhum (§1.1).
         const fatos: string[] = [];
+
+        // Camada 0 — servidor TTS local/da rede do operador, compatível com a API OpenAI
+        // (`KOKORO_TTS_URL`). Declarar a URL É a declaração (Soberania §1.1); sem ela, nada muda.
+        // Vem antes da sondagem do Piper para que um sucesso aqui não carregue fatos do Piper.
+        const kokoroUrl = this.resolveKokoroEndpoint();
+        let kokoroFalhou = false;
+        if (kokoroUrl) {
+            const wavFile = path.join(audioDir, `tts_${timestamp}.wav`);
+            try {
+                log.info('KOKORO_TTS_URL declarado — usando servidor TTS do operador.');
+                await this.generateViaKokoro(text, kokoroUrl, wavFile);
+                return { file: wavFile, fatos };
+            } catch (kokoroErr) {
+                kokoroFalhou = true;
+                log.error('Kokoro failed, falling back:', errorMessage(kokoroErr));
+            }
+        }
+
         const lookup = this.findPiperInstallation();
 
         // Declarado, mas não foi possível verificar o binário: o áudio segue pela engine remota —
@@ -251,6 +272,17 @@ export class SendAudioTool implements ToolExecutor {
                     + 'da conversa, sem inventar motivos técnicos.'
                 );
             }
+        }
+
+        // Chegou ao serviço de terceiros depois de o servidor declarado falhar. Se um fato de
+        // saída-da-máquina já foi registrado (Piper), ele cobre o mesmo ponto — não duplicar.
+        if (kokoroFalhou && fatos.length === 0) {
+            fatos.push(
+                '[FATO DO SISTEMA] O áudio deveria ter sido gerado pelo servidor de voz configurado pelo usuário, '
+                + 'mas ele falhou. O áudio foi sintetizado por um serviço de terceiros na Internet, '
+                + 'ou seja, o texto saiu da máquina. Avise isso ao usuário em UMA frase curta, no mesmo idioma '
+                + 'da conversa, sem inventar motivos técnicos.'
+            );
         }
 
         const mp3File = path.join(audioDir, `tts_${timestamp}.mp3`);
@@ -306,6 +338,44 @@ export class SendAudioTool implements ToolExecutor {
         }
         const tts = new EdgeTTS({ voice, lang: 'pt-BR', rate: '-5%' });
         await tts.ttsPromise(text, outputPath);
+    }
+
+    /**
+     * Endpoint de síntese do servidor TTS declarado pelo operador, ou `null` se não declarou.
+     * Lido a cada chamada (não na carga do módulo): o `.env` pode ser carregado depois do import.
+     * Aceita a URL-base (`http://host:porta`) com ou sem barra final; o caminho é o da API OpenAI.
+     * Nenhum endereço padrão existe — nenhuma instalação envia texto a um host que o operador
+     * não escreveu (mesma regra de `WHISPER_API_URL`).
+     */
+    private resolveKokoroEndpoint(): string | null {
+        const base = (process.env.KOKORO_TTS_URL || '').trim().replace(/\/+$/, '');
+        return base ? `${base}/v1/audio/speech` : null;
+    }
+
+    /**
+     * Gera áudio num servidor compatível com `POST /v1/audio/speech` (OpenAI/Kokoro-FastAPI).
+     * A voz vem de `KOKORO_TTS_VOICE` — o parâmetro `voice` da tool é um id do edge-tts e não
+     * tem correspondência nos catálogos do Kokoro (que variam por idioma). Sem a variável o campo
+     * é omitido e o servidor aplica o próprio padrão: nenhuma voz é presumida aqui.
+     * Validação só estrutural: HTTP 2xx, Content-Type `audio/*`, corpo não vazio.
+     */
+    private async generateViaKokoro(text: string, endpoint: string, outputPath: string): Promise<void> {
+        const voice = (process.env.KOKORO_TTS_VOICE || '').trim();
+        const body: Record<string, unknown> = { model: 'kokoro', input: text, response_format: 'wav' };
+        if (voice) body.voice = voice;
+
+        const res = await fetch(endpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+            signal: AbortSignal.timeout(SendAudioTool.KOKORO_TIMEOUT_MS),
+        });
+        if (!res.ok) throw new Error(`servidor TTS respondeu HTTP ${res.status}`);
+        const contentType = res.headers.get('content-type') || '';
+        if (!contentType.startsWith('audio/')) throw new Error(`resposta não é áudio (Content-Type: ${contentType || 'ausente'})`);
+        const audio = Buffer.from(await res.arrayBuffer());
+        if (audio.length === 0) throw new Error('servidor TTS devolveu corpo vazio');
+        writeFileSync(outputPath, audio);
     }
 
     /**
