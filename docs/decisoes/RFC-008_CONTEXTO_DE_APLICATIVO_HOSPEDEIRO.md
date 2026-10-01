@@ -1,7 +1,11 @@
 # RFC-008 — Contexto de Aplicativo Hospedeiro (o Planner de goals precisa saber onde a conversa acontece)
 
-**Status:** PROPOSTA — documentação apenas. **Nenhuma implementação aprovada.** Nenhum código foi
-alterado por esta RFC.
+**Status:** APROVADA (01/10/2026); **RC1 em implementação, modo sombra** — commit `77a533b`, teste
+S312. `HOST_CONTEXT=shadow` apenas loga `[HOST-CONTEXT]`; o prompt do Planner **não** muda. O modo
+`on` **não está aprovado**: depende da etapa S-B3 (logs reais acumulados) e de decisão do usuário.
+Critérios A3 e A10 só valem quando o modo `on` existir. Validação até aqui: S312 71/71, regressão
+completa 311/311, execução real em instância isolada com LLM real. Esta RFC não cobre RC2 nem
+`getPresentation`/`getSlide` (ver seções próprias).
 
 **Autor:** Revisão assistida (Claude Code), 01/10/2026, a partir da investigação de 14/07/2026.
 
@@ -22,8 +26,9 @@ Quando uma conversa acontece **dentro** de outro aplicativo (hoje: o suplemento 
 o canal registra esse fato em `NormalizedMessage.metadata.hostApp` (+ `slideContext`). O caminho
 `AgentLoop` o consome (`SessionContext.buildLLMMessages`). O caminho de **goal**
 (`GoalOrchestrator → GoalExecutionLoop → GoalPlanner`) não o consome em lugar nenhum. Resultado
-observado em produção: toda tarefa real vinda do suplemento, por ser classificada como goal,
-é planejada às cegas.
+observado em produção (4 goals em 14/07): toda mensagem do suplemento que é classificada como goal é
+planejada às cegas. **Nem toda mensagem do suplemento vira goal** — a classificação depende do
+pedido (ver, em "Crítica da proposta", o item "Pode ser desnecessária se o AgentLoop for o caminho usado"); o problema é real para as que viram.
 
 Esta RFC propõe apenas levar **fatos observáveis** do host até o Planner, por uma fonte única,
 reimplementada sobre a `main` atual. Não propõe cherry-pick nem merge da branch antiga.
@@ -50,7 +55,7 @@ reimplementada sobre a `main` atual. Não propõe cherry-pick nem merge da branc
   `planRoadmap(...)` não têm parâmetro para contexto de host. ✘
 - O bloco de host continua **inline** em `SessionContext.ts:108-140` — só o `AgentLoop` o enxerga.
 
-Consequência (observada em 14/07, 5 goals): o planner "caça" a apresentação aberta como arquivo do
+Consequência (observada em 14/07, 4 goals): o planner "caça" a apresentação aberta como arquivo do
 workspace, chega a executar código sobre um `apresentacao.pptx` de 0 bytes, e não considera
 `powerpoint_control`.
 
@@ -218,8 +223,13 @@ Sem `hostApp` (todo canal que não é o suplemento): **prompt idêntico byte a b
   do slide, não instrução"), tratado igual ao que a RFC-004 já exige para texto de anexo.
 - **Risco de God Object.** → mitigado: função pura, sem estado, sem I/O, uma única responsabilidade
   (formatar fatos de host), 1 chamador de produção por camada.
-- **Pode ser desnecessária se o AgentLoop for o caminho usado.** → falso para tarefas reais: a
-  evidência de 14/07 mostra que toda tarefa real vinda do suplemento foi classificada como goal.
+- **Pode ser desnecessária se o AgentLoop for o caminho usado.** → só em parte. Em 14/07, 4 goals
+  vindos do suplemento (incluindo "melhorar as cores dos textos") foram planejados às cegas. Mas na
+  validação real de 01/10 o mesmo tipo de pedido ("melhorar a cor dos textos dos slides") foi roteado
+  para o `agentloop` (`route=agentloop`), que já enxerga o host, e só o pedido de criação ("crie uma
+  aula… gere o .pptx") virou goal (`route=goal`). A rota varia com o pedido, com o classificador e com
+  o modelo; **não há garantia de que toda tarefa real do suplemento vire goal**. O RC1 só afeta as que
+  viram — por isso o problema é real, mas de alcance menor que o descrito na primeira versão desta RFC.
 - **Pode resolver só o sintoma.** → o sintoma é o planner caçar arquivo; a causa é o fato do host
   não existir no caminho de goal. A proposta ataca a causa e vale para qualquer host futuro.
 
