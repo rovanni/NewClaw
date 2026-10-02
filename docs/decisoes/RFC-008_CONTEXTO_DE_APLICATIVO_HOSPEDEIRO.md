@@ -515,3 +515,50 @@ o pedido de 14/07 ainda pode não cumprir o pedido (isso é o item (c)). V1 não
 **Limites pré-declarados.** Os do replay do RC1 (prompt mais leve que o de produção; `slideContext` sintético; um pedido; um modelo; classificação heurística; mede o **plano**, não a execução) e: N = 10; a heurística `action` lê só o campo `toolArgs.action`.
 
 **Estado.** Código commitado (S314, regressão 313/313); validação **ainda não executada** neste ponto.
+
+# Resultado da validação com LLM real do item (a) (02/10/2026): **V1 não atendido (base de 2 passos); V2 atendido; a mudança observada é na ESCOLHA da ferramenta**
+
+Executada conforme o protocolo pré-registrado acima (commit `cfb4bbb`, antes da execução): o mesmo `replay_rc1.ts`, o mesmo pedido de 14/07, `glm-5.3:cloud`, 22 ferramentas, estado de goal vazio, `slideContext` sintético,
+N = 10 por braço, ordem alternada, **sem somar com as execuções anteriores**. O prompt `off` passou de 13 206 para 13 404 chars (**+198, exatamente a linha do hint**; confirmado em `--dry` antes de rodar). Resumo bruto em
+`instrumentos/resultados/rc1-a-resumo.txt`. Os limiares de V1/V2 eram propostas minhas e não foram ratificados.
+
+| | OFF | HOST |
+|---|---|---|
+| Caça o deck como arquivo (`hunt_strict`) | 8/10 | 3/10 |
+| Descobre o workspace (qualquer) | 10/10 | 2/10 |
+| Usa `powerpoint_control` | **0/10** | **2/10** |
+| Gera `.pptx` novo | 0/10 | 3/10 |
+| Envia documento | 0/10 | 0/10 |
+| Planos vazios | 0/10 | 0/10 |
+| Chamadas de plano com `aborted=true` | 10/10 | 10/10 |
+| Bloco no prompt (guarda) | 0/10 | 10/10 |
+| Prompt | 13 404 chars | 13 927 chars |
+
+**V1 — NÃO atendido, com base mínima.** Em todas as 20 execuções houve **2 passos** de `powerpoint_control`, ambos no braço `host`: um **sem `action`** e um com `action=apply_color_scheme` — um valor **fora do `enum`** (a ferramenta só aceita `addTextBox`).
+Zero passos com `addTextBox` → 0/2. Dois passos não têm peso estatístico; o critério dizia "inconclusivo" apenas se não houvesse **nenhum** passo, e houve dois, então o registro correto é "não atendido, sem poder de conclusão".
+**V2 — atendido:** 0 planos vazios; o uso de `powerpoint_control` no braço **sem** bloco foi **0/10** (base anterior 3/15), isto é, o hint **não** tornou a ferramenta mais atraente fora do contexto do suplemento.
+
+### O que mudou: a ESCOLHA da ferramenta, não a forma do passo
+
+Comparação **descritiva e não pareada** (versões diferentes do prompt, execuções em momentos diferentes; **não é um teste**): `powerpoint_control` no braço `host` foi de **12/15** para **2/10** e no `off` de **3/15** para **0/10**.
+Com a linha do hint dizendo que `addTextBox` "insere uma caixa de texto no slide ativo", o Planner praticamente **deixou de escolher** a ferramenta para um pedido de cores. É a leitura mais provável, mas **não foi isolada**:
+- o ambiente mudou entre as execuções — as chamadas de plano abortadas (com fallback sem streaming) foram de 5/10 e 4/10 para **10/10 e 10/10** —, então o antes e o depois não são comparáveis por igual;
+- não há réplica simultânea sem o hint.
+
+### O que isto revela sobre o gargalo
+
+O único passo que ainda escolheu a ferramenta com uma ação **inventou** `apply_color_scheme`: o Planner quer uma capacidade que a ferramenta **não tem**. O que falta para atender o pedido de 14/07 não é o formato do passo; é **capacidade**
+(o escopo opcional `getPresentation`/`getSlide` e, para alterar cores, algo além dele) — o item (c) deste documento. O item (a) corrige a **visibilidade** do schema, não a **capacidade**.
+
+### Observações (V3), sem critério e com ressalvas
+
+- **`hunt_strict` no `host`: 3/10, contra 1/15 antes.** *Hipótese não testada:* parte da queda anterior era o Planner sendo **desviado** para `powerpoint_control`, e não evitando caçar o deck; sem o desvio, a queda aparente diminui. No `off` foi 8/10 (antes 8/15).
+- **3 planos `host` geram um `.pptx` novo** (caminho que o bloco descreve como legítimo) e **nenhum plano, em nenhum braço, inclui `send_document`** (0/20): esses planos não entregariam o arquivo. Não foi investigado.
+- **Todas as 20 chamadas de plano caíram no fallback** (`aborted=true`); o tempo p50 foi 157 s (`off`) e 223 s (`host`), não interpretável.
+- **Descritivamente, `off` 8/10 e `host` 3/10 satisfariam os limiares R1/R2 do protocolo anterior** (≥ 5 e redução ≥ 4), **mas esta execução não foi desenhada nem pré-registrada para isso** (V3 não tinha limiar). Isso **não** conta como resultado de R1/R2; se se quiser avaliar o RC1, o caminho é **repetir o protocolo do RC1 inteiro** com o hint como nova linha de base.
+
+### Recomendação e estado
+
+**Manter o item (a):** é barato (≈ 55 tokens por prompt de todos os canais), testado (S314, regressão 313/313, mutação detectada) e coerente com o mecanismo existente; a evidência de V1 é **inconclusiva na prática**, e o efeito sobre a escolha da ferramenta é uma indicação, não uma prova.
+**O item (b)** (listar as ações como fato no bloco de host) fica **em grande parte redundante**: o hint já lista as ações em todo prompt. **O item (c)** passa a ser a decisão real. **O modo `on` do RC1 continua não implementado e não recomendado agora.**
+Pendente: decidir o item (c); decidir se vale repetir o protocolo do RC1 completo com o hint como linha de base; publicar (push) os commits.
