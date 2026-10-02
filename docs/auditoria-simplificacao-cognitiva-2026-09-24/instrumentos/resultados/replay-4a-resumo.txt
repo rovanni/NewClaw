@@ -1,0 +1,104 @@
+=== replay S-A4/4a — modo=real N=10 ===
+estado reconstruído: {"attempts":8,"blockers":2,"blockerKind":"tool_error","blockerTool":"read"} | blocker presente: true
+ARM-START arm=off i=1 t=2026-10-02T03:19:42.635Z
+STEP arm=off i=1 n=1 tool=agentloop mentions=false writes=false consumes=false
+STEP arm=off i=1 n=2 tool=exec_command mentions=false writes=false consumes=false
+STEP arm=off i=1 n=3 tool=agentloop mentions=false writes=false consumes=false
+RUN arm=off i=1 uses_existing=false cites_weak=false promptHasArtifact=false promptChars=8907 ms=160439 tools=agentloop,exec_command,agentloop
+ARM-START arm=on i=1 t=2026-10-02T03:22:23.357Z
+STEP arm=on i=1 n=1 tool=read mentions=true writes=false consumes=true
+STEP arm=on i=1 n=2 tool=agentloop mentions=false writes=false consumes=false
+STEP arm=on i=1 n=3 tool=agentloop mentions=false writes=false consumes=false
+RUN arm=on i=1 uses_existing=true cites_weak=true promptHasArtifact=true promptChars=9982 ms=104266 tools=read,agentloop,agentloop
+ARM-START arm=on i=2 t=2026-10-02T03:24:07.628Z
+STEP arm=on i=2 n=1 tool=list_workspace mentions=true writes=false consumes=false
+STEP arm=on i=2 n=2 tool=read mentions=true writes=false consumes=true
+STEP arm=on i=2 n=3 tool=agentloop mentions=false writes=false consumes=false
+RUN arm=on i=2 uses_existing=true cites_weak=true promptHasArtifact=true promptChars=9982 ms=85450 tools=list_workspace,read,agentloop
+ARM-START arm=off i=2 t=2026-10-02T03:25:33.090Z
+STEP arm=off i=2 n=1 tool=read mentions=false writes=false consumes=false
+STEP arm=off i=2 n=2 tool=list_workspace mentions=false writes=false consumes=false
+STEP arm=off i=2 n=3 tool=agentloop mentions=false writes=false consumes=false
+RUN arm=off i=2 uses_existing=false cites_weak=false promptHasArtifact=false promptChars=8907 ms=94251 tools=read,list_workspace,agentloop
+ARM-START arm=off i=3 t=2026-10-02T03:27:07.348Z
+STEP arm=off i=3 n=1 tool=read mentions=false writes=false consumes=false
+STEP arm=off i=3 n=2 tool=agentloop mentions=false writes=false consumes=false
+STEP arm=off i=3 n=3 tool=agentloop mentions=false writes=false consumes=false
+RUN arm=off i=3 uses_existing=false cites_weak=false promptHasArtifact=false promptChars=8907 ms=259931 tools=read,agentloop,agentloop
+ARM-START arm=on i=3 t=2026-10-02T03:31:27.283Z
+STEP arm=on i=3 n=1 tool=exec_command mentions=true writes=false consumes=true
+STEP arm=on i=3 n=2 tool=read mentions=true writes=false consumes=true
+STEP arm=on i=3 n=3 tool=agentloop mentions=false writes=false consumes=false
+RUN arm=on i=3 uses_existing=true cites_weak=true promptHasArtifact=true promptChars=9982 ms=121867 tools=exec_command,read,agentloop
+ARM-START arm=on i=4 t=2026-10-02T03:33:29.155Z
+STEP arm=on i=4 n=1 tool=list_workspace mentions=true writes=false consumes=false
+STEP arm=on i=4 n=2 tool=read mentions=true writes=false consumes=true
+STEP arm=on i=4 n=3 tool=agentloop mentions=false writes=false consumes=false
+RUN arm=on i=4 uses_existing=true cites_weak=true promptHasArtifact=true promptChars=9982 ms=104465 tools=list_workspace,read,agentloop
+ARM-START arm=off i=4 t=2026-10-02T03:35:13.629Z
+STEP arm=off i=4 n=1 tool=read mentions=false writes=false consumes=false
+STEP arm=off i=4 n=2 tool=agentloop mentions=false writes=false consumes=false
+STEP arm=off i=4 n=3 tool=agentloop mentions=false writes=false consumes=false
+RUN arm=off i=4 uses_existing=false cites_weak=false promptHasArtifact=false promptChars=8907 ms=166575 tools=read,agentloop,agentloop
+ARM-START arm=off i=5 t=2026-10-02T03:38:00.209Z
+STEP arm=off i=5 n=1 tool=agentloop mentions=false writes=false consumes=false
+STEP arm=off i=5 n=2 tool=exec_command mentions=false writes=false consumes=false
+STEP arm=off i=5 n=3 tool=agentloop mentions=false writes=false consumes=false
+RUN arm=off i=5 uses_existing=false cites_weak=false promptHasArtifact=false promptChars=8907 ms=200040 tools=agentloop,exec_command,agentloop
+ARM-START arm=on i=5 t=2026-10-02T03:41:20.254Z
+STEP arm=on i=5 n=1 tool=exec_command mentions=true writes=false consumes=true
+STEP arm=on i=5 n=2 tool=agentloop mentions=true writes=false consumes=false
+STEP arm=on i=5 n=3 tool=read mentions=false writes=false consumes=false
+RUN arm=on i=5 uses_existing=true cites_weak=true promptHasArtifact=true promptChars=9982 ms=154875 tools=exec_command,agentloop,read
+ARM-START arm=on i=6 t=2026-10-02T03:43:55.137Z
+STEP arm=on i=6 n=1 tool=read mentions=true writes=false consumes=true
+STEP arm=on i=6 n=2 tool=agentloop mentions=false writes=false consumes=false
+STEP arm=on i=6 n=3 tool=send_document mentions=false writes=false consumes=false
+RUN arm=on i=6 uses_existing=true cites_weak=true promptHasArtifact=true promptChars=9982 ms=22685 tools=read,agentloop,send_document
+ARM-START arm=off i=6 t=2026-10-02T03:44:17.830Z
+STEP arm=off i=6 n=1 tool=read mentions=false writes=false consumes=false
+STEP arm=off i=6 n=2 tool=agentloop mentions=false writes=false consumes=false
+STEP arm=off i=6 n=3 tool=exec_command mentions=false writes=false consumes=false
+RUN arm=off i=6 uses_existing=false cites_weak=false promptHasArtifact=false promptChars=8907 ms=151997 tools=read,agentloop,exec_command
+ARM-START arm=off i=7 t=2026-10-02T03:46:49.832Z
+STEP arm=off i=7 n=1 tool=read mentions=false writes=false consumes=false
+STEP arm=off i=7 n=2 tool=agentloop mentions=false writes=false consumes=false
+STEP arm=off i=7 n=3 tool=agentloop mentions=false writes=false consumes=false
+RUN arm=off i=7 uses_existing=false cites_weak=false promptHasArtifact=false promptChars=8907 ms=163482 tools=read,agentloop,agentloop
+ARM-START arm=on i=7 t=2026-10-02T03:49:33.324Z
+STEP arm=on i=7 n=1 tool=exec_command mentions=true writes=false consumes=true
+STEP arm=on i=7 n=2 tool=read mentions=true writes=false consumes=true
+STEP arm=on i=7 n=3 tool=agentloop mentions=false writes=false consumes=false
+RUN arm=on i=7 uses_existing=true cites_weak=true promptHasArtifact=true promptChars=9982 ms=205637 tools=exec_command,read,agentloop
+ARM-START arm=on i=8 t=2026-10-02T03:52:58.967Z
+STEP arm=on i=8 n=1 tool=read mentions=true writes=false consumes=true
+STEP arm=on i=8 n=2 tool=agentloop mentions=true writes=false consumes=false
+STEP arm=on i=8 n=3 tool=agentloop mentions=false writes=false consumes=false
+RUN arm=on i=8 uses_existing=true cites_weak=true promptHasArtifact=true promptChars=9982 ms=38545 tools=read,agentloop,agentloop
+ARM-START arm=off i=8 t=2026-10-02T03:53:37.518Z
+STEP arm=off i=8 n=1 tool=list_workspace mentions=false writes=false consumes=false
+STEP arm=off i=8 n=2 tool=agentloop mentions=false writes=false consumes=false
+STEP arm=off i=8 n=3 tool=read mentions=false writes=false consumes=false
+RUN arm=off i=8 uses_existing=false cites_weak=false promptHasArtifact=false promptChars=8907 ms=106231 tools=list_workspace,agentloop,read
+ARM-START arm=off i=9 t=2026-10-02T03:55:23.754Z
+STEP arm=off i=9 n=1 tool=read mentions=false writes=false consumes=false
+STEP arm=off i=9 n=2 tool=agentloop mentions=false writes=false consumes=false
+STEP arm=off i=9 n=3 tool=read mentions=false writes=false consumes=false
+RUN arm=off i=9 uses_existing=false cites_weak=false promptHasArtifact=false promptChars=8907 ms=277363 tools=read,agentloop,read
+ARM-START arm=on i=9 t=2026-10-02T04:00:01.125Z
+STEP arm=on i=9 n=1 tool=list_workspace mentions=true writes=false consumes=false
+STEP arm=on i=9 n=2 tool=read mentions=true writes=false consumes=true
+STEP arm=on i=9 n=3 tool=agentloop mentions=false writes=false consumes=false
+RUN arm=on i=9 uses_existing=true cites_weak=true promptHasArtifact=true promptChars=9982 ms=38042 tools=list_workspace,read,agentloop
+ARM-START arm=on i=10 t=2026-10-02T04:00:39.176Z
+STEP arm=on i=10 n=1 tool=read mentions=true writes=false consumes=true
+STEP arm=on i=10 n=2 tool=agentloop mentions=true writes=false consumes=false
+STEP arm=on i=10 n=3 tool=agentloop mentions=false writes=false consumes=false
+RUN arm=on i=10 uses_existing=true cites_weak=true promptHasArtifact=true promptChars=9982 ms=43027 tools=read,agentloop,agentloop
+ARM-START arm=off i=10 t=2026-10-02T04:01:22.208Z
+STEP arm=off i=10 n=1 tool=agentloop mentions=false writes=false consumes=false
+STEP arm=off i=10 n=2 tool=exec_command mentions=false writes=false consumes=false
+STEP arm=off i=10 n=3 tool=agentloop mentions=false writes=false consumes=false
+RUN arm=off i=10 uses_existing=false cites_weak=false promptHasArtifact=false promptChars=8907 ms=231684 tools=agentloop,exec_command,agentloop
+RESULT OFF: consome o artefato em 0/10 (critério estrito) | cita em 0/10 (fraco) | prompt p50 8907 chars | tempo p50 166575 ms
+RESULT ON : consome o artefato em 10/10 (critério estrito) | cita em 10/10 (fraco) | prompt p50 9982 chars | tempo p50 104266 ms

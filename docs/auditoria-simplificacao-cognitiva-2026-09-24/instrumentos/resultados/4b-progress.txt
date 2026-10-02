@@ -1,0 +1,30 @@
+2026-10-02T04:33:28.692Z arm=off boot ok pid=6364 porta=3198 developer_mode_http=200
+2026-10-02T04:33:41.111Z arm=on boot ok pid=15952 porta=3199 developer_mode_http=200
+2026-10-02T04:33:41.112Z arm=off INÍCIO cenário=A rep=1
+2026-10-02T04:33:41.119Z arm=on INÍCIO cenário=A rep=1
+2026-10-02T04:34:36.327Z arm=off FIM cenário=A rep=1 ok=true status=completed cycles=3 replans=0 ms=55130 replanAborted=0/0 factsLines=0 fileOk=true
+2026-10-02T04:34:36.328Z arm=off INÍCIO cenário=B rep=1
+2026-10-02T04:37:11.578Z arm=on FIM cenário=A rep=1 ok=true status=completed cycles=4 replans=0 ms=210427 replanAborted=0/0 factsLines=0 fileOk=true
+2026-10-02T04:37:11.579Z arm=on INÍCIO cenário=B rep=1
+2026-10-02T04:49:38.517Z arm=off FIM cenário=B rep=1 ok=false status=executing cycles=null replans=null ms=902135 replanAborted=0/0 factsLines=0 fileOk=true
+2026-10-02T04:49:38.522Z arm=off INÍCIO cenário=C rep=1
+2026-10-02T04:52:13.909Z arm=on FIM cenário=B rep=1 ok=false status=replanning cycles=null replans=null ms=902289 replanAborted=2/2 factsLines=2 fileOk=true
+2026-10-02T04:52:13.910Z arm=on INÍCIO cenário=C rep=1
+2026-10-02T04:56:49.798Z arm=off FIM cenário=C rep=1 ok=true status=completed cycles=5 replans=0 ms=431230 replanAborted=0/0 factsLines=0 fileOk=true
+2026-10-02T04:56:49.799Z arm=off INÍCIO cenário=A rep=2
+2026-10-02T04:58:00.101Z arm=on FIM cenário=C rep=1 ok=true status=completed cycles=5 replans=0 ms=346121 replanAborted=0/0 factsLines=0 fileOk=true
+2026-10-02T04:58:00.102Z arm=on INÍCIO cenário=A rep=2
+2026-10-02T05:01:35.972Z arm=on FIM cenário=A rep=2 ok=true status=completed cycles=4 replans=0 ms=215820 replanAborted=0/0 factsLines=0 fileOk=true
+2026-10-02T05:01:35.974Z arm=on INÍCIO cenário=B rep=2
+2026-10-02T05:01:40.956Z arm=off FIM cenário=A rep=2 ok=true status=completed cycles=4 replans=0 ms=291103 replanAborted=0/0 factsLines=0 fileOk=true
+2026-10-02T05:01:40.956Z arm=off INÍCIO cenário=B rep=2
+2026-10-02T05:14:18.942Z arm=off FIM cenário=B rep=2 ok=true status=completed cycles=6 replans=0 ms=757945 replanAborted=0/0 factsLines=0 fileOk=true
+2026-10-02T05:14:18.944Z arm=off INÍCIO cenário=C rep=2
+2026-10-02T05:16:39.779Z arm=on FIM cenário=B rep=2 ok=false status=replanning cycles=null replans=null ms=903770 replanAborted=1/1 factsLines=1 fileOk=true
+2026-10-02T05:16:39.781Z arm=on INÍCIO cenário=C rep=2
+2026-10-02T05:18:09.907Z arm=off FIM cenário=C rep=2 ok=true status=completed cycles=4 replans=0 ms=230911 replanAborted=0/0 factsLines=0 fileOk=true
+2026-10-02T05:19:45.744Z arm=on FIM cenário=C rep=2 ok=true status=completed cycles=5 replans=1 ms=185895 replanAborted=0/1 factsLines=1 fileOk=true
+2026-10-02T05:19:45.745Z TODOS OS BRAÇOS CONCLUÍDOS
+2026-10-02T05:19:48.771Z encerrado arm=off; porta 3198 livre: true
+2026-10-02T05:19:48.904Z encerrado arm=on; porta 3199 livre: true
+2026-10-02T05:19:48.905Z FIM

@@ -423,8 +423,11 @@ A §11 mediu a *passagem de informação* (o plano usa o artefato); a 4b mede o 
 
 ### 12.5 Como reexecutar, e o que falta para uma resposta decisiva
 
-- **Artefatos:** os dois instrumentos — o replay (`replay.ts`, §11) e o orquestrador da 4b (`run4b.cjs`, com o protocolo acima no cabeçalho) — estão no **scratchpad da sessão, fora do repositório**,
-  portanto **não reproduzíveis a partir da `main`** enquanto não forem preservados (decisão pendente: onde guardá-los). O resultado bruto desta execução (`results.json`, `progress.log`) também está só lá.
+- **Artefatos preservados** em `instrumentos/` (ao lado deste documento, 02/10/2026): `replay.ts` (replay da §11), `run4b.cjs` (orquestrador da 4b, com o protocolo no cabeçalho) e, em
+  `instrumentos/resultados/`, o bruto desta execução: `4b-results.json`, `4b-progress.txt` e `replay-4a-resumo.txt` (apenas as linhas `RUN`/`STEP`/`RESULT` do replay — o log completo foi
+  deixado de fora porque contém texto de estratégias geradas sobre conteúdo do usuário). As cópias foram **sanitizadas** (sem caminhos da máquina: `NEWCLAW_REPO`/`HARNESS_ROOT` parametrizam as pastas) e
+  o `replay.ts` foi reexecutado do novo local em modo `--dry`, reproduzindo os mesmos números (8 907 e 9 982 chars; +1 075). **Não são código de produção:** `tsconfig.json` só compila `src/**/*`, então
+  não entram no `tsc` nem no build. O `run4b.cjs` **não foi reexecutado** do novo local (exigiria subir duas instâncias reais); só a sintaxe e a resolução dos caminhos foram verificadas.
 - **Procedimento:** copiar o banco de produção para fora da árvore (replay) ou semear o workspace (4b); subir cada instância com `TS_NODE_PROJECT` e `TS_NODE_TRANSPILE_ONLY`, confirmar o PID dono da porta, ligar `developer` mode, rodar, encerrar.
 - **Desenho para uma resposta decisiva (não executado):** (a) **forçar o replan** (falha injetada no mesmo ponto nos dois braços) para comparar o que a flag realmente altera; (b) **um goal por vez e encerrar goals pendentes entre as rodadas**
   (ou um workspace por goal); (c) timeout de 30 a 40 min no cenário B e tratar os cortes como censura; (d) N maior que 2 por célula.
