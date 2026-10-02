@@ -43,7 +43,14 @@ async function withServer(run: (base: string) => Promise<void>): Promise<void> {
     app.use('/api/integrations', createIntegrationsRouter({} as never));
     const server = app.listen(0);
     await new Promise((r) => server.once('listening', r));
-    try { await run(`http://127.0.0.1:${(server.address() as any).port}`); } finally { server.close(); }
+    try {
+        await run(`http://127.0.0.1:${(server.address() as any).port}`);
+    } finally {
+        // Encerramento limpo (ver S316): o fetch deixa conexões keep-alive abertas, e process.exit() com elas fechando derruba o processo no
+        // Windows (`Assertion failed: !(handle->flags & UV_HANDLE_CLOSING)`, exit 0xC0000409). Risco latente aqui também.
+        server.closeAllConnections();
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
 }
 
 /** Faz o papel do add-in via HTTP: espera o comando aparecer na fila, devolve-o e posta o resultado. */
@@ -190,7 +197,7 @@ async function main(): Promise<void> {
     assert(/cmd\.action === 'getPresentation' \|\| cmd\.action === 'getSlide'/.test(addin) && /data: outcome\.data/.test(addin), 'o laço de comandos trata as 2 ações e envia `data` junto do status');
 
     console.log(`\n${passed} passou, ${failed} falhou`);
-    process.exit(failed === 0 ? 0 : 1);
+    process.exitCode = failed === 0 ? 0 : 1;   // sem process.exit(): deixa os handles terminarem de fechar sozinhos
 }
 
-main().catch(err => { console.error('ERRO NÃO TRATADO:', err); process.exit(1); });
+main().catch(err => { console.error('ERRO NÃO TRATADO:', err); process.exitCode = 1; });

@@ -124,6 +124,33 @@ export function isTrustedOrigin(originHeader: string | undefined, requestHost: s
     }
 }
 
+/**
+ * Origem do suplemento do PowerPoint: o `manifest.xml` do add-in FIXA `https://localhost:3000` (servidor estático do `dist/`), então o
+ * add-in é um consumidor cross-origin LEGÍTIMO do Dashboard (ele chama `http://127.0.0.1:3090`, outro host). A restrição de CORS de
+ * 26/08/2026 (`96088de`) aceitava só a mesma origem e quebrou o add-in por completo ("Failed to fetch"): o navegador do Office bloqueava
+ * a resposta por falta de `Access-Control-Allow-Origin`. Ninguém percebeu porque o add-in não foi usado desde 14/07.
+ *
+ * Liberação ESTREITA, não uma volta ao `*`: só a origem EXATA do add-in e só nas rotas que ele realmente chama — `POST /api/chat` e
+ * `/api/integrations/powerpoint/commands…`. Fora de propósito: `/api/chat/auth-decision` (aprova ação perigosa), `/api/config`,
+ * `/api/memory` etc. continuam sem CORS para essa origem.
+ */
+export const ADDIN_ORIGIN = 'https://localhost:3000';
+const ADDIN_EXACT_PATHS = ['/api/chat'];
+const ADDIN_PATH_PREFIXES = ['/api/integrations/powerpoint/commands'];
+
+export function isAddinRequest(originHeader: string | undefined, requestPath: string | undefined): boolean {
+    if (!originHeader || !requestPath) return false;
+    let origin: string;
+    try {
+        origin = new URL(originHeader).origin;
+    } catch {
+        return false;
+    }
+    if (origin !== ADDIN_ORIGIN) return false;
+    return ADDIN_EXACT_PATHS.indexOf(requestPath) !== -1
+        || ADDIN_PATH_PREFIXES.some(p => requestPath === p || requestPath.startsWith(p + '/'));
+}
+
 // ── CSRF: checagem de Origin/Referer em requisições mutantes autenticadas por cookie ──────────
 
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);

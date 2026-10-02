@@ -41,7 +41,9 @@ console.log('\n=== S266-1 [estrutural] — csrfOriginCheck e a config de cors() 
     assert(/export function isTrustedOrigin/.test(securitySrc), 'isTrustedOrigin é exportada de security.ts (fonte única)', null);
     assert(/isTrustedOrigin\(/.test(securitySrc) && securitySrc.indexOf('function csrfOriginCheck') < securitySrc.lastIndexOf('isTrustedOrigin('), 'csrfOriginCheck chama isTrustedOrigin (não reimplementa a comparação)', null);
     assert(serverSrc.includes("isTrustedOrigin") && serverSrc.includes("from './security'"), 'DashboardServer.ts importa isTrustedOrigin de security.ts (não uma cópia local)', null);
-    assert(!/cors\(\)\s*;?\s*$/m.test(serverSrc.replace(/\/\/.*$/gm, '')), 'cors() não é mais chamado sem opções (política de origem própria, não *)', null);
+    // S316 (02/10/2026): a regex original (`/cors\(\)\s*;?\s*$/m`) só casava `cors();` sozinho na linha e NÃO casava `app.use(cors());` —
+    // a forma que o código tinha antes da correção. Provado por mutação: voltar a `app.use(cors())` passava. Agora casa `cors()` em qualquer forma.
+    assert(!/\bcors\(\s*\)/.test(serverSrc.replace(/\/\/.*$/gm, '')), 'cors() não é mais chamado sem opções (política de origem própria, não *)', null);
 }
 
 console.log('\n=== S266-2 [funcional] — origem batendo o host é confiável ===');
