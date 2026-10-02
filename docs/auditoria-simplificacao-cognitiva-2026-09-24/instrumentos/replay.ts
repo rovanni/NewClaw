@@ -11,6 +11,10 @@
  * Só imprime métricas agregadas; não imprime conteúdo de conversa.
  * Resultado da execução de 02/10/2026 (N=10 por braço): ver `resultados/replay-4a-resumo.txt` e a §11 do documento da campanha.
  *
+ * AVISO (02/10/2026, §12.7 do documento da campanha): este replay registra APENAS 5 ferramentas (edit, send_document,
+ * list_workspace, read, exec_command), não as ~22 de produção. Medido: com as 22 o prompt `off` vai de 8 907 para 10 310 chars
+ * (+16%). O efeito disso no resultado da §11 é desconhecido. O replay do RC1 (`replay_rc1.ts`) usa o conjunto completo.
+ *
  * LIMITE CONHECIDO (declarado no plano): o banco não guarda o runtimeContext (memória), o contexto de
  * capacidades nem a reflexão do replan original. O replay roda com o prompt MAIS LEVE que o de produção
  * (a parte estática real é 64–79% do prompt) → tende a SUPERESTIMAR o efeito do bloco. É um limite superior.

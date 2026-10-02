@@ -436,3 +436,15 @@ A §11 mediu a *passagem de informação* (o plano usa o artefato); a 4b mede o 
 
 Código `on` em `main` (commit `bf72c09`), **desligado por padrão**; produção em `shadow`. **C6 não atendido; parte 4b executada com limites; ligar `on` em produção: não recomendado agora.**
 Pendentes: ratificar D3/D4/D6; decidir onde preservar os instrumentos; decidir se vale o desenho da §12.5 para uma resposta decisiva.
+
+### 12.7 Adendo (02/10/2026) — limite NÃO declarado do replay da §11
+
+Ao preparar o replay do RC1 (RFC-008), descobri que o `replay.ts` da §11 registrava **apenas 5 ferramentas** (`edit`, `send_document`, `list_workspace`, `read`, `exec_command`) em vez das ~22 que a produção registra
+(`AgentController.registerSkills`). Isto **não** foi declarado entre os limites da §11 nem da §12.4.
+
+**Medido** (mesmo replay, modo `--dry`, mesmo banco e mesmo ponto de replan): o prompt `off` passa de **8 907** chars com 5 ferramentas para **10 310** com as 22 (**+1 403 chars, ≈ +16%**); o bloco de fatos soma
+os mesmos **1 075** chars nos dois casos. Portanto o limite é real, mas **modesto em tamanho**: o prompt do replay continua bem mais leve que o de produção (≈ 21 mil chars, §9). **O efeito sobre o resultado da §11
+(`off` 0/10, `on` 10/10) é desconhecido** — o tamanho pouco muda, mas o conjunto de ferramentas pode ter alterado as opções do Planner. **Não reexecutei a §11 com as 22.**
+
+*(Uma versão preliminar deste adendo atribuía a diferença entre 8 907 e 13 206 chars às ferramentas; estava errada — 13 206 é o prompt de **plano** do replay do RC1, outro prompt. Corrigido com a medição acima.)*
+O replay do RC1 usa o conjunto completo. O `replay.ts` preservado em `instrumentos/` mantém as 5 ferramentas e passa a trazer este aviso no cabeçalho.

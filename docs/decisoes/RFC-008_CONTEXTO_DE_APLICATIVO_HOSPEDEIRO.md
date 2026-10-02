@@ -395,3 +395,46 @@ que **contém** os dois ganchos de sombra (`REPLAN_FACTS` e `HOST_CONTEXT`; conf
 do problema**, não o efeito do bloco; o efeito só se mede com o modo `on` (que ainda não existe — critérios A3 e A10) ou com um replay com LLM real, como o da Campanha A (§11 do documento citado), com os mesmos limites daquele replay.
 
 **Estado.** S-B3 em **coleta passiva**. O modo `on` do RC1 não existe e **nenhuma ação sobre ele deve ser tomada sem dados**. Pendente de decisão do usuário: ratificar o critério (≥ 10 goals) e/ou preparar o replay com LLM real.
+
+# Plano do replay com LLM real — RC1 (PRÉ-REGISTRADO em 02/10/2026, **antes** de qualquer execução)
+
+**Pergunta.** A informação que o bloco de host entrega ("a conversa acontece dentro do PowerPoint; a apresentação aberta existe no PowerPoint do usuário, não é um arquivo do workspace; todo `.pptx`
+entregue é inserido nela") reduz, no **plano inicial**, o comportamento observado em 14/07 — o Planner **caçar o deck como arquivo**?
+
+**Cenário.** O pedido canônico de 14/07, presente em dois goals da base com **texto idêntico** (verificado por comparação direta): `nxx12` e `1q551`. Em produção, **os dois** planos usaram
+`list_workspace` e `exec_command` (conjuntos de ferramentas lidos do banco), e nenhum usou `powerpoint_control`. O texto do pedido não é reproduzido aqui nem em nenhum log do replay.
+
+**Instrumento.** `instrumentos/replay_rc1.ts` (modos `--dry` e `--real`). **O modo `on` do RC1 não existe no código**; o braço `host` é simulado: o bloco é gerado pela função **real**
+`buildHostAppContextBlock` e inserido no prompt por um wrapper de `chatWithFallback`, **imediatamente depois da linha `OBJETIVO GLOBAL`** (posição pré-fixada). Isto testa o efeito da **informação**,
+não a integração (critérios A3/A10 desta RFC).
+
+**Desenho.** N = **10 por braço** (`off` e `host`), ordem dos braços **alternada a cada rodada**; modelo do planner = `PLANNER_MODEL` atual da produção (`glm-5.3:cloud`); **as 22 ferramentas de produção**
+registradas (verificado em `--dry`: 22/22); estado do goal **vazio** (só `objective`/`userIntent`; sem attempts, blockers, estratégias nem plano atual — nada posterior ao momento do plano); `slideContext`
+**sintético** (o real de 14/07 não foi guardado). Em `--dry`: prompt `off` ≈ 13 206 chars, `host` ≈ 13 729 (+523 chars ≈ 150 tokens); o bloco não está no `off` e o prompt `off` não cita `apresentacao.pptx`.
+
+**Métricas.** *Primária:* **`hunt_strict`** — o plano contém um passo que **abre/lê um `.pptx` existente** (`read` de `*.pptx`; `Presentation('x.pptx')` com argumento; `cat`/`type`/`unzip` de `*.pptx`) **ou** que
+**descobre o workspace** (`list_workspace`/`refresh_workspace`) com descrição/args citando apresentação, slides ou `.pptx`. *Secundárias:* descobre o workspace (qualquer), usa `powerpoint_control`, gera `.pptx`
+novo, envia documento, planos vazios, tamanho do prompt, tempo e chamadas abortadas. **Cada passo é logado e classificado** (`STEP ...`) para auditoria manual — a classificação é heurística.
+
+**Critérios (propostos por mim, a ratificar; os limiares não derivam de dado).**
+
+| # | Critério | Medida |
+|---|---|---|
+| R1 | **O replay discrimina:** o braço `off` reproduz o problema | `hunt_strict(off)` **≥ 5/10**. Se for menor, o replay **não reproduz** o comportamento neste cenário reconstruído, **nenhum efeito do bloco pode ser inferido** e o RC1 não ganha suporte por este caminho. |
+| R2 | **Efeito:** o bloco reduz a caça | `hunt_strict(host)` ≤ `hunt_strict(off)` − 4 |
+| R3 | **Sem dano:** | planos vazios do `host` ≤ os do `off`; abortos do planner (`[LLM-CALL] aborted=true`) do `host` não maiores que os do `off` |
+| R4 | **Guardas:** | `promptHasHostBlock` verdadeiro em 10/10 `host` e falso em 10/10 `off`; 22/22 ferramentas |
+
+**Como ler o resultado (pré-declarado).** Atender R1 a R4 mostra que a **informação** muda o plano **neste cenário**, com um modelo e prompt mais leve que o de produção — **não** que o RC1 resolve o problema em
+produção. Uma redução de `hunt_strict` **não** é por si só um plano melhor (o `host` pode gerar um `.pptx` novo e enviá-lo, caminho legítimo que o bloco descreve); por isso `generates`/`send` são reportados e os
+passos são auditados. R1 não atendido é um resultado **tão válido quanto** os demais e deve ser registrado como tal.
+
+**Limites pré-declarados.** (1) Prompt mais leve que o de produção: faltam memória, `CapabilityRegistry` e reflexão (o replay inclui, ao contrário do da Campanha A, o conjunto completo de 22 ferramentas).
+(2) Modelo atual do planner, possivelmente diferente do de 14/07. (3) `slideContext` sintético. (4) Uma única mensagem. (5) Na `main`, `powerpoint_control` só tem a ação `addTextBox`; `getPresentation`/`getSlide`
+existem só no remoto (ver "Escopo opcional separado"), então o Planner de hoje **não pode** ler o deck por essa ferramenta — um plano que a use faz menos do que o de 14/07 fez na branch. (6) N = 10 por braço e
+heurística de classificação. (7) Mede o **plano inicial**, não o resultado do goal.
+
+**Procedimento.** Copiar o banco de produção (com `-wal`/`-shm`) para fora da árvore; rodar `--dry`; rodar `--real` com `OLLAMA_URL`, `OLLAMA_MODEL`, `PLANNER_MODEL` e `DEFAULT_PROVIDER` no ambiente, a partir da raiz do
+repositório; não tocar na produção. Estimativa: 20 chamadas de `plan()`, **40 a 90 min** (cada chamada com raciocínio pode passar de 4 min, como no replay da Campanha A).
+
+**Estado.** Instrumento pronto e verificado em `--dry`. **Ainda não executado.**
