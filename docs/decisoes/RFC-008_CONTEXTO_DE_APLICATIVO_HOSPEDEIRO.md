@@ -438,3 +438,57 @@ heurística de classificação. (7) Mede o **plano inicial**, não o resultado d
 repositório; não tocar na produção. Estimativa: 20 chamadas de `plan()`, **40 a 90 min** (cada chamada com raciocínio pode passar de 4 min, como no replay da Campanha A).
 
 **Estado.** Instrumento pronto e verificado em `--dry`. **Ainda não executado.**
+
+# Resultado do replay com LLM real — RC1 (02/10/2026): **R1 e R2 NÃO atendidos; achado sobre `powerpoint_control`**
+
+Executado conforme o protocolo pré-registrado acima (commit `16df09f`, antes da execução): plano inicial do pedido de 14/07, N = 10 por braço com ordem alternada, `glm-5.3:cloud`, 22 ferramentas
+de produção, estado do goal vazio, bloco gerado pela função real e inserido depois de `OBJETIVO GLOBAL`. **Os limiares R1/R2 eram propostas minhas e não foram ratificados**; foram aplicados como propostos.
+
+### Execução 1 — N = 10 por braço (protocolo)
+
+| | OFF | HOST |
+|---|---|---|
+| **Caça o deck como arquivo (`hunt_strict`, métrica primária)** | **4/10** | **1/10** |
+| Descobre o workspace (qualquer) | 5/10 | 1/10 |
+| Usa `powerpoint_control` | 2/10 | **7/10** |
+| Gera `.pptx` novo / envia documento | 0/10 / 0/10 | 0/10 / 0/10 |
+| Planos vazios | 0/10 | 0/10 |
+| Chamadas de plano com `aborted=true` | 5/10 | 4/10 |
+| Bloco no prompt (guarda) | 0/10 | 10/10 |
+| Prompt | 13 206 chars | 13 729 chars (+523 ≈ 150 tokens) |
+
+**Veredito pelos critérios pré-registrados:** **R1 NÃO atendido** (`hunt_strict(off)` = 4/10 < 5/10: o replay **não reproduz o problema o bastante**, e pelo protocolo **nenhum efeito do bloco pode ser inferido**);
+**R2 NÃO atendido** (redução de 3, pedia ≥ 4); R3 atendido (0 planos vazios; abortos 4 ≤ 5); R4 atendido (guardas íntegras, 22/22 ferramentas). R1 falhou por **um plano**, e o limiar não é ajustado depois de ver o resultado.
+
+### Auditoria complementar — N = 5 por braço (**posterior** ao resultado, exploratória)
+
+Motivo: 7 dos 10 planos `host` usavam `powerpoint_control`, em geral em 4 passos seguidos, e na `main` essa ferramenta só aceita `addTextBox`. O harness passou a gravar **apenas o valor de `action`** (nunca o conteúdo
+dos argumentos). Resultado: `hunt_strict` **4/5** em `off` e **0/5** em `host`; `powerpoint_control` em 1/5 e **5/5**; **`action` AUSENTE em todos os 22 passos de `powerpoint_control`** (4 em `off`, 18 em `host`).
+Descritivamente, somando os dois lotes: `hunt_strict` 8/15 em `off` contra 1/15 em `host`; `powerpoint_control` 3/15 contra 12/15. **Esta soma NÃO é usada para dar o R1 por atendido** — seria parada opcional (estender a amostra depois de ver o resultado) —;
+é só descrição. Os resumos de ambos os lotes estão em `instrumentos/resultados/rc1-exec1-resumo.txt` e `rc1-auditoria-resumo.txt`.
+
+### O que os dados mostram (com a distinção entre medido e interpretado)
+
+1. **Direção consistente, mas sem inferência permitida.** O bloco acompanha uma queda forte de `hunt_strict` nos dois lotes. Pelo protocolo, porém, o replay não discrimina (R1), e isto é registrado como resultado, não como detalhe.
+2. **O bloco redireciona o Planner para `powerpoint_control`** (12/15 contra 3/15). *Medido.*
+3. **Esses passos não são executáveis como escritos.** *Medido:* nenhum dos 22 passos traz `action`. *Verificado no código/prompt:* o prompt de plano só diz o **nome** da ferramenta e uma linha de descrição ("Executa comandos interativos na apresentação ativa
+   do PowerPoint"); **não** diz que `action` é obrigatório nem que o único valor aceito é `addTextBox` (a ferramenta não declara `requiredArgsHint`, e o contrato fixo do prompt não a lista). Além disso, **`addTextBox` só insere uma caixa de texto** — não altera cores de um deck.
+   *Inferido, não executado:* o replay mede o **plano**, não a execução; pela validação já existente (`validateToolArgs`, commit `a193852`) o passo seria barrado antes do despacho com a lista de valores aceitos, e o goal replanejaria — o mesmo padrão do erro `Ação 'undefined' não é suportada` de 14/07.
+4. **Consequência para esta RFC.** Entregar **apenas** o fato do host pode empurrar o Planner para uma ferramenta que, hoje, **não consegue fazer o trabalho** — possivelmente **pior** do que o comportamento atual, não melhor. Isto é uma hipótese forte, **não comprovada**: falta executar esses planos.
+5. **Correção ao que a RFC disse sobre o RC2.** A RFC afirma que o RC2 "já foi resolvido por outro caminho". Isso vale para a **validação** (`a193852`), mas esta evidência mostra que a **visibilidade do schema no prompt** continua aberta **para esta ferramenta**: o mecanismo `requiredArgsHint` (ARCH-015) cobre 7 tools e `powerpoint_control` não está entre elas.
+   A extensão mínima, dentro de mecanismo existente, seria declarar `requiredArgsHint` no próprio arquivo da tool. **Não foi feita** e é decisão separada.
+
+### Recomendação
+
+**Não implementar o modo `on` do RC1 como está desenhado.** Antes, decidir (em ordem de menor para maior escopo, todas fora do que foi implementado):
+(a) a tool declarar `requiredArgsHint` (RC2, visibilidade); (b) o bloco de host listar, **como fato derivado do schema da tool**, as ações que `powerpoint_control` suporta (hoje só `addTextBox`) — coerente com a nota opcional A5 desta RFC e com a regra de fatos, não instruções;
+(c) decidir o escopo opcional `getPresentation`/`getSlide`, sem o qual o Planner não consegue ler o deck. Depois, **repetir o replay** (o mesmo instrumento) e **executar** os planos gerados. A sombra em produção (`HOST_CONTEXT=shadow`) **continua** e não tem risco: só loga.
+
+### Limites
+
+Os pré-declarados no protocolo, mais: **a auditoria foi posterior ao resultado e com amostra menor (N = 5)**; a classificação de `hunt_strict` é heurística e **não foi auditada passo a passo à mão** (os `STEP` estão nos resumos para quem quiser);
+o replay mede o **plano inicial, não a execução nem o resultado do goal**; `slideContext` sintético; um modelo, um pedido; o prompt é mais leve que o de produção. Um achado sobre o **meu** processo: na primeira execução o harness não gravava os argumentos dos passos, e só por isso o problema de `action` ficou invisível até a auditoria.
+
+### Estado
+
+Replay com LLM real **executado**; **R1/R2 não atendidos**; achado sobre `powerpoint_control` **registrado, sem correção aplicada**. Modo `on` do RC1 **não implementado e não recomendado agora**. Pendente de decisão do usuário: (a), (b) e (c) acima, e se vale repetir o replay depois.

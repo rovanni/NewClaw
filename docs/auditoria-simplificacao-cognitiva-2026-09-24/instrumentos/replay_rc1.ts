@@ -171,7 +171,12 @@ async function main() {
             let r = { steps: [] as Step[], prompt: '', ms: 0 };
             try { r = await runArm(arm, true); } catch (e) { console.log('RUN-ERRO ' + String(e).slice(0, 120)); }
             const cl = r.steps.map(classify);
-            cl.forEach((c, k) => console.log(`STEP arm=${arm} i=${i + 1} n=${k + 1} tool=${c.tool} hunt=${c.huntStrict} discovers=${c.discovers} opens=${c.opensExisting} generates=${c.generates}`));
+            // Auditoria complementar (02/10/2026, POSTERIOR ao resultado da 1ª execução): para `powerpoint_control` grava só o valor de
+            // `action` (nunca o conteúdo dos argumentos), para saber se o plano pede ações que a tool da `main` suporta (só addTextBox).
+            cl.forEach((c, k) => {
+                const act = c.usesPpt ? ` action=${String((r.steps[k]?.toolArgs as Record<string, unknown> | undefined)?.action ?? 'AUSENTE')}` : '';
+                console.log(`STEP arm=${arm} i=${i + 1} n=${k + 1} tool=${c.tool} hunt=${c.huntStrict} discovers=${c.discovers} opens=${c.opensExisting} generates=${c.generates}${act}`);
+            });
             const t = tally[arm];
             t.n++; t.chars.push(r.prompt.length); t.ms.push(r.ms);
             if (cl.some(c => c.huntStrict)) t.hunt++;

@@ -1,0 +1,122 @@
+=== replay RC1 (plano inicial de 14/07) — modo=real N=10 ===
+ferramentas registradas: 22/22
+powerpoint_control registrada: true | bloco de host: 522 chars
+ARM-START arm=off i=1 t=2026-10-02T13:20:53.850Z
+STEP arm=off i=1 n=1 tool=list_workspace hunt=true discovers=true opens=false generates=false
+STEP arm=off i=1 n=2 tool=agentloop hunt=false discovers=false opens=false generates=false
+STEP arm=off i=1 n=3 tool=agentloop hunt=false discovers=false opens=false generates=false
+STEP arm=off i=1 n=4 tool=exec_command hunt=false discovers=false opens=false generates=false
+STEP arm=off i=1 n=5 tool=agentloop hunt=false discovers=false opens=false generates=false
+STEP arm=off i=1 n=6 tool=memory_write hunt=false discovers=false opens=false generates=false
+RUN arm=off i=1 hunt_strict=true discover_any=true uses_ppt_tool=false generates=false steps=6 promptHasHostBlock=false promptChars=13206 ms=204524 tools=list_workspace,agentloop,agentloop,exec_command,agentloop,memory_write
+ARM-START arm=host i=1 t=2026-10-02T13:24:18.601Z
+STEP arm=host i=1 n=1 tool=powerpoint_control hunt=false discovers=false opens=false generates=false
+STEP arm=host i=1 n=2 tool=powerpoint_control hunt=false discovers=false opens=false generates=false
+STEP arm=host i=1 n=3 tool=powerpoint_control hunt=false discovers=false opens=false generates=false
+STEP arm=host i=1 n=4 tool=powerpoint_control hunt=false discovers=false opens=false generates=false
+STEP arm=host i=1 n=5 tool=memory_write hunt=false discovers=false opens=false generates=false
+STEP arm=host i=1 n=6 tool=agentloop hunt=false discovers=false opens=false generates=false
+RUN arm=host i=1 hunt_strict=false discover_any=false uses_ppt_tool=true generates=false steps=6 promptHasHostBlock=true promptChars=13729 ms=35368 tools=powerpoint_control,powerpoint_control,powerpoint_control,powerpoint_control,memory_write,agentloop
+ARM-START arm=host i=2 t=2026-10-02T13:24:53.970Z
+STEP arm=host i=2 n=1 tool=powerpoint_control hunt=false discovers=false opens=false generates=false
+STEP arm=host i=2 n=2 tool=powerpoint_control hunt=false discovers=false opens=false generates=false
+STEP arm=host i=2 n=3 tool=powerpoint_control hunt=false discovers=false opens=false generates=false
+STEP arm=host i=2 n=4 tool=powerpoint_control hunt=false discovers=false opens=false generates=false
+STEP arm=host i=2 n=5 tool=memory_write hunt=false discovers=false opens=false generates=false
+STEP arm=host i=2 n=6 tool=agentloop hunt=false discovers=false opens=false generates=false
+RUN arm=host i=2 hunt_strict=false discover_any=false uses_ppt_tool=true generates=false steps=6 promptHasHostBlock=true promptChars=13729 ms=107110 tools=powerpoint_control,powerpoint_control,powerpoint_control,powerpoint_control,memory_write,agentloop
+ARM-START arm=off i=2 t=2026-10-02T13:26:41.081Z
+STEP arm=off i=2 n=1 tool=list_workspace hunt=true discovers=true opens=false generates=false
+STEP arm=off i=2 n=2 tool=agentloop hunt=false discovers=false opens=false generates=false
+STEP arm=off i=2 n=3 tool=agentloop hunt=false discovers=false opens=false generates=false
+STEP arm=off i=2 n=4 tool=exec_command hunt=false discovers=false opens=false generates=false
+STEP arm=off i=2 n=5 tool=agentloop hunt=false discovers=false opens=false generates=false
+RUN arm=off i=2 hunt_strict=true discover_any=true uses_ppt_tool=false generates=false steps=5 promptHasHostBlock=false promptChars=13206 ms=227531 tools=list_workspace,agentloop,agentloop,exec_command,agentloop
+ARM-START arm=off i=3 t=2026-10-02T13:30:28.613Z
+STEP arm=off i=3 n=1 tool=list_workspace hunt=true discovers=true opens=false generates=false
+STEP arm=off i=3 n=2 tool=exec_command hunt=false discovers=false opens=false generates=false
+STEP arm=off i=3 n=3 tool=agentloop hunt=false discovers=false opens=false generates=false
+STEP arm=off i=3 n=4 tool=exec_command hunt=false discovers=false opens=false generates=false
+STEP arm=off i=3 n=5 tool=agentloop hunt=false discovers=false opens=false generates=false
+STEP arm=off i=3 n=6 tool=memory_write hunt=false discovers=false opens=false generates=false
+RUN arm=off i=3 hunt_strict=true discover_any=true uses_ppt_tool=false generates=false steps=6 promptHasHostBlock=false promptChars=13206 ms=146077 tools=list_workspace,exec_command,agentloop,exec_command,agentloop,memory_write
+ARM-START arm=host i=3 t=2026-10-02T13:32:54.690Z
+STEP arm=host i=3 n=1 tool=powerpoint_control hunt=false discovers=false opens=false generates=false
+STEP arm=host i=3 n=2 tool=powerpoint_control hunt=false discovers=false opens=false generates=false
+STEP arm=host i=3 n=3 tool=powerpoint_control hunt=false discovers=false opens=false generates=false
+STEP arm=host i=3 n=4 tool=powerpoint_control hunt=false discovers=false opens=false generates=false
+STEP arm=host i=3 n=5 tool=memory_write hunt=false discovers=false opens=false generates=false
+STEP arm=host i=3 n=6 tool=agentloop hunt=false discovers=false opens=false generates=false
+RUN arm=host i=3 hunt_strict=false discover_any=false uses_ppt_tool=true generates=false steps=6 promptHasHostBlock=true promptChars=13729 ms=103763 tools=powerpoint_control,powerpoint_control,powerpoint_control,powerpoint_control,memory_write,agentloop
+ARM-START arm=host i=4 t=2026-10-02T13:34:38.453Z
+STEP arm=host i=4 n=1 tool=powerpoint_control hunt=false discovers=false opens=false generates=false
+STEP arm=host i=4 n=2 tool=powerpoint_control hunt=false discovers=false opens=false generates=false
+STEP arm=host i=4 n=3 tool=powerpoint_control hunt=false discovers=false opens=false generates=false
+STEP arm=host i=4 n=4 tool=powerpoint_control hunt=false discovers=false opens=false generates=false
+STEP arm=host i=4 n=5 tool=agentloop hunt=false discovers=false opens=false generates=false
+RUN arm=host i=4 hunt_strict=false discover_any=false uses_ppt_tool=true generates=false steps=5 promptHasHostBlock=true promptChars=13729 ms=76957 tools=powerpoint_control,powerpoint_control,powerpoint_control,powerpoint_control,agentloop
+ARM-START arm=off i=4 t=2026-10-02T13:35:55.411Z
+STEP arm=off i=4 n=1 tool=agentloop hunt=false discovers=false opens=false generates=false
+RUN arm=off i=4 hunt_strict=false discover_any=false uses_ppt_tool=false generates=false steps=1 promptHasHostBlock=false promptChars=13206 ms=26 tools=agentloop
+ARM-START arm=off i=5 t=2026-10-02T13:35:55.437Z
+STEP arm=off i=5 n=1 tool=agentloop hunt=false discovers=false opens=false generates=false
+RUN arm=off i=5 hunt_strict=false discover_any=false uses_ppt_tool=false generates=false steps=1 promptHasHostBlock=false promptChars=13206 ms=13 tools=agentloop
+ARM-START arm=host i=5 t=2026-10-02T13:35:55.451Z
+STEP arm=host i=5 n=1 tool=agentloop hunt=false discovers=false opens=false generates=false
+RUN arm=host i=5 hunt_strict=false discover_any=false uses_ppt_tool=false generates=false steps=1 promptHasHostBlock=true promptChars=13729 ms=13 tools=agentloop
+ARM-START arm=host i=6 t=2026-10-02T13:35:55.465Z
+STEP arm=host i=6 n=1 tool=agentloop hunt=false discovers=false opens=false generates=false
+RUN arm=host i=6 hunt_strict=false discover_any=false uses_ppt_tool=false generates=false steps=1 promptHasHostBlock=true promptChars=13729 ms=23 tools=agentloop
+ARM-START arm=off i=6 t=2026-10-02T13:35:55.489Z
+STEP arm=off i=6 n=1 tool=agentloop hunt=false discovers=false opens=false generates=false
+RUN arm=off i=6 hunt_strict=false discover_any=false uses_ppt_tool=false generates=false steps=1 promptHasHostBlock=false promptChars=13206 ms=14 tools=agentloop
+ARM-START arm=off i=7 t=2026-10-02T13:35:55.504Z
+STEP arm=off i=7 n=1 tool=agentloop hunt=false discovers=false opens=false generates=false
+RUN arm=off i=7 hunt_strict=false discover_any=false uses_ppt_tool=false generates=false steps=1 promptHasHostBlock=false promptChars=13206 ms=12 tools=agentloop
+ARM-START arm=host i=7 t=2026-10-02T13:35:55.516Z
+STEP arm=host i=7 n=1 tool=agentloop hunt=false discovers=false opens=false generates=false
+RUN arm=host i=7 hunt_strict=false discover_any=false uses_ppt_tool=false generates=false steps=1 promptHasHostBlock=true promptChars=13729 ms=15 tools=agentloop
+ARM-START arm=host i=8 t=2026-10-02T13:35:55.531Z
+STEP arm=host i=8 n=1 tool=powerpoint_control hunt=false discovers=false opens=false generates=false
+STEP arm=host i=8 n=2 tool=powerpoint_control hunt=false discovers=false opens=false generates=false
+STEP arm=host i=8 n=3 tool=powerpoint_control hunt=false discovers=false opens=false generates=false
+STEP arm=host i=8 n=4 tool=powerpoint_control hunt=false discovers=false opens=false generates=false
+RUN arm=host i=8 hunt_strict=false discover_any=false uses_ppt_tool=true generates=false steps=4 promptHasHostBlock=true promptChars=13729 ms=25920 tools=powerpoint_control,powerpoint_control,powerpoint_control,powerpoint_control
+ARM-START arm=off i=8 t=2026-10-02T13:36:21.452Z
+STEP arm=off i=8 n=1 tool=list_workspace hunt=false discovers=true opens=false generates=false
+STEP arm=off i=8 n=2 tool=read hunt=false discovers=false opens=false generates=false
+STEP arm=off i=8 n=3 tool=agentloop hunt=false discovers=false opens=false generates=false
+STEP arm=off i=8 n=4 tool=exec_command hunt=false discovers=false opens=false generates=false
+STEP arm=off i=8 n=5 tool=agentloop hunt=false discovers=false opens=false generates=false
+RUN arm=off i=8 hunt_strict=false discover_any=true uses_ppt_tool=false generates=false steps=5 promptHasHostBlock=false promptChars=13206 ms=56763 tools=list_workspace,read,agentloop,exec_command,agentloop
+ARM-START arm=off i=9 t=2026-10-02T13:37:18.215Z
+STEP arm=off i=9 n=1 tool=list_workspace hunt=true discovers=true opens=false generates=false
+STEP arm=off i=9 n=2 tool=powerpoint_control hunt=false discovers=false opens=false generates=false
+STEP arm=off i=9 n=3 tool=powerpoint_control hunt=false discovers=false opens=false generates=false
+STEP arm=off i=9 n=4 tool=powerpoint_control hunt=false discovers=false opens=false generates=false
+STEP arm=off i=9 n=5 tool=agentloop hunt=false discovers=false opens=false generates=false
+STEP arm=off i=9 n=6 tool=memory_write hunt=false discovers=false opens=false generates=false
+RUN arm=off i=9 hunt_strict=true discover_any=true uses_ppt_tool=true generates=false steps=6 promptHasHostBlock=false promptChars=13206 ms=142836 tools=list_workspace,powerpoint_control,powerpoint_control,powerpoint_control,agentloop,memory_write
+ARM-START arm=host i=9 t=2026-10-02T13:39:41.052Z
+STEP arm=host i=9 n=1 tool=list_workspace hunt=true discovers=true opens=false generates=false
+STEP arm=host i=9 n=2 tool=powerpoint_control hunt=false discovers=false opens=false generates=false
+STEP arm=host i=9 n=3 tool=agentloop hunt=false discovers=false opens=false generates=false
+RUN arm=host i=9 hunt_strict=true discover_any=true uses_ppt_tool=true generates=false steps=3 promptHasHostBlock=true promptChars=13729 ms=52268 tools=list_workspace,powerpoint_control,agentloop
+ARM-START arm=host i=10 t=2026-10-02T13:40:33.320Z
+STEP arm=host i=10 n=1 tool=powerpoint_control hunt=false discovers=false opens=false generates=false
+STEP arm=host i=10 n=2 tool=powerpoint_control hunt=false discovers=false opens=false generates=false
+STEP arm=host i=10 n=3 tool=powerpoint_control hunt=false discovers=false opens=false generates=false
+STEP arm=host i=10 n=4 tool=powerpoint_control hunt=false discovers=false opens=false generates=false
+STEP arm=host i=10 n=5 tool=memory_write hunt=false discovers=false opens=false generates=false
+STEP arm=host i=10 n=6 tool=agentloop hunt=false discovers=false opens=false generates=false
+RUN arm=host i=10 hunt_strict=false discover_any=false uses_ppt_tool=true generates=false steps=6 promptHasHostBlock=true promptChars=13729 ms=108978 tools=powerpoint_control,powerpoint_control,powerpoint_control,powerpoint_control,memory_write,agentloop
+ARM-START arm=off i=10 t=2026-10-02T13:42:22.298Z
+STEP arm=off i=10 n=1 tool=powerpoint_control hunt=false discovers=false opens=false generates=false
+STEP arm=off i=10 n=2 tool=powerpoint_control hunt=false discovers=false opens=false generates=false
+STEP arm=off i=10 n=3 tool=powerpoint_control hunt=false discovers=false opens=false generates=false
+STEP arm=off i=10 n=4 tool=powerpoint_control hunt=false discovers=false opens=false generates=false
+STEP arm=off i=10 n=5 tool=powerpoint_control hunt=false discovers=false opens=false generates=false
+STEP arm=off i=10 n=6 tool=agentloop hunt=false discovers=false opens=false generates=false
+RUN arm=off i=10 hunt_strict=false discover_any=false uses_ppt_tool=true generates=false steps=6 promptHasHostBlock=false promptChars=13206 ms=164460 tools=powerpoint_control,powerpoint_control,powerpoint_control,powerpoint_control,powerpoint_control,agentloop
+RESULT OFF : caça o deck como arquivo (estrito) 4/10 | descobre workspace (qualquer) 5/10 | usa powerpoint_control 2/10 | gera .pptx novo 0/10 | envia documento 0/10 | planos vazios 0/10 | prompt p50 13206 chars | tempo p50 142836 ms
+RESULT HOST: caça o deck como arquivo (estrito) 1/10 | descobre workspace (qualquer) 1/10 | usa powerpoint_control 7/10 | gera .pptx novo 0/10 | envia documento 0/10 | planos vazios 0/10 | prompt p50 13729 chars | tempo p50 52268 ms
