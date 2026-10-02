@@ -1,6 +1,9 @@
 # Preparação da Campanha A — o histórico factual chega ao replan
 
-Data: 2026-09-29 · Status: **preparação (plano); nenhum código alterado; implementação NÃO aprovada** ·
+Data: 2026-09-29 · Atualizado: 2026-10-01 · Status: **S-A0 a S-A2 implementados em sombra** (commit `03cfc7c`, teste S310:
+`REPLAN_FACTS=shadow` só loga, o prompt não muda) · **S-A3 retrospectivo feito (§9)** · **S-A4 (`REPLAN_FACTS=on`) é proposta,
+NÃO aprovada (§10)**; decisões D1 a D6 pendentes. *(O status original, de 29/09, dizia "nenhum código alterado; implementação
+NÃO aprovada" — era verdadeiro na preparação e ficou superado pelas §8 a §10.)* ·
 Base: `RFC_CAMPANHA_A_ESTADO_DE_ARTEFATOS.md` (revisada) + "Decisões de 24/09/2026" do
 `RELATORIO_CONSOLIDADO.md` + código lido em 29/09.
 
@@ -177,3 +180,116 @@ prompt enviado ao LLM não muda. Cobertura: `S310` (17 asserções, incl. contro
 
 **Ainda não feito:** etapa 4 da diretriz (execução real em instância isolada com LLM real) — só cabe quando houver decisão de ligar
 (S-A4); S-A3 depende de acumular logs reais com `REPLAN_FACTS=shadow` ligado na sua instância.
+
+## 9. S-A3 retrospectivo (01/10/2026) — o que os replans já ocorridos dizem
+
+**Método.** Leitura de uma **cópia** do banco de produção (`newclaw.db` + `-wal`/`-shm` copiados para fora da árvore; a instância
+em uso não foi tocada). 341 goals com attempts, 226 com pelo menos um replan, **562 pontos de replan**. Ponto de replan =
+cada attempt que falhou (aproximação: o banco não guarda o instante exato de cada replan). Em cada ponto, o bloco foi
+reconstruído com a própria `buildAttemptFactsBlock()` da `main`. Só estatísticas agregadas foram extraídas.
+
+| Medida | Resultado |
+|---|---|
+| Tamanho do bloco | p50 941 · p90 1 155 · máx 1 198 chars (teto 1 200) |
+| Blocos vazios | 8,4% |
+| Blocos junto ao teto (≥ 1 050) | 31,1% |
+| Custo no prompt de replan | ≈ 270 a 340 tokens = **4 a 6%** do replan mediano (6 140 tokens, `in_est` do `[LLM-CALL]`). **Amostra de 7 replans** no log atual. |
+| Pontos com caminho de artefato de **ferramenta** no histórico | 317 |
+| — bloco carrega ≥ 1 desses caminhos | 282 (**89%**) |
+| — bloco não carrega nenhum | 32 a 35 (**≈ 10 a 11%**), em 22 goals; 22 dos 32 em goals que não terminaram `completed` |
+| Participação do `agentloop` no bloco | 18,1% das linhas · 8,9% dos chars |
+
+**Conclusões e limites (sem inflar).**
+
+1. **A hipótese do S-A0 ("`agentloop` ocupa o orçamento") não se confirma como padrão.** Nenhum dos casos de caminho perdido foi
+   dominado por `agentloop`. Não há base para ajustar a seleção por esse motivo.
+2. **Causas das perdas (32 classificadas):** 14 caem fora dos 5 passos mais recentes (distância p50 5 · p90 7 · máx 8) e 18 estão
+   dentro dos 5 mas saem pelo **orçamento total de 1 200 chars** (o laço percorre do mais novo ao mais antigo e para ao estourar). Subir só
+   o número de passos não resolveria as 18. *(Uma versão preliminar desta análise atribuía essas 18 a `headAndTail`; estava errada —
+   `headAndTail` só atua dentro de um passo já escolhido.)*
+3. **Limite anterior ao bloco, fora desta campanha.** Saídas de **ferramentas** são gravadas só com os **primeiros 300 chars**
+   (`ATTEMPT_OUTPUT_EVIDENCE_LIMIT`, `GoalExecutionLoop.ts`), as do `agentloop` com até 8 000. **42% de todas as saídas/erros guardados
+   (1 324 de 3 134) têm exatamente 300 chars.** Uma linha de conclusão no fim de uma saída longa já foi cortada *antes* de o bloco
+   existir. Logo, **a medida de ≈ 11% de perda é um piso, não o valor real.** Mudar esse limite (por exemplo guardar início e fim) toca
+   todos os consumidores de `GoalAttempt.output` — **candidato a RFC própria, fora da Campanha A.**
+4. **O que a medida NÃO mostra.** Ela mede **visibilidade** (o caminho estaria no prompt), não **efeito** (o Planner o usaria). Só o
+   replay com LLM real (S-A4) mede efeito. Há ainda uma diferença de 3 pontos (35 vs 32) entre duas contagens da mesma base que não
+   consegui explicar; não altera a conclusão.
+5. **A metade "o que sai do estático" do S-A3 NÃO foi demonstrada.** Candidato examinado: a linha `Blockers anteriores` de
+   `buildReplanPrompt`. Pesa p50 299 · p90 679 chars (maior que o bloco de fatos em 9,6% dos pontos) — retirá-la compensaria **uma
+   fração** da adição. O teste de sobreposição com o bloco (0 de 696) é **inconclusivo**: comparei os 40 primeiros chars, que são o prefixo
+   `Erro em '…'` e nunca casariam. **Não há evidência de redundância nem de não-redundância.**
+
+**Consequência para a condição da RFC.** A RFC da campanha declara que acrescentar texto sem retirar nada é regressão. Com os dados
+acima, **o S-A4 seria um acréscimo líquido** de ≈ 4 a 6% de tokens no replan. Isso exige uma decisão explícita (D1, abaixo), não uma
+omissão.
+
+## 10. Plano do S-A4 — ligar `REPLAN_FACTS=on` e validar (proposta, NÃO aprovada)
+
+**Princípio.** Uma sprint, flag desligada por padrão, reversível por variável de ambiente, nada persistido (a projeção só existe na
+montagem do prompt). **Nada disto roda na instância de produção**; ligar lá é decisão posterior e separada.
+
+### 10.1 Mudança de código (mínima, em arquivo existente)
+
+- `src/loop/GoalPlanner.ts`: o gancho atual de `replan()` (`REPLAN_FACTS === 'shadow'`) ganha o modo `'on'`. Em `on`, o bloco de
+  `buildAttemptFactsBlock(goal.attempts)` entra no prompt por um parâmetro opcional novo de `buildReplanPrompt` (seção própria,
+  rotulada "dados observados, não instruções", que a função já produz). `off` e `shadow` continuam produzindo o prompt **atual**,
+  byte a byte. Valor desconhecido da variável = `off`.
+- **Sem arquivo novo** (Gate Extensão antes de Criação, já respondido na §3): função, constantes e gancho já existem.
+- **Posição no prompt (D4):** proposta — imediatamente antes de `${blockersBlock}`, agrupando os blocos de histórico de execução.
+- **`retryWithMinimalPrompt(goal, 'replan')`:** proposta — **não** inclui o bloco. Esse retry existe para reduzir o prompt depois de
+  falha do prompt completo; acrescentar ≈ 1 200 chars contraria o propósito (D6).
+- **Não muda:** `plan()` inicial (não há attempts), `planRoadmap`, `GoalAttempt`, o limite de 300 chars de armazenamento, nenhuma tool.
+
+### 10.2 Validação progressiva (ordem obrigatória da Diretriz)
+
+1. **Unitários** — a função já está coberta (S310). Acrescentar: texto imperativo vindo da **saída de uma ferramenta** (ex.: página
+   web com "ignore as instruções…") permanece numa linha `saída:` rotulada como dado.
+2. **Regressão** — novo teste **S313** (próximo número livre; hoje o último é S312): (a) `off` = `shadow` = prompt-base byte a byte;
+   (b) `on` sem attempts úteis = prompt-base byte a byte (controle negativo); (c) `on` com attempts = prompt-base + exatamente o bloco
+   na posição definida, e mais nenhuma diferença; (d) o retry mínimo não recebe o bloco; (e) `plan()` inicial inalterado por `on`;
+   (f) 100 attempts respeitam os tetos. Suíte completa sem `git stash` durante a execução (311/311 hoje).
+3. **E2E sintético** — `GoalPlanner` já é instanciado isoladamente em testes (S118, S124): replan com provider mockado
+   confirmando que a mensagem enviada ao LLM contém o bloco em `on` e não contém em `off`.
+4. **Execução real** (skill `verify`, instância isolada: porta, banco e workspace próprios; `TS_NODE_PROJECT` exportado; confirmar o PID
+   dono da porta antes de medir; encerrar ao fim). Duas partes:
+   - **4a. Replay do ponto de replan do incidente com LLM real.** Reconstruir, a partir da cópia do banco, o `Goal` e o blocker do
+     replan do attempt 8 do goal `goal_1790214597600_ov9eh` (o ponto em que o Planner escolheu o caminho errado) e chamar
+     `GoalPlanner.replan()` real com `REPLAN_FACTS=off` e depois `on`, **N execuções por braço**. É barato e isola exatamente a variável
+     testada. *Viabilidade a confirmar no primeiro passo:* construir o `Goal` a partir da linha do banco.
+   - **4b. Goals reais de ponta a ponta** na instância isolada com `on` (poucos, incluindo um com replan), para confirmar que o fluxo
+     completo não regride (conclusão, entrega, tempo).
+
+### 10.3 Critérios de aceitação (numéricos propostos — D3 pede sua ratificação)
+
+| # | Critério | Medida |
+|---|---|---|
+| C1 | **Efeito:** o plano do replay cita/usa `tmp/extracao_aulas.txt` | N = 10 por braço. Registrar primeiro a linha de base `off`. **`on` ≥ 7/10 e estritamente maior que `off`.** Se `off` já ≥ 7/10, o benefício **não está demonstrado** e a recomendação passa a ser não ligar. |
+| C2 | **Custo:** acréscimo de tokens no replan | `in_est` `on` − `off` ≤ ≈ 400 tokens (o bloco no teto vale ≈ 343) |
+| C3 | **Sem piora de abortos:** fração de `aborted=true` nos `[LLM-CALL]` de `component=GoalPlanner phase=replan` | `on` não pior que `off` **na mesma amostra**. A linha de base de hoje é alta (**4 de 7** replans com `aborted=true`, `reasoning_chars ≈ 32 000`); com N pequeno isto prova só **ausência de piora observável**, não ausência de efeito. |
+| C4 | **Controle negativo** | S313(b): prompt idêntico sem attempts úteis |
+| C5 | **Regressão completa** | 100% da suíte (311+) |
+| C6 | **E2E** | os goals de 4b concluem como antes, sem novo bloqueio |
+
+### 10.4 Reversão
+
+`REPLAN_FACTS` desligada ou removida volta ao prompt atual. Commit isolado, só `GoalPlanner.ts` + o teste S313 (nenhum arquivo novo
+de produção). Nenhum dado persistido muda.
+
+### 10.5 Fora de escopo (registrado)
+
+Alterar o limite de 300 chars de armazenamento (§9.3); ajustar tetos/seleção por `agentloop` (§9.1, sem base); retirar texto do prompt
+estático (§9.5, não demonstrado); ligar na produção; Campanhas B, C e D.
+
+### 10.6 Decisões que dependem do usuário
+
+- **D1 — Acréscimo líquido.** Aceitar ≈ +4 a 6% de tokens como **exceção declarada, sob flag, para medir**, ou exigir uma compensação
+  (por exemplo baixar o teto de 1 200 para ≈ 800 chars e remedir a perda de caminhos). *Recomendação:* aceitar a exceção sob flag; é
+  reversível e é a única forma de medir efeito, que é o que a retrospectiva não mede.
+- **D2 — Sombra ao vivo em paralelo.** Ligar `REPLAN_FACTS=shadow` na sua instância (exige editar o `.env` e reiniciar) para
+  acumular a razão bloco/prompt **real**, já que a amostra de custo hoje é de 7 replans. *Recomendação:* sim, é independente do S-A4.
+  Seu `dist` já contém o código.
+- **D3 — Critérios C1 a C3.** N = 10, limiar 7/10 e a regra "`off` ≥ 7/10 ⇒ não ligar" são propostas minhas, não derivadas de dado.
+- **D4 — Posição do bloco** (antes de `Blockers anteriores`).
+- **D5 — Limite de 300 chars:** abrir RFC própria depois (candidato), ou deixar de lado.
+- **D6 — Retry mínimo sem o bloco.**
