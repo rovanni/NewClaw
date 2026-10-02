@@ -2,7 +2,8 @@
 
 **Status:** APROVADA (01/10/2026); **RC1 em implementação, modo sombra** — commit `77a533b`, teste
 S312. `HOST_CONTEXT=shadow` apenas loga `[HOST-CONTEXT]`; o prompt do Planner **não** muda. O modo
-`on` **não está aprovado**: depende da etapa S-B3 (logs reais acumulados) e de decisão do usuário.
+`on` **não está aprovado**: depende da etapa S-B3 (logs reais acumulados; **em coleta passiva desde 02/10/2026**,
+ver "Registro de execução — S-B3" no fim) e de decisão do usuário.
 Critérios A3 e A10 só valem quando o modo `on` existir. Validação até aqui: S312 71/71, regressão
 completa 311/311, execução real em instância isolada com LLM real. Esta RFC não cobre RC2 nem
 `getPresentation`/`getSlide` (ver seções próprias).
@@ -358,3 +359,39 @@ planner); limpeza de branches (decisão separada, posterior à decisão sobre es
 1. Aprovar (ou não) a implementação do RC1 nesta forma, **em modo sombra primeiro**.
 2. Confirmar que o contrato `slideContext` da `main` é a referência (esta RFC assume que sim).
 3. Decidir se `getPresentation`/`getSlide` viram proposta própria agora ou ficam arquivadas.
+
+# Registro de execução — S-B3 (02/10/2026)
+
+**Ação aplicada na produção.** `HOST_CONTEXT=shadow` foi ligada no `.env` da instância de produção (3 linhas ao final; arquivo só com LF) e a instância foi
+reiniciada com **0 goals ativos**. O boot foi confirmado pelo horário da linha `Dashboard rodando` no log (02:33) e pelo PID dono da porta — *não* apenas por uma linha
+qualquer do log: uma primeira verificação mostrou, por engano, a linha do reinício anterior (00:05), e foi corrigida. A instância roda um `dist` compilado em 01/10
+que **contém** os dois ganchos de sombra (`REPLAN_FACTS` e `HOST_CONTEXT`; confirmado por busca no código compilado). Os dois só **logam**; o prompt do Planner não muda.
+
+**Retrospectiva sobre a base existente** (cópia do banco de produção, somente leitura; só agregados):
+
+| Medida | Resultado |
+|---|---|
+| Goals de sessões do suplemento PowerPoint | **9** (de 352 no banco), todos entre 07/07 e 14/07/2026, de **uma única sessão** |
+| Status final | 4 `completed`, 5 `failed` |
+| Usaram `powerpoint_control` | **1/9** |
+| Usaram `exec_command` | 7/9 |
+| Usaram `list_workspace` | 3/9 |
+| Usaram python-pptx / `Presentation()` | 5/9 |
+| Mencionam o arquivo `apresentacao.pptx` do workspace | 1/9 |
+| Mais de um blocker | 4/9 (15 `tool_error` no total) |
+
+**O que isto é e o que não é.**
+- É **compatível** com o problema do RC1: o Planner raramente escolhe a ferramenta do PowerPoint e trabalha por arquivo e script.
+- **Não é evidência independente.** O período (07 a 14/07) é o mesmo dos testes que originaram a investigação; os goals de 14/07 analisados lá estão incluídos aqui.
+- **Não prova** que o contexto de host mudaria o plano: a sombra não altera o prompt, então só mostra o que o Planner fez **sem** o bloco.
+- A contagem é por busca textual nos attempts, cujas saídas são guardadas com 300 chars (ver `PREPARACAO_CAMPANHA_A_2026-09-29.md`, §9.3), então tende a **subcontar**.
+- "Mencionam `.pptx`" (9/9) é trivial — todas são tarefas de apresentação — e **não** foi usado como evidência.
+
+**Lacuna de dados.** **Não há nenhum goal do suplemento desde 14/07** (≈ 11 semanas). A sombra só gera dado quando o suplemento for usado; até este registro, **0** linhas `[HOST-CONTEXT]`
+(a instância acabou de ser reiniciada) e **0** `[REPLAN-FACTS]` (a instância não recebeu nenhum goal desde o reinício de 00:05). A S-B3 **não avança sozinha**.
+
+**Critério proposto, ainda NÃO ratificado.** Decidir sobre o modo `on` apenas com **pelo menos 10 goals reais do suplemento com `[HOST-CONTEXT]` registrado**, analisando nesses goals se o Planner chamou
+`powerpoint_control` ou caçou o deck como arquivo (`list_workspace`/`read`/`exec_command` sobre `.pptx`), comparado com a linha de base acima. Como a sombra não muda o plano, ela mede a **frequência e a forma
+do problema**, não o efeito do bloco; o efeito só se mede com o modo `on` (que ainda não existe — critérios A3 e A10) ou com um replay com LLM real, como o da Campanha A (§11 do documento citado), com os mesmos limites daquele replay.
+
+**Estado.** S-B3 em **coleta passiva**. O modo `on` do RC1 não existe e **nenhuma ação sobre ele deve ser tomada sem dados**. Pendente de decisão do usuário: ratificar o critério (≥ 10 goals) e/ou preparar o replay com LLM real.
