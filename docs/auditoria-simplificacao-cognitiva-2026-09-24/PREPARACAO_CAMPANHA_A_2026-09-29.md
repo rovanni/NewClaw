@@ -1,9 +1,11 @@
 # Preparação da Campanha A — o histórico factual chega ao replan
 
-Data: 2026-09-29 · Atualizado: 2026-10-01 · Status: **S-A0 a S-A2 implementados em sombra** (commit `03cfc7c`, teste S310:
-`REPLAN_FACTS=shadow` só loga, o prompt não muda) · **S-A3 retrospectivo feito (§9)** · **S-A4 (`REPLAN_FACTS=on`) é proposta,
-NÃO aprovada (§10)**; decisões D1 a D6 pendentes. *(O status original, de 29/09, dizia "nenhum código alterado; implementação
-NÃO aprovada" — era verdadeiro na preparação e ficou superado pelas §8 a §10.)* ·
+Data: 2026-09-29 · Atualizado: 2026-10-02 · Status: **S-A0 a S-A2 implementados em sombra** (commit `03cfc7c`, teste S310:
+`REPLAN_FACTS=shadow` só loga, o prompt não muda) · **S-A3 retrospectivo feito (§9)** · **S-A4 implementado atrás de flag, DESLIGADO por
+padrão** (commit `bf72c09`, teste S313; replay com LLM real: `off` 0/10 e `on` 10/10 — §11) · **parte 4b (goals reais de ponta a ponta)
+NÃO executada; `on` NÃO está ligado em produção** (a produção roda `shadow`); D1 e D2 aceitas, D3/D4/D6 aplicadas por recomendação e pendentes
+de ratificação. *(O status original, de 29/09, dizia "nenhum código alterado; implementação NÃO aprovada" — era verdadeiro na preparação e
+ficou superado pelas §8 a §11.)* ·
 Base: `RFC_CAMPANHA_A_ESTADO_DE_ARTEFATOS.md` (revisada) + "Decisões de 24/09/2026" do
 `RELATORIO_CONSOLIDADO.md` + código lido em 29/09.
 
@@ -293,3 +295,65 @@ estático (§9.5, não demonstrado); ligar na produção; Campanhas B, C e D.
 - **D4 — Posição do bloco** (antes de `Blockers anteriores`).
 - **D5 — Limite de 300 chars:** abrir RFC própria depois (candidato), ou deixar de lado.
 - **D6 — Retry mínimo sem o bloco.**
+
+## 11. S-A4 — execução (02/10/2026)
+
+**Decisões recebidas.** **D1 aceita:** o acréscimo líquido de ≈ 4 a 6% de tokens entra como **exceção declarada à regra "acrescentar sem retirar",
+sob flag, para medir efeito**. **D2 aceita e aplicada:** `REPLAN_FACTS=shadow` foi ligada na instância de produção (3 linhas ao final do
+`.env`, PM2 reiniciado com a instância ociosa — nenhum goal ativo, 0 reinícios anteriores). **D3, D4 e D6 não foram respondidas
+explicitamente:** foram aplicadas as recomendações da §10 (limiares C1–C3, bloco antes de "Blockers anteriores", retry mínimo sem o
+bloco), que seguem **pendentes de ratificação**. D5 (limite de 300 chars de armazenamento) continua fora da campanha.
+
+**Código (commit `bf72c09`).** `src/loop/GoalPlanner.ts`: `REPLAN_FACTS=on` passa o bloco a `buildReplanPrompt` por um parâmetro opcional novo
+(`attemptFacts`, no fim da lista), em seção própria antes de `Blockers anteriores`. `off`, `shadow` e qualquer outro valor produzem o prompt
+atual byte a byte; sem attempts úteis o prompt também é idêntico; `retryWithMinimalPrompt` e `plan()` não mudam. **Desligado por padrão.**
+Sem arquivo novo de produção. A linha de log passou a incluir `mode=`.
+
+**Testes.** `S313` (38 asserções) dirige `replan()` de verdade com provider falso. **Teste de mutação:** quebrei o código de propósito de duas
+formas (o bloco passando a entrar em `shadow`; a posição trocada) e o S313 reprovou ambas. Duas asserções estruturais de testes existentes
+foram **atualizadas deliberadamente**, e a regressão completa as encontrou:
+- `S310 [7]` fixava "a projeção só é consumida pela sombra"; o modo `on` a torna obsoleta por construção. O comportamento da sombra
+  (prompt idêntico) passa a ser verificado em `S313 [1]`.
+- `S142` exigia `operationalHint` como **último** argumento de `buildReplanPrompt`; a intenção do teste é a **propagação**, não a posição.
+  A primeira regressão completa falhou nesse arquivo (311 OK, 1 FAIL); após o ajuste, **312/312**.
+
+**Replay do incidente com LLM real (etapa 4a).** Goal `goal_1790214597600_ov9eh`, replan após o attempt 8, modelo `glm-5.3:cloud` (o
+`PLANNER_MODEL` real), banco **copiado** (somente leitura), N = 10 por braço com a ordem dos braços **alternada a cada rodada**.
+
+| | OFF | ON |
+|---|---|---|
+| Plano **consome** o artefato existente (critério estrito) | **0/10** | **10/10** |
+| Cita o nome (critério fraco) | 0/10 | 10/10 |
+| Prompt continha o artefato (guarda de contaminação) | 0/10 | 10/10 |
+| Tamanho do prompt | 8 907 chars | 9 982 chars (**+1 075 ≈ 308 tokens**) |
+| Chamadas de replan com `aborted=true` | 10/10 | 6/10 |
+
+**Critérios.** **C1 atendido** (`on` 10/10 ≥ 7/10 e estritamente maior que `off`; `off` não está em 7+, logo o benefício está demonstrado *neste
+cenário*). **C2 atendido** (+308 tokens, teto ≈ 400). **C3 atendido** (6/10 contra 10/10, mesma amostra). **C4/C5 atendidos** (controle negativo
+no S313; regressão 312/312). **C6 (goals reais de ponta a ponta, parte 4b): NÃO executado.**
+
+**Correções de rota registradas (por honestidade metodológica).**
+1. **A primeira versão do replay estava contaminada por anacronismo.** O `strategiesTried` e o `current_plan` finais do goal (posteriores ao
+   replan reconstruído; a estratégia nº 6 cita o artefato) vazavam para o prompt `off`, e o artefato aparecia nos dois braços. Foi
+   corrigido (só as 2 estratégias que existiam naquele momento; `currentPlan` vazio) antes de qualquer medida válida, e a guarda
+   `promptHasArtifact` passou a ser registrada em cada execução.
+2. **O critério C1 foi apertado depois de ver UMA execução.** A regex fraca (`extracao_aulas` em qualquer passo) casou com um plano `off` que
+   propunha reextrair do zero, não usar o arquivo existente. O critério estrito (passo `read` com o caminho, ou `exec_command` que o cita sem
+   escrevê-lo) foi definido antes de qualquer resultado agregado, mas **motivado por esse caso**. Os dois critérios foram mantidos e coincidem
+   (0/10 e 10/10). A primeira execução (v1) foi descartada.
+3. **Auditoria da heurística:** nos 10 planos `on`, o consumo aparece em passo `read` em 9; em 1 é só `exec_command` (classificado como
+   não-escrita e **não auditado à mão**). Descontando-o, `on` fica em 9/10. Nenhum passo, em nenhum braço, mencionou **e** escreveu o artefato.
+
+**Limites (o resultado é um limite superior, não uma promessa de produção).**
+- **O prompt do replay é mais leve que o de produção** (≈ 8,9 mil contra ≈ 21 mil chars; o banco não guarda memória, contexto de capacidades nem
+  reflexão do replan original). Tende a **superestimar** o efeito.
+- **Mede a passagem de informação, não o resultado do goal.** O bloco põe o caminho no prompt e o planner o usa — resultado quase esperado.
+  **Não prova que o goal conclui melhor de ponta a ponta;** isso é a parte 4b.
+- **Um cenário, um modelo, N = 10, um único ponto de replan.**
+- **Abortos fora do padrão:** `off` 10/10 no replay contra ≈ 4/7 em produção. Hipótese **não testada**: sem a informação o modelo "raciocina mais" e
+  estoura o orçamento de ≈ 32 000 chars. Não é causa comprovada.
+- **Tempos confundidos** (p50 `off` ≈ 167 s, `on` ≈ 104 s) pelos abortos/fallback e por uma regressão completa rodando em paralelo durante parte
+  da execução. A alternância dos braços reduz o viés, mas não o elimina. **Não usar como evidência de ganho de latência.**
+
+**Estado.** Código em `main` **desligado por padrão**; a produção segue em `shadow`, **sem `on`**. **Falta:** parte 4b (C6); ratificar D3/D4/D6;
+decidir se o `on` vai para a produção (decisão posterior e separada, só depois da 4b).
