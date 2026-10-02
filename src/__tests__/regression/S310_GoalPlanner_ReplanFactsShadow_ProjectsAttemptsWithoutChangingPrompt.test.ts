@@ -10,8 +10,8 @@
  *   4  → saída enorme: início E fim são preservados (a linha de conclusão costuma ser a última).
  *   5  → função pura: não altera os attempts recebidos.
  *   6  → o bloco é rotulado como dado, sem linguagem imperativa.
- *   7  → sombra: a projeção só é consumida pelo gancho REPLAN_FACTS=shadow, que só loga — o prompt
- *        enviado ao LLM (`messages`) não a contém.
+ *   7  → estrutura: a projeção só é calculada sob REPLAN_FACTS=on|shadow e só entra em buildReplanPrompt sob `on`
+ *        (antes do S-A4 fixava "só sombra"; ver o comentário na seção [7] e S313 [1] para o comportamento).
  *
  * Execução: npx ts-node src/__tests__/regression/S310_GoalPlanner_ReplanFactsShadow_ProjectsAttemptsWithoutChangingPrompt.test.ts
  */
@@ -79,12 +79,15 @@ console.log('\n[6] rótulo de dado, sem imperativo');
 assert(/não instruções/.test(incidentBlock), 'rotulado como dado observado');
 assert(!/\b(use|utilize|não repita|deve|obrigat)/i.test(incidentBlock.split('\n')[0]), 'cabeçalho sem imperativo');
 
-console.log('\n[7] sombra: o prompt enviado ao LLM não muda');
+// S-A4 (01/10/2026): esta seção fixava "só sombra" (a projeção só consumida pelo gancho de sombra, nunca argumento de
+// buildReplanPrompt). O modo `on` tornou essas duas asserções obsoletas por construção — foram reescritas, não removidas.
+// O COMPORTAMENTO da sombra (prompt idêntico, byte a byte, ao de REPLAN_FACTS ausente) é verificado em S313 [1].
+console.log('\n[7] estrutura: o bloco só chega ao prompt sob REPLAN_FACTS=on');
 const src = fs.readFileSync(path.join(__dirname, '../../loop/GoalPlanner.ts'), 'utf8');
 const uses = src.match(/buildAttemptFactsBlock\(/g) ?? [];
-assert(uses.length === 2, 'só a definição e o gancho de sombra referenciam a projeção', uses.length);
-assert(/REPLAN_FACTS === 'shadow'[\s\S]{0,400}buildAttemptFactsBlock\(goal\.attempts\)/.test(src), 'o gancho está sob REPLAN_FACTS=shadow');
-assert(!/buildReplanPrompt\([^)]*factsBlock/.test(src), 'a projeção não é argumento de buildReplanPrompt');
+assert(uses.length === 2, 'só a definição e UM ponto de uso referenciam a projeção', uses.length);
+assert(/factsMode === 'on' \|\| factsMode === 'shadow' \? buildAttemptFactsBlock\(goal\.attempts\) : ''/.test(src), 'a projeção só é calculada sob REPLAN_FACTS=on|shadow');
+assert(/factsMode === 'on' \? factsBlock : undefined\)/.test(src), 'só o modo `on` passa a projeção a buildReplanPrompt (a sombra nunca)');
 
 console.log(`\n${passed} passou, ${failed} falhou`);
 process.exit(failed === 0 ? 0 : 1);

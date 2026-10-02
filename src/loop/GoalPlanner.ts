@@ -368,7 +368,7 @@ function buildLoopDirective(opts: {
     return lines.join('\n') + '\n';
 }
 
-function buildReplanPrompt(goal: Goal, blocker: GoalBlocker, reflectionHint: string, availableTools: string[], runtimeContext?: string, capabilityContext?: string, skillsSummary?: string, activeMilestone?: string, skillContext?: string, diversityBlock?: string, progressModel?: GoalProgressModel, operationalHint?: string): string {
+function buildReplanPrompt(goal: Goal, blocker: GoalBlocker, reflectionHint: string, availableTools: string[], runtimeContext?: string, capabilityContext?: string, skillsSummary?: string, activeMilestone?: string, skillContext?: string, diversityBlock?: string, progressModel?: GoalProgressModel, operationalHint?: string, attemptFacts?: string): string {
     const goalText            = `${goal.objective} ${goal.userIntent}`;
     const compressedRefl      = PromptComposer.compressReflection(reflectionHint);
     const capBlock            = PromptComposer.buildCompactEnv(capabilityContext ?? '', goalText, skillsSummary, compressedRefl);
@@ -377,6 +377,12 @@ function buildReplanPrompt(goal: Goal, blocker: GoalBlocker, reflectionHint: str
     const strategiesBlock = goal.strategiesTried.length > 0
         ? `\nEstratégias já tentadas: ${goal.strategiesTried.join('; ')}\n`
         : '';
+
+    // Campanha A (S-A4): projeção factual do histórico (REPLAN_FACTS=on). Vazia quando o modo não é `on` ou
+    // quando nenhum attempt traz informação — nesses casos o prompt é idêntico, byte a byte, ao anterior.
+    const factsSection = attemptFacts ? `
+${attemptFacts}
+` : '';
 
     const blockersBlock = goal.blockers.length > 0
         ? `\nBlockers anteriores: ${goal.blockers.map(b => `${b.kind}: ${b.description}`).join('; ')}\n`
@@ -597,7 +603,7 @@ OBJETIVO GLOBAL: ${goal.objective}
 ${milestoneInstruction}
 BLOCKER ATUAL: ${blocker.description} (tipo: ${blocker.kind})
 AÇÕES SUGERIDAS PELO SISTEMA: ${blocker.suggestedActions.join('; ')}${retryHint}${ratioLimitHint}
-${pipVenvLoopDirective}${execCommandBanDirective}${execCommandEvidenceHint}${contentStubDirective}${implementDirective}${skillBlock}${capBlock}${strategiesBlock}${blockersBlock}${reflectionBlock}${operationalSection}${contextBlock}${progressSection}${diversitySection}
+${pipVenvLoopDirective}${execCommandBanDirective}${execCommandEvidenceHint}${contentStubDirective}${implementDirective}${skillBlock}${capBlock}${strategiesBlock}${factsSection}${blockersBlock}${reflectionBlock}${operationalSection}${contextBlock}${progressSection}${diversitySection}
 IMPORTANTE: Não repita estratégias já tentadas. Proponha abordagem genuinamente diferente.
 
 ${buildToolContracts(availableTools)}
@@ -959,13 +965,17 @@ export class GoalPlanner {
             ` forbidden=${diversityConstraints.forbiddenFingerprints.length}` +
             ` exhausted=${diversityConstraints.exhaustedTools.length}`
         );
-        const prompt            = buildReplanPrompt(goal, blocker, reflectionHint, availableTools, runtimeContext, capabilityContext, skillsSummary, activeMilestone, this.skillContext, diversityConstraints.promptBlock, progressModel, operationalHint);
-        // Campanha A (S-A2): modo sombra — mede o bloco de fatos do histórico sem enviá-lo ao LLM.
-        // Opt-in explícito (REPLAN_FACTS=shadow, lido a cada chamada); o prompt NÃO é alterado.
-        if (process.env.REPLAN_FACTS === 'shadow') {
-            const factsBlock = buildAttemptFactsBlock(goal.attempts);
+        // Campanha A: bloco de fatos do histórico dos attempts. Opt-in explícito, lido a cada chamada:
+        //   REPLAN_FACTS=shadow → só mede e loga [REPLAN-FACTS]; o prompt NÃO é alterado (S-A2).
+        //   REPLAN_FACTS=on     → o bloco entra no prompt de replan (S-A4, exceção declarada à regra "acrescentar
+        //                         sem retirar" — D1, sob flag, para medir efeito). `retryWithMinimalPrompt` NÃO o recebe (D6).
+        //   qualquer outro valor/ausente → desligado: prompt idêntico, byte a byte, ao anterior.
+        const factsMode  = process.env.REPLAN_FACTS;
+        const factsBlock = factsMode === 'on' || factsMode === 'shadow' ? buildAttemptFactsBlock(goal.attempts) : '';
+        const prompt            = buildReplanPrompt(goal, blocker, reflectionHint, availableTools, runtimeContext, capabilityContext, skillsSummary, activeMilestone, this.skillContext, diversityConstraints.promptBlock, progressModel, operationalHint, factsMode === 'on' ? factsBlock : undefined);
+        if (factsMode === 'shadow' || factsMode === 'on') {
             log.info(
-                `[REPLAN-FACTS] goal=${goal.id} attempts=${goal.attempts.length} factsChars=${factsBlock.length}` +
+                `[REPLAN-FACTS] goal=${goal.id} mode=${factsMode} attempts=${goal.attempts.length} factsChars=${factsBlock.length}` +
                 ` promptChars=${prompt.length} ratio=${(factsBlock.length / Math.max(prompt.length, 1)).toFixed(3)}`
             );
             if (factsBlock) log.debug(`[REPLAN-FACTS] block:\n${factsBlock}`);

@@ -249,7 +249,10 @@ async function main() {
             'GoalPlanner.replan() consulta operationalKnowledge.buildEvidenceHint(blocker.missingDependency) — nunca blocker.toolName');
         assert(!/buildEvidenceHint\(blocker\.toolName\)/.test(goalPlannerSrc),
             'GoalPlanner.replan() NÃO usa mais blocker.toolName para consultar OperationalKnowledge (bug real corrigido)');
-        assert(/operationalHint\)/.test(goalPlannerSrc) && /buildReplanPrompt\(.*operationalHint\)/.test(goalPlannerSrc),
+        // S-A4 (02/10/2026): a asserção original exigia `operationalHint)` — ou seja, que ele fosse o ÚLTIMO argumento
+        // de buildReplanPrompt. O parâmetro opcional `attemptFacts` (Campanha A) passou a vir depois dele. A intenção do
+        // teste é a PROPAGAÇÃO do operationalHint até o prompt, não a posição no fim da lista; a regex agora verifica isso.
+        assert(/operationalHint[,)]/.test(goalPlannerSrc) && /buildReplanPrompt\(.*operationalHint\b/.test(goalPlannerSrc),
             'operationalHint é propagado até buildReplanPrompt()');
     }
 
