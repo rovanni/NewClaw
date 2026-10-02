@@ -29,6 +29,18 @@ class PowerPointControlTool implements ToolExecutor, ContextAwareTool {
         required: ['action']
     };
 
+    /**
+     * ARCH-015 (mecanismo existente): linha de "ARGS OBRIGATÓRIOS" dos prompts de plano e replan. Sem ela o Planner só via o NOME
+     * e uma linha de descrição desta tool, não sabia que `action` é obrigatório e emitia o passo sem ele (replay do RC1,
+     * 02/10/2026: `action` ausente em 22 de 22 passos) — o mesmo padrão do erro "Ação 'undefined'" de 14/07.
+     * A lista de ações vem de `parameters` (uma fonte só): se o `enum` ganhar valores, o hint acompanha. Os argumentos de CADA ação,
+     * porém, são escritos à mão abaixo — ao acrescentar uma ação, atualizar também esta frase.
+     */
+    get requiredArgsHint(): string {
+        const actions = (this.parameters.properties.action.enum ?? []).join('|');
+        return `- powerpoint_control: SEMPRE forneça action (${actions}). addTextBox insere uma caixa de texto no slide ativo: forneça text; x e y são opcionais. Só funciona em sessões do suplemento do PowerPoint.`;
+    }
+
     private currentSessionId?: string;
 
     setContext(chatId: string, _channel?: string): void {
