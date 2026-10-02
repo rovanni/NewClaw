@@ -288,6 +288,142 @@ async function insertSlidesFromAttachment(attachment: ChatAttachment): Promise<v
   }
 }
 
+// ── RFC-009 (Etapa 1, SOMENTE LEITURA): getPresentation / getSlide ─────────────────────────────────────────────────────────
+// ATENÇÃO: este código ainda NÃO foi executado num PowerPoint real (o ambiente de desenvolvimento não roda Office.js). A validação
+// manual (critério E6 da RFC-009) é obrigatória. Os tetos abaixo são do lado do CLIENTE; o servidor os REVALIDA (não confia neste lado).
+const READ_MAX_SLIDES = 100;
+const READ_MAX_SHAPES = 60;
+const READ_MAX_TITLE = 80;
+const READ_MAX_TEXT = 300;
+const READ_MAX_TABLES = 10;
+const READ_MAX_CELLS = 120;
+const READ_MAX_CELL = 100;
+// Tipos de shape cujo textFrame pode ser lido sem lançar exceção; os demais (imagem, gráfico, grupo, mídia…) só são listados.
+const TEXT_SHAPE_TYPES = ["TextBox", "GeometricShape", "Placeholder", "Callout", "Freeform"];
+
+interface ReadOutcome {
+  status: "executed" | "failed" | "unsupported";
+  error: string;
+  data: unknown;
+}
+
+function clip(text: string, max: number): string {
+  return text.length <= max ? text : text.slice(0, max);
+}
+
+async function readPresentation(): Promise<ReadOutcome> {
+  if (!Office.context.requirements.isSetSupported("PowerPointApi", "1.4")) {
+    return { status: "unsupported", error: "PowerPointApi 1.4 não é suportada neste PowerPoint.", data: null };
+  }
+  let data: unknown = null;
+  await PowerPoint.run(async (context) => {
+    const slides = context.presentation.slides;
+    slides.load("items/id");
+    await context.sync();
+    const items = slides.items.slice(0, READ_MAX_SLIDES);
+
+    // Título = texto do primeiro shape de texto do slide. Se isto falhar, a lista de slides continua válida (sem títulos).
+    const titles: string[] = items.map(() => "");
+    try {
+      for (const slide of items) slide.shapes.load("items/type");
+      await context.sync();
+      const firstText: Array<PowerPoint.Shape | undefined> = items.map((slide) =>
+        slide.shapes.items.filter((sh) => TEXT_SHAPE_TYPES.indexOf(sh.type) !== -1)[0]
+      );
+      for (const sh of firstText) if (sh) sh.textFrame.textRange.load("text");
+      await context.sync();
+      firstText.forEach((sh, i) => { if (sh) titles[i] = clip(sh.textFrame.textRange.text || "", READ_MAX_TITLE); });
+    } catch {
+      // sem títulos: não é erro do comando
+    }
+
+    data = {
+      slides: items.map((slide, i) => ({ slideId: slide.id, index: i + 1, title: titles[i] })),
+    };
+  });
+  return { status: "executed", error: "", data };
+}
+
+async function readSlide(args: { index?: number; id?: string }): Promise<ReadOutcome> {
+  if (!Office.context.requirements.isSetSupported("PowerPointApi", "1.4")) {
+    return { status: "unsupported", error: "PowerPointApi 1.4 não é suportada neste PowerPoint.", data: null };
+  }
+  const tablesSupported = Office.context.requirements.isSetSupported("PowerPointApi", "1.8");
+  let data: unknown = null;
+  let notFound = false;
+
+  await PowerPoint.run(async (context) => {
+    const slides = context.presentation.slides;
+    slides.load("items/id");
+    await context.sync();
+
+    let target: PowerPoint.Slide | undefined;
+    if (args.id) {
+      target = slides.items.filter((s) => s.id === args.id)[0];
+    } else if (typeof args.index === "number") {
+      target = slides.items[args.index - 1];
+    } else {
+      const selected = context.presentation.getSelectedSlides();
+      selected.load("items/id");
+      await context.sync();
+      const activeId = selected.items.length > 0 ? selected.items[0].id : undefined;
+      target = slides.items.filter((s) => s.id === activeId)[0] || slides.items[0];
+    }
+    if (!target) { notFound = true; return; }
+    const slideId = target.id;
+    const slideIndex = slides.items.map((s) => s.id).indexOf(slideId) + 1;
+
+    const shapes = target.shapes;
+    shapes.load("items/id,items/name,items/type");
+    await context.sync();
+    const items = shapes.items.slice(0, READ_MAX_SHAPES);
+
+    const textShapes = items.filter((sh) => TEXT_SHAPE_TYPES.indexOf(sh.type) !== -1);
+    for (const sh of textShapes) sh.textFrame.textRange.load("text");
+    await context.sync();
+
+    // Tabelas (PowerPointApi 1.8): `Table.values` traz todas as células de uma vez (string[][]). O teto de células é aplicado depois.
+    const tables: Array<{ shapeId: string; table: PowerPoint.Table }> = [];
+    if (tablesSupported) {
+      for (const sh of items.filter((s) => s.type === "Table").slice(0, READ_MAX_TABLES)) {
+        const tbl = sh.getTable();
+        tbl.load("rowCount,columnCount,values");
+        tables.push({ shapeId: sh.id, table: tbl });
+      }
+      await context.sync();
+    }
+
+    let cellsLeft = READ_MAX_CELLS;
+    const tableData = tables.map((t) => {
+      const cells: Array<{ row: number; col: number; text: string }> = [];
+      const values = t.table.values || [];
+      for (let r = 0; r < values.length && cellsLeft > 0; r++) {
+        for (let c = 0; c < values[r].length && cellsLeft > 0; c++) {
+          const text = clip(String(values[r][c] == null ? "" : values[r][c]), READ_MAX_CELL);
+          if (text) { cells.push({ row: r, col: c, text }); cellsLeft--; }
+        }
+      }
+      return { shapeId: t.shapeId, rows: t.table.rowCount, cols: t.table.columnCount, cells };
+    });
+
+    data = {
+      slideId,
+      slideIndex,
+      shapes: items.map((sh) => ({
+        id: sh.id,
+        name: clip(sh.name || "", 60),
+        type: sh.type,
+        text: TEXT_SHAPE_TYPES.indexOf(sh.type) !== -1 ? clip(sh.textFrame.textRange.text || "", READ_MAX_TEXT) : undefined,
+      })),
+      tables: tableData,
+      tablesSkipped: !tablesSupported,
+    };
+  });
+
+  if (notFound) return { status: "failed", error: "Slide não encontrado na apresentação aberta.", data: null };
+  return { status: "executed", error: "", data };
+}
+
 let isPolling = false;
 async function startCommandPolling(): Promise<void> {
   setInterval(async () => {
@@ -339,6 +475,26 @@ async function startCommandPolling(): Promise<void> {
               sessionId: getSessionId(),
               status,
               error: errorMsg
+            })
+          }).catch(console.error);
+        } else if (cmd.action === 'getPresentation' || cmd.action === 'getSlide') {
+          // RFC-009 (Etapa 1, só leitura). Qualquer exceção do Office.js vira status "failed" com a mensagem — nada é preenchido por palpite.
+          let outcome: ReadOutcome;
+          try {
+            outcome = cmd.action === 'getPresentation'
+              ? await readPresentation()
+              : await readSlide({ index: cmd.args && cmd.args.index, id: cmd.args && cmd.args.id });
+          } catch (err) {
+            outcome = { status: "failed", error: err instanceof Error ? err.message : String(err), data: null };
+          }
+          await fetch(`${serverUrl}/api/integrations/powerpoint/commands/${cmd.commandId}/result`, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({
+              sessionId: getSessionId(),
+              status: outcome.status,
+              error: outcome.error,
+              data: outcome.data
             })
           }).catch(console.error);
         } else if (cmd.action === 'insertDocument') {

@@ -34,8 +34,12 @@ const HOST_APP_FACTS: Record<string, string[]> = {
     ],
 };
 
-/** Uma linha: sem quebras/controle, espaços colapsados, truncada com marcação explícita. */
-function flatten(text: string, max: number): string {
+/**
+ * Uma linha: sem quebras/controle, espaços colapsados, truncada com marcação explícita.
+ * Exportada (RFC-009) para que `powerpoint_control` use O MESMO sanitizador ao devolver ao Planner o texto de slides lido do
+ * deck aberto: texto de cliente é dado não confiável, e há uma única definição de "como vira uma linha segura".
+ */
+export function flatten(text: string, max: number): string {
     // eslint-disable-next-line no-control-regex
     const flat = text.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim();
     return flat.length <= max ? flat : `${flat.slice(0, Math.max(max - 1, 0))}…`;

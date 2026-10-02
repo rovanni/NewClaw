@@ -74,8 +74,9 @@ async function main(): Promise<void> {
     const enumRef = (powerpointControlTool as any).parameters.properties.action.enum as string[];
     const saved = enumRef.slice();
     try {
-        enumRef.push('getSlide');
-        assert(powerpointControlTool.requiredArgsHint.includes('addTextBox|getSlide'), 'ao ganhar um valor no enum, o hint o inclui (sem segunda lista a manter)', powerpointControlTool.requiredArgsHint);
+        // RFC-009 (Etapa 1): o enum já tem getPresentation/getSlide; a mutação usa um valor que NÃO existe, para provar a derivação.
+        enumRef.push('acao_inexistente_s314');
+        assert(powerpointControlTool.requiredArgsHint.includes(`${saved.join('|')}|acao_inexistente_s314`), 'ao ganhar um valor no enum, o hint o inclui (sem segunda lista a manter)', powerpointControlTool.requiredArgsHint);
     } finally {
         enumRef.length = 0; saved.forEach(v => enumRef.push(v));
     }
@@ -103,7 +104,10 @@ async function main(): Promise<void> {
 
     console.log('\n[5] custo no prompt');
     assert(replanPrompt.length - replanPrompt.replace(`${hint}\n`, '').length === hint.length + 1, 'o acréscimo é exatamente a linha + uma quebra');
-    assert(hint.length <= 300, `a linha é curta (${hint.length} chars ≤ 300) — vai a TODO prompt de plano/replan de todos os canais`);
+    // RFC-009 (Etapa 1): o teto subiu de 300 para 400 porque o hint passou a descrever as ações de leitura (197 → 338 chars). O custo é de
+    // TODO prompt de plano/replan de TODOS os canais (powerpoint_control é registrada sempre); o teto continua existindo para que a próxima
+    // ação não o infle sem decisão consciente.
+    assert(hint.length <= 400, `a linha é curta (${hint.length} chars ≤ 400) — vai a TODO prompt de plano/replan de todos os canais`);
 
     console.log('\n[6] guarda de deriva: o hint não contradiz a tool');
     const accepted = (powerpointControlTool as any).parameters.properties.action.enum as string[];

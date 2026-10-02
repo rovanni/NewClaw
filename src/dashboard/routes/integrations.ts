@@ -63,12 +63,14 @@ export function createIntegrationsRouter(_ctx: DashboardContext, spawnFn: any = 
 
     router.post('/powerpoint/commands/:commandId/result', (req: Request, res: Response) => {
         const commandId = req.params.commandId;
-        const { sessionId, status, error } = req.body;
+        const { sessionId, status, error, data } = req.body;
         if (!sessionId || !status) {
             return res.status(400).json({ error: 'sessionId and status are required' });
         }
 
-        const result = powerpointBroker.ack(String(commandId), String(sessionId), status as any, error as string);
+        // `data` (só nas ações de leitura) é conteúdo do deck vindo do cliente: passa CRU ao broker e é validado/limitado
+        // por quem o consome (powerpoint_control). O corpo já é limitado pelo express.json() (100 kb por padrão).
+        const result = powerpointBroker.ack(String(commandId), String(sessionId), status as any, error as string, data);
         if (result.error) {
             return res.status(400).json(result);
         }

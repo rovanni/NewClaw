@@ -1,7 +1,10 @@
 import crypto from 'crypto';
 
 export type CommandStatus = 'executed' | 'failed' | 'unsupported';
-export type CommandAction = 'addTextBox' | 'insertDocument';
+export type CommandAction = 'addTextBox' | 'insertDocument' | 'getPresentation' | 'getSlide';
+
+/** Resultado de um comando. `data` só existe nas ações de LEITURA e é conteúdo NÃO CONFIÁVEL vindo do cliente (RFC-009). */
+export interface CommandResult { success: boolean; output: string; data?: unknown }
 
 export interface CommandArgs {
     text?: string;
@@ -11,6 +14,10 @@ export interface CommandArgs {
     data?: string;
     /** insertDocument: nome do arquivo (usado para decidir como inserir) */
     fileName?: string;
+    /** getSlide: índice do slide (1-based) */
+    index?: number;
+    /** getSlide: id permanente do slide (tem precedência sobre `index`) */
+    id?: string;
 }
 
 export interface PendingCommand {
@@ -18,7 +25,7 @@ export interface PendingCommand {
     sessionId: string;
     action: CommandAction;
     args: CommandArgs;
-    resolve: (result: { success: boolean; output: string }) => void;
+    resolve: (result: CommandResult) => void;
     timeoutId: NodeJS.Timeout;
 }
 
@@ -34,7 +41,7 @@ export class PowerPointBroker {
     // Comandos aguardando resolução
     private pending = new Map<string, PendingCommand>();
 
-    public dispatch(sessionId: string, action: 'addTextBox', args: CommandArgs, timeoutMs = 60000): Promise<{ success: boolean; output: string }> {
+    public dispatch(sessionId: string, action: 'addTextBox' | 'getPresentation' | 'getSlide', args: CommandArgs, timeoutMs = 60000): Promise<CommandResult> {
         return new Promise((resolve) => {
             const commandId = crypto.randomUUID();
 
@@ -92,7 +99,7 @@ export class PowerPointBroker {
         return cmd;
     }
 
-    public ack(commandId: string, sessionId: string, status: CommandStatus, error?: string): { error?: string } {
+    public ack(commandId: string, sessionId: string, status: CommandStatus, error?: string, data?: unknown): { error?: string } {
         const pendingCmd = this.pending.get(commandId);
 
         if (!pendingCmd) {
@@ -116,7 +123,11 @@ export class PowerPointBroker {
         }
 
         if (status === 'executed') {
-            pendingCmd.resolve({ success: true, output: `Comando executado com sucesso.` });
+            // `data` só acompanha ações de leitura; é repassado CRU — quem o consome (a tool) valida e limita.
+            const readAction = pendingCmd.action === 'getPresentation' || pendingCmd.action === 'getSlide';
+            pendingCmd.resolve(readAction && data !== undefined
+                ? { success: true, output: `Comando executado com sucesso.`, data }
+                : { success: true, output: `Comando executado com sucesso.` });
         } else {
             pendingCmd.resolve({ success: false, output: `Falha na execução: ${error || status}` });
         }
