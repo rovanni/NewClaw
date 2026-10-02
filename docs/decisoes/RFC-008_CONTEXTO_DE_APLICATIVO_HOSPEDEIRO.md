@@ -297,6 +297,16 @@ só `addTextBox` (`enum: ['addTextBox']`) e o add-in só trata `addTextBox`. A b
 as ações de leitura `getPresentation` (lista slides com IDs e títulos) e `getSlide` (shapes, textos
 e tabelas de um slide), com round-trip pelo broker.
 
+**Referência histórica (única cópia): `origin/fix/powerpoint-addin-goal-context`, tip `b27f2d2`.** A
+branch local foi removida em 01/10/2026 (idêntica ao `origin`, nada se perdeu); **o remoto é hoje o
+único lugar onde esse código existe** e **não deve ser apagado** enquanto esta RFC o referenciar. As
+ações `getPresentation`/`getSlide` estão em `8913b9d` (`src/tools/powerpoint_control.ts` e
+`addins/powerpoint-addin/src/taskpane/powerpoint.ts`; ausentes no commit anterior `9dc0ea4`). O mesmo
+branch guarda, de forma independente desta RFC, a suíte `S114_TransportIntegrity` e 8 fixtures
+`src/__tests__/fixtures/golden/*.json` (commit `118db00`), sem equivalente na `main` e ainda não
+avaliados — assunto separado, fora do escopo desta RFC. Se o remoto for removido, a referência acima
+quebra.
+
 Fica como **proposta separada, a decidir depois do RC1**, porque:
 
 - é **capacidade nova**, não correção de cegueira: muda o add-in (Office.js), o broker e a tool;
