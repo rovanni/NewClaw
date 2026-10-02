@@ -3,8 +3,8 @@
 Data: 2026-09-29 · Atualizado: 2026-10-02 · Status: **S-A0 a S-A2 implementados em sombra** (commit `03cfc7c`, teste S310:
 `REPLAN_FACTS=shadow` só loga, o prompt não muda) · **S-A3 retrospectivo feito (§9)** · **S-A4 implementado atrás de flag, DESLIGADO por
 padrão** (commit `bf72c09`, teste S313; replay com LLM real: `off` 0/10 e `on` 10/10 — §11) · **parte 4b (goals reais de ponta a ponta)
-NÃO executada; `on` NÃO está ligado em produção** (a produção roda `shadow`); D1 e D2 aceitas, D3/D4/D6 aplicadas por recomendação e pendentes
-de ratificação. *(O status original, de 29/09, dizia "nenhum código alterado; implementação NÃO aprovada" — era verdadeiro na preparação e
+executada em 02/10: C6 NÃO atendido** (`on` 4/6 contra `off` 5/6; diferença de um goal, amostra exploratória — §12) · **`on` NÃO está ligado em
+produção e não é recomendado ligar** (a produção roda `shadow`); D1 e D2 aceitas, D3/D4/D6 aplicadas por recomendação e pendentes de ratificação. *(O status original, de 29/09, dizia "nenhum código alterado; implementação NÃO aprovada" — era verdadeiro na preparação e
 ficou superado pelas §8 a §11.)* ·
 Base: `RFC_CAMPANHA_A_ESTADO_DE_ARTEFATOS.md` (revisada) + "Decisões de 24/09/2026" do
 `RELATORIO_CONSOLIDADO.md` + código lido em 29/09.
@@ -357,3 +357,79 @@ no S313; regressão 312/312). **C6 (goals reais de ponta a ponta, parte 4b): NÃ
 
 **Estado.** Código em `main` **desligado por padrão**; a produção segue em `shadow`, **sem `on`**. **Falta:** parte 4b (C6); ratificar D3/D4/D6;
 decidir se o `on` vai para a produção (decisão posterior e separada, só depois da 4b).
+
+## 12. S-A4 / parte 4b — goals reais de ponta a ponta (02/10/2026) — **C6 NÃO atendido**
+
+**Objetivo.** Responder ao critério C6 da §10.3: com `REPLAN_FACTS=on`, goals reais de ponta a ponta concluem "como antes, sem novo bloqueio"?
+A §11 mediu a *passagem de informação* (o plano usa o artefato); a 4b mede o *resultado do goal*.
+
+### 12.1 Protocolo (definido antes da execução, gravado no cabeçalho do script)
+
+- **Dois braços simultâneos**, cada um numa instância isolada (porta, `data/`, `workspace/`, `logs/` e uma **cópia** de `skills/` próprios — a cópia evita
+  que o aprendizado de skills escreva no repositório): `off` na porta 3198, `on` (`REPLAN_FACTS=on`) na 3199. LLM real: Ollama local, `glm-5.3:cloud` em
+  todas as roles do planner, `developer` mode via API (sem isso `exec_command` trava em aprovação humana). A produção (porta 3090) não foi tocada.
+- **Boot verificado:** o orquestrador confere que o PID dono de cada porta é o processo que ele criou (a armadilha da instância órfã, registrada na skill `verify`).
+- **3 cenários × 2 repetições por braço = 12 goals**, mesma ordem nos dois braços; o `workspace` é apagado e **re-semeado antes de cada goal**
+  (`aulas/aula1..5.txt`, cada uma com um token único `AULA-n-TOKEN` e duas frases de redes, sintéticas):
+  - **A (controle):** "Crie o arquivo `notas.txt` no workspace com a palavra teste e me envie." Verificação: `notas.txt` existe e contém "teste".
+  - **B (padrão do incidente):** extrair os 5 arquivos de `aulas/` com um script Python para `tmp/extracao_aulas.txt`, executar, ler esse arquivo e enviar um resumo
+    de 5 linhas. Verificação: `tmp/extracao_aulas.txt` existe e contém os 5 tokens.
+  - **C (handoff de arquivo):** listar `aulas/`, salvar em `tmp/lista.txt` um nome por linha, contar as linhas e informar. Verificação: `tmp/lista.txt` tem exatamente 5 linhas não vazias.
+- **Sucesso de um goal** = terminou com `status=completed` dentro de **15 min** **e** a verificação por **arquivo** passou (o status sozinho não basta).
+- **Métricas por goal:** status, ciclos, replans, nº de attempts, duração, chamadas de replan do planner e quantas abortadas (`[LLM-CALL] component=GoalPlanner phase=replan`),
+  linhas `[REPLAN-FACTS]`.
+- **C6 (pré-registrado):** `on` não conclui menos goals que `off` e não gera bloqueio novo. Com 6 goals por braço, a amostra é **exploratória, não estatística**.
+
+### 12.2 Resultados (12/12 goals executados; instâncias encerradas; portas 3198/3199 livres; repositório com 0 alterações)
+
+| Cenário · rep | OFF (resultado, tempo) | ON (resultado, tempo, replans) |
+|---|---|---|
+| A · 1 | completed, 0,9 min | completed, 3,5 min |
+| A · 2 | completed, 4,9 min | completed, 3,6 min |
+| B · 1 | **timeout** (15,0 min, `executing`) | **timeout** (15,0 min, `replanning`; 2 chamadas de replan, 2 abortadas) |
+| B · 2 | completed, 12,6 min | **timeout** (15,1 min, `replanning`; 1 chamada de replan, abortada) |
+| C · 1 | completed, 7,2 min | completed, 5,8 min |
+| C · 2 | completed, 3,8 min | completed, 3,1 min — **1 replan com o bloco, sem aborto** |
+| **Placar (critério pré-registrado)** | **5/6** | **4/6** |
+
+- **Verificação por arquivo: 12/12 passaram em ambos os braços**, inclusive nos três goals que estouraram o tempo — o produto final existia; o que faltou foi o goal chegar a um estado terminal.
+- **Linhas `[REPLAN-FACTS]` no braço `on`: 4** (uma por chamada de replan, nos goals B1, B2 e C2); **0** no `off`, como esperado. **Nenhum goal ficou `blocked`/`needs_auth`.**
+- **Replans:** o braço `off` teve **0 chamadas de replan** nos 6 goals; o braço `on` teve **4**, em 3 goals (3 abortadas, `aborted=true`).
+- **Estado final no banco** (lido depois que o orquestrador encerrou as instâncias): `B·1` terminou `abandoned` nos dois braços (31,5 min em `off`, 38,3 min em `on`), com blockers
+  `goal_incomplete`/`semantic_mismatch`; `B·2` em `off` terminou `completed` (12,5 min); `B·2` em `on` ficou `replanning`, **sem atualização depois dos 15,6 min** (indeterminado: a instância foi
+  encerrada com uma chamada de replan possivelmente ainda em andamento; uma chamada abortada com fallback leva ≈ 4 min).
+
+### 12.3 Veredito
+
+**C6 não foi atendido como pré-registrado:** `on` concluiu 4/6 contra 5/6 de `off`. **Não redefino o critério depois de ver o resultado.** A leitura honesta é:
+
+1. **A diferença é de um goal** (`B·2`) e a amostra é de 6 por braço; não há como separar o efeito da flag da variância (teste exato de Fisher sobre 4/6 × 5/6: p = 1,0).
+2. **A comparação não é pareada pelo evento que a flag altera.** O `on` só muda o prompt **do replan**. No braço `off` **nenhum goal chegou a replanejar**, então ele nunca exercitou o código em questão; no `on`, três goals replanejaram. Quem replaneja paga o custo de uma chamada lenta
+   (abortada + fallback ≈ 4 min), independentemente da flag — o replay da §11 mostrou `aborted=true` em 10/10 chamadas do `off` e 6/10 do `on`.
+3. **Sinal positivo no único caso comparável:** `C·2` (`on`) fez um replan com o bloco, **sem aborto**, e concluiu em 3,1 min.
+4. **O que a 4b NÃO mostra:** nenhuma melhora de conclusão ponta a ponta. O ganho de §11 (informação no prompt) **não se traduziu em evidência de resultado melhor**; também não há evidência de dano além do custo do replan.
+
+**Recomendação:** **não ligar `on` na produção com base nesta evidência.** O código segue desligado por padrão e a produção segue em `shadow`.
+
+### 12.4 Defeitos do método (registrados; não invalidam o resultado, mas limitam a leitura)
+
+- **Timeout de 15 min curto demais para o cenário B:** mesmo o único B concluído em `off` levou 12,6 min; os demais ficaram censurados (observações cortadas pelo limite, não falhas comprovadas).
+- **Interferência entre goals:** um goal que estoura o tempo **continua executando** na mesma instância e no mesmo workspace enquanto o orquestrador passa ao cenário seguinte (`B·1` rodou
+  até 31,5/38,3 min, sobreposto a `C·1`; e o workspace é re-semeado com `rm -rf` antes de cada goal). O efeito é simétrico entre os braços (o `B·1` estourou nos dois), mas **não é controlado**.
+- **`abandoned` sem causa verificada:** não investiguei o que marcou `B·1` como `abandoned` (os blockers sugerem validação de conclusão, mas não está provado).
+- **Cenários A e C quase não provocam replans** (1 em 8 goals); só o B os provoca, e é justamente o que sofre com o timeout.
+- **Hipótese não testada** (herdada da §11): sem a informação do artefato o modelo "raciocina mais" e estoura o orçamento de ≈ 32 000 chars de raciocínio.
+- **Mesma cota de modelo compartilhada** pelos dois braços e pela produção (Ollama local), o que pode ter distorcido tempos.
+
+### 12.5 Como reexecutar, e o que falta para uma resposta decisiva
+
+- **Artefatos:** os dois instrumentos — o replay (`replay.ts`, §11) e o orquestrador da 4b (`run4b.cjs`, com o protocolo acima no cabeçalho) — estão no **scratchpad da sessão, fora do repositório**,
+  portanto **não reproduzíveis a partir da `main`** enquanto não forem preservados (decisão pendente: onde guardá-los). O resultado bruto desta execução (`results.json`, `progress.log`) também está só lá.
+- **Procedimento:** copiar o banco de produção para fora da árvore (replay) ou semear o workspace (4b); subir cada instância com `TS_NODE_PROJECT` e `TS_NODE_TRANSPILE_ONLY`, confirmar o PID dono da porta, ligar `developer` mode, rodar, encerrar.
+- **Desenho para uma resposta decisiva (não executado):** (a) **forçar o replan** (falha injetada no mesmo ponto nos dois braços) para comparar o que a flag realmente altera; (b) **um goal por vez e encerrar goals pendentes entre as rodadas**
+  (ou um workspace por goal); (c) timeout de 30 a 40 min no cenário B e tratar os cortes como censura; (d) N maior que 2 por célula.
+
+### 12.6 Estado
+
+Código `on` em `main` (commit `bf72c09`), **desligado por padrão**; produção em `shadow`. **C6 não atendido; parte 4b executada com limites; ligar `on` em produção: não recomendado agora.**
+Pendentes: ratificar D3/D4/D6; decidir onde preservar os instrumentos; decidir se vale o desenho da §12.5 para uma resposta decisiva.
