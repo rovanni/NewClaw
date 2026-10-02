@@ -492,3 +492,26 @@ o replay mede o **plano inicial, não a execução nem o resultado do goal**; `s
 ### Estado
 
 Replay com LLM real **executado**; **R1/R2 não atendidos**; achado sobre `powerpoint_control` **registrado, sem correção aplicada**. Modo `on` do RC1 **não implementado e não recomendado agora**. Pendente de decisão do usuário: (a), (b) e (c) acima, e se vale repetir o replay depois.
+
+# Validação com LLM real — item (a), `requiredArgsHint` de `powerpoint_control` (PRÉ-REGISTRADA em 02/10/2026, **antes** de executar)
+
+**Contexto.** O replay do RC1 mostrou `action` AUSENTE nos 22 passos de `powerpoint_control` (4 em `off`, 18 em `host`). O item (a) (commit `fix(planner): powerpoint_control declara requiredArgsHint derivado do schema`,
+teste S314) faz o prompt de plano/replan trazer a linha de argumentos obrigatórios da ferramenta. Esta validação pergunta: **com o hint, os passos de `powerpoint_control` passam a vir bem formados?**
+
+**Desenho.** O mesmo `instrumentos/replay_rc1.ts` (modo `--real`), o **mesmo pedido** de 14/07, o mesmo modelo (`glm-5.3:cloud`), as 22 ferramentas, estado de goal vazio, `slideContext` sintético, N = **10 por braço**, ordem alternada.
+**Não soma com as execuções anteriores** (são amostras de uma versão do prompt sem o hint). O prompt `off` deve crescer em exatamente a linha do hint (~198 chars) em relação aos 13 206 anteriores.
+
+**Critérios (propostos por mim, a ratificar; os limiares não derivam de dado).**
+
+| # | Critério | Medida |
+|---|---|---|
+| V1 | **Efeito direto do hint** | Entre todos os passos de `powerpoint_control` dos dois braços (base anterior: 0 de 22 com `action`), **≥ 90%** trazem `action` presente **e** todos com o valor `addTextBox`. Se não houver nenhum passo de `powerpoint_control`, V1 é **inconclusivo** (não atendido nem refutado). |
+| V2 | **Sem dano** | 0 planos vazios; e o uso de `powerpoint_control` no braço **sem** bloco é **reportado** (o hint pode tornar a ferramenta mais atraente fora do contexto do suplemento; base anterior: 3/15). |
+| V3 | **Observação, sem critério** | Uso de `powerpoint_control`, caça ao deck (`hunt_strict`), planos que geram `.pptx`/enviam documento, abortos do planner e prompt, nos dois braços. |
+
+**Como ler o resultado (pré-declarado).** V1 atendido mostra que o hint torna o **passo bem formado** — não que o plano seja **útil**: `addTextBox` só insere uma caixa de texto e não altera cores, então um plano bem formado para
+o pedido de 14/07 ainda pode não cumprir o pedido (isso é o item (c)). V1 não atendido seria um resultado tão válido quanto os demais e indicaria que o hint, sozinho, não basta. Não há limiar sobre `hunt_strict`: V3 é descritivo.
+
+**Limites pré-declarados.** Os do replay do RC1 (prompt mais leve que o de produção; `slideContext` sintético; um pedido; um modelo; classificação heurística; mede o **plano**, não a execução) e: N = 10; a heurística `action` lê só o campo `toolArgs.action`.
+
+**Estado.** Código commitado (S314, regressão 313/313); validação **ainda não executada** neste ponto.
