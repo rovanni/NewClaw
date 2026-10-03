@@ -15,6 +15,9 @@
  *   6  → GoalExecutionLoop: o bloco só chega ao Planner sob mode === 'on' e nos TRÊS pontos de planejamento
  *        (plano inicial, replan, próximo marco); a sombra continua só logando.
  *   7  → GoalOrchestrator: skills do host só sob mode === 'on'.
+ *   8  → REQUISITO OBRIGATÓRIO (03/10/2026): quem escreve dentro do PowerPoint quer texto nativo e editável. A skill
+ *        pptx-generator proíbe o Marp (imagem por slide) nesse canal; a regra está no conteúdo que o Planner recebe
+ *        (globalContent), vem ANTES do caminho Marp e casa com as palavras do bloco do host.
  *
  * Execução: npx ts-node src/__tests__/regression/S318_HostContextOn_PowerPointChannelPlansSlides.test.ts
  */
@@ -103,6 +106,23 @@ console.log('\n[7] GoalOrchestrator — skills do host só sob mode === "on"');
 const orchSrc = fs.readFileSync(path.join(root, 'loop', 'GoalOrchestrator.ts'), 'utf8');
 assert(/hostContextMode\(\) === 'on' \? hostAppSkillNames\(context\?\.metadata\) : \[\]/.test(orchSrc), "hostAppSkillNames só é consultado sob hostContextMode() === 'on'");
 assert(/getSkillContextForQuery\(message, hostSkills\)/.test(orchSrc), 'a lista de skills do host é passada ao AgentLoop');
+
+console.log('\n[8] REQUISITO OBRIGATÓRIO — suplemento do PowerPoint: texto nativo e editável (nunca Marp)');
+const pptxSkill = loader.loadAll().find(sk => sk.name === 'pptx-generator');
+const seen = pptxSkill?.globalContent ?? '';
+const reqIdx = seen.indexOf('REQUISITO OBRIGATÓRIO');
+assert(reqIdx > -1, 'a regra está no globalContent (o que o Planner realmente recebe), fora de TASK_ONLY');
+const req = reqIdx > -1 ? seen.slice(reqIdx, reqIdx + 1600) : '';
+assert(/texto nativo e editável/.test(req), 'declara: texto nativo e editável');
+assert(/AMBIENTE DA CONVERSA/.test(req) && /suplemento Microsoft PowerPoint/.test(req), 'condiciona ao bloco do host (mesmas palavras do bloco)');
+assert(/NUNCA use o Marp CLI nesse canal/.test(req), 'proíbe o Marp nesse canal');
+assert(/Passo 0B/.test(req), 'aponta o caminho editável (Passo 0B: python-pptx/pptxgenjs)');
+assert(/não verifique nem tente instalar o Marp/i.test(req), 'não perde ciclos verificando/instalando o Marp');
+assert(/mesmo que a mensagem[\s\S]{0,80}n[aã]o diga/i.test(req), 'vale mesmo sem a palavra slide/pptx/editável na mensagem');
+assert(reqIdx < seen.indexOf('Passo 0 — Verificar Marp'), 'a regra vem ANTES do Passo 0 (verificar Marp): o Planner a lê primeiro');
+assert(reqIdx < seen.indexOf('AVISO IMPORTANTE'), 'a regra vem antes do aviso sobre o Marp');
+const hostBlockText = buildHostAppContextBlock({ hostApp: 'powerpoint' });
+assert(hostBlockText.includes('AMBIENTE DA CONVERSA') && hostBlockText.includes('suplemento Microsoft PowerPoint'), 'contrato skill↔bloco: as palavras que a skill cita existem no bloco do host');
 
 console.log(`\n${passed} passaram, ${failed} falharam`);
 process.exit(failed > 0 ? 1 : 0);

@@ -13,6 +13,22 @@ Converte conteúdo em arquivos PowerPoint (.pptx) usando **Marp CLI**, **python-
 **pptxgenjs**, dependendo do que o usuário realmente precisa (ver aviso abaixo) e do que o
 ambiente atual realmente suporta (ver Passo 0B).
 
+## REQUISITO OBRIGATÓRIO — suplemento do PowerPoint: texto nativo e editável
+
+**Quem escreve DENTRO do PowerPoint quer texto nativo e editável.** Se o bloco
+`AMBIENTE DA CONVERSA` indicar que a conversa acontece no suplemento Microsoft PowerPoint, o `.pptx`
+é inserido na apresentação que o usuário está editando — então:
+
+- O resultado DEVE ter texto nativo e editável: use **sempre o Passo 0B** (python-pptx ou
+  pptxgenjs, conforme o ambiente), desde o primeiro passo do plano.
+- **NUNCA use o Marp CLI nesse canal** — cada slide viraria uma imagem, sem texto clicável, e não
+  serve a quem está editando. Não verifique nem tente instalar o Marp (Passo 0 e Passos 1-4 não se
+  aplicam).
+- Vale mesmo que a mensagem do usuário não diga "slide", "pptx" nem "editável": pedir uma aula,
+  um material ou um conteúdo para apresentar dentro do PowerPoint é pedir slides editáveis.
+- Não reaproveite um markdown ou um `.pptx` de uma tentativa anterior como ponto de partida do
+  caminho Marp; gere o conteúdo direto no script do Passo 0B.
+
 ## ⚠️ AVISO IMPORTANTE: o `.pptx` gerado pelo Marp CLI NÃO é editável
 
 **Verificado diretamente no arquivo gerado (não é suposição):** o Marp CLI renderiza cada slide
