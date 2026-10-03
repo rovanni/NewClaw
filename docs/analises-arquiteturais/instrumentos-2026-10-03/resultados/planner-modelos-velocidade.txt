@@ -1,0 +1,26 @@
+### MODELO glm-5.3-flash:cloud think=
+modelo=glm-5.3-flash:cloud N=3 prompt=13545 chars (teto de produção do planner: 32000 chars de raciocínio / 240 s). SEM teto aqui; parede 20 min.
+RUN 1 outcome=done ms=59215 thinking_total=15243 content=3567 first_content_ms=50886 thinking_before_content=15243 plan=list_workspace>agentloop>agentloop>memory_write>send_document acima_de_32k=false 
+RUN 2 outcome=done ms=63858 thinking_total=38093 content=3252 first_content_ms=60472 thinking_before_content=38093 plan=list_workspace>agentloop>read>send_document acima_de_32k=true 
+RUN 3 outcome=done ms=53247 thinking_total=36002 content=3645 first_content_ms=50354 thinking_before_content=36002 plan=list_workspace>agentloop>agentloop>agentloop>memory_write acima_de_32k=true 
+### MODELO glm-5.3:cloud think=false
+modelo=glm-5.3:cloud N=3 prompt=13545 chars (teto de produção do planner: 32000 chars de raciocínio / 240 s). SEM teto aqui; parede 20 min.
+RUN 1 outcome=done ms=289032 thinking_total=0 content=110960 first_content_ms=2182 thinking_before_content=0 plan=JSON_INVALIDO acima_de_32k=false 
+RUN 2 outcome=done ms=160768 thinking_total=0 content=64695 first_content_ms=2042 thinking_before_content=0 plan=JSON_INVALIDO acima_de_32k=false 
+RUN 3 outcome=done ms=378576 thinking_total=0 content=179068 first_content_ms=1738 thinking_before_content=0 plan=JSON_INVALIDO acima_de_32k=false 
+### MODELO gemma4:cloud think=
+modelo=gemma4:cloud N=3 prompt=13545 chars (teto de produção do planner: 32000 chars de raciocínio / 240 s). SEM teto aqui; parede 20 min.
+RUN 1 outcome=done ms=4146 thinking_total=0 content=2263 first_content_ms=1545 thinking_before_content=0 plan=list_workspace>read>edit>read>send_document acima_de_32k=false 
+RUN 2 outcome=done ms=4137 thinking_total=0 content=2159 first_content_ms=1342 thinking_before_content=0 plan=list_workspace>read>agentloop>write>send_document acima_de_32k=false 
+RUN 3 outcome=done ms=3959 thinking_total=0 content=2058 first_content_ms=1344 thinking_before_content=0 plan=list_workspace>read>agentloop>write>send_document acima_de_32k=false 
+### MODELO kimi-k2.7-code:cloud think=
+modelo=kimi-k2.7-code:cloud N=3 prompt=13545 chars (teto de produção do planner: 32000 chars de raciocínio / 240 s). SEM teto aqui; parede 20 min.
+RUN 1 outcome=done ms=6326 thinking_total=1124 content=2520 first_content_ms=2369 thinking_before_content=1124 plan=list_workspace>read>edit>read>send_document acima_de_32k=false 
+RUN 2 outcome=done ms=11865 thinking_total=2678 content=2654 first_content_ms=6125 thinking_before_content=2678 plan=list_workspace>read>edit>send_document acima_de_32k=false 
+RUN 3 outcome=done ms=41655 thinking_total=14313 content=2568 first_content_ms=36392 thinking_before_content=14313 plan=list_workspace>powerpoint_control>agentloop>agentloop>agentloop>agentloop acima_de_32k=false 
+### MODELO glm-5.2:cloud think=
+modelo=glm-5.2:cloud N=3 prompt=13545 chars (teto de produção do planner: 32000 chars de raciocínio / 240 s). SEM teto aqui; parede 20 min.
+RUN 1 outcome=done ms=12047 thinking_total=972 content=2357 first_content_ms=3050 thinking_before_content=972 plan=list_workspace>read>agentloop>write>send_document acima_de_32k=false 
+RUN 2 outcome=done ms=10703 thinking_total=412 content=2840 first_content_ms=1442 thinking_before_content=412 plan=powerpoint_control>powerpoint_control>powerpoint_control>send_document acima_de_32k=false 
+RUN 3 outcome=done ms=5796 thinking_total=289 content=2106 first_content_ms=1519 thinking_before_content=289 plan=list_workspace>read>edit>send_document acima_de_32k=false 
+FIM

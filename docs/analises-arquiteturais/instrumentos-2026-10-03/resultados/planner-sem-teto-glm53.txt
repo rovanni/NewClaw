@@ -1,0 +1,21 @@
+[2026-10-02 23:44:44] ℹ️ [PermissionRegistry] [PermissionRegistry] initialized: mode=safe
+[2026-10-02 23:44:45] ℹ️ [GoalPlanner] [GoalPlanner] plan start goal=goal_1784070132940_nxx12 model=glm-5.3:cloud contextLen=0
+[2026-10-02 23:44:45] ℹ️ [Skillloader] Carregada: Pedido de Áudio - Gera áudio TTS com conteúdo relevante em vez de repetir o pedido do usuário.
+[2026-10-02 23:44:45] ℹ️ [Skillloader] Carregada: content-validator - Valida arquivos gerados (HTML, JS, Python, JSON) antes de enviar ao usuário, detectando erros de sintaxe e problemas comuns. Também faz revisão visual (Self Review) de artefatos renderizados — HTML, dashboards, slides, PDF — usando o modelo de visão já configurado.
+[2026-10-02 23:44:45] ℹ️ [Skillloader] Carregada: dependency-curator - Pesquisa e documenta comandos de instalação cross-platform (Linux/Windows/macOS) de uma dependência de sistema, com fonte citada e grau de confiança, antes que ela seja considerada para entrar em KNOWN_DEPS. Nunca instala, nunca executa, nunca edita código — produz apenas um relatório de evidências para aprovação humana.
+[2026-10-02 23:44:45] ℹ️ [Skillloader] Carregada: Event:Interaction Pattern - Padrão aprendido automaticamente: 36 usos bem-sucedidos com system.
+[2026-10-02 23:44:45] ℹ️ [Skillloader] Carregada: html-pdf-converter - Converte arquivos HTML para PDF usando o script html2pdf.sh. Suporta slides com JavaScript. Detecta automaticamente a melhor ferramenta disponível.
+[2026-10-02 23:44:45] ℹ️ [Skillloader] Carregada: Salvar Memória - Salva informações na memória persistente com formato mais consistente.
+[2026-10-02 23:44:45] ℹ️ [Skillloader] Carregada: pptx-generator - Converte Markdown ou HTML em arquivos PowerPoint (.pptx). Ativar APENAS quando o usuário pedir explicitamente .pptx, PowerPoint ou um arquivo editável no formato Office. NÃO ativar para pedidos genéricos de "slides" ou "apresentação" sem formato específico. Quando o pedido exigir texto REALMENTE editável (não apenas um .pptx que abre no PowerPoint), usar python-pptx OU pptxgenjs (Passo 0B), conforme o que o [CAPACIDADES DO AMBIENTE] indicar disponível — nunca o Marp CLI puro — ver aviso abaixo.
+[2026-10-02 23:44:45] ℹ️ [Skillloader] Carregada: skill-auditor - Audita skills de terceiros antes da ativação, verificando prompt injection, acesso a arquivos sensíveis, exfiltração e código malicioso. Análise estática — nunca executa o código auditado.
+[2026-10-02 23:44:45] ℹ️ [Skillloader] Carregada: skill-manager - Instala, audita e gerencia skills no NewClaw. Permite buscar skills em skills.sh, instalar de repositórios GitHub, auditar segurança e ativar novas capacidades sem reiniciar o sistema.
+[2026-10-02 23:44:45] ℹ️ [Skillloader] Carregada: system-provisioner - Instala dependências e configura o ambiente (pip, npm, apt, etc.)
+[2026-10-02 23:44:45] ℹ️ [Skillloader] [SKILLLOAD] loaded=10 cached=0 duration_ms=19
+[2026-10-02 23:44:45] ℹ️ [GoalPlanner] [PLANNER-METRICS] rawSteps=1 truncatedSteps=0 wasTruncated=false containsWrite=false writeInTruncated=false
+[2026-10-02 23:44:45] ℹ️ [GoalPlanner] [GoalPlanner] plan ok: steps=1 strategy="dry" tools=[read]
+[2026-10-02 23:44:45] ℹ️ [PromptComposer] [Metrics] plans=1 replans=0 avgPrompt=3386tok avgCap=0tok avgRefl=0tok compressionRatio=0x
+modelo=glm-5.3:cloud N=4 prompt=13545 chars (teto de produção do planner: 32000 chars de raciocínio / 240 s). SEM teto aqui; parede 20 min.
+RUN 1 outcome=done ms=481782 thinking_total=207383 content=18464 first_content_ms=457546 thinking_before_content=207383 acima_de_32k=true 
+RUN 2 outcome=done ms=216160 thinking_total=75592 content=5816 first_content_ms=206900 thinking_before_content=75592 acima_de_32k=true 
+RUN 3 outcome=done ms=108599 thinking_total=42082 content=4002 first_content_ms=102620 thinking_before_content=42082 acima_de_32k=true 
+RUN 4 outcome=done ms=76712 thinking_total=27482 content=4315 first_content_ms=70298 thinking_before_content=27482 acima_de_32k=false 
