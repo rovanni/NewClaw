@@ -38,7 +38,7 @@ export interface TurnPollOptions {
   turnId: string;
   /** Intervalo entre consultas. Padrão 3 s (20/min; o limite geral do servidor é 120/min por IP). */
   intervalMs?: number;
-  /** Tempo máximo de espera. Padrão 20 min (um goal com replan pode levar vários minutos). */
+  /** Tempo máximo de espera. Padrão 45 min (um goal com replan levou 28 min em 02/10/2026; depois dele o botão "Verificar resposta" retoma a espera). */
   maxWaitMs?: number;
   /** Erros de rede/5xx CONSECUTIVOS tolerados antes de desistir. Padrão 15 (≈ 45 s com o intervalo padrão). */
   maxConsecutiveErrors?: number;
@@ -49,7 +49,7 @@ export interface TurnPollOptions {
 }
 
 export const DEFAULT_POLL_INTERVAL_MS = 3000;
-export const DEFAULT_MAX_WAIT_MS = 20 * 60 * 1000;
+export const DEFAULT_MAX_WAIT_MS = 45 * 60 * 1000;
 export const DEFAULT_MAX_CONSECUTIVE_ERRORS = 15;
 
 function realSleep(ms: number): Promise<void> {

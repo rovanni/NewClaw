@@ -253,57 +253,12 @@ async function sendMessage(): Promise<void> {
       return;
     }
 
-    // Caminho legado (servidor antigo): a resposta vem no próprio POST.
-    let reply: { response?: string; attachments?: ChatAttachment[] } = data;
-
     if (res.status === 202 && data.turnId) {
-      // Servidor assíncrono: o POST só aceitou o pedido. A bolha de status fica VISÍVEL, com o tempo decorrido, até a resposta chegar.
-      statusBubble.style.whiteSpace = "pre-line";
-      const getHeaders: Record<string, string> = {};
-      if (token) getHeaders["Authorization"] = `Bearer ${token}`;
-      const outcome = await waitForTurnResponse({
-        fetchFn: (url, init) => fetch(url, init),
-        serverUrl,
-        headers: getHeaders,
-        turnId: data.turnId,
-        onTick: (elapsedMs) => { statusBubble.textContent = processingText(elapsedMs); },
-      });
-      statusBubble.remove();
-
-      if (outcome.kind === "timeout") {
-        addMessage("error", `O newclaw ainda não terminou depois de ${formatElapsed(outcome.elapsedMs)}. O pedido pode continuar em execução no servidor; consulte o Dashboard do newclaw. (turno ${data.turnId})`);
-        return;
-      }
-      if (outcome.kind === "unreachable") {
-        addMessage("error", `Perdi a conexão com o newclaw enquanto esperava a resposta (${outcome.lastError}). O pedido pode continuar em execução; consulte o Dashboard. (turno ${data.turnId})`);
-        return;
-      }
-      if (outcome.kind === "rejected") {
-        addMessage("error", `O servidor recusou a consulta da resposta (HTTP ${outcome.status}). Verifique o token configurado no suplemento. (turno ${data.turnId})`);
-        return;
-      }
-      reply = outcome.payload as { response?: string; attachments?: ChatAttachment[] };
+      await awaitTurnAndShow(data.turnId, serverUrl, token, statusBubble);
     } else {
+      // Caminho legado (servidor antigo): a resposta vem no próprio POST.
       statusBubble.remove();
-    }
-
-    if (reply.response) {
-      addMessage("assistant", reply.response);
-    } else {
-      // Nunca em silêncio: o usuário não deve ter que adivinhar se terminou.
-      addMessage("status", "O newclaw terminou, mas não devolveu nenhum texto.");
-    }
-
-    const attachments = reply.attachments || [];
-    const pptxAttachment = attachments.find((a) => a.fileName?.toLowerCase().endsWith(".pptx"));
-
-    if (pptxAttachment) {
-      await insertSlidesFromAttachment(pptxAttachment);
-    }
-
-    for (const att of attachments) {
-      if (att === pptxAttachment) continue;
-      addMessage("status", `Anexo recebido (não inserido automaticamente): ${att.fileName}`);
+      await showReply(data);
     }
   } catch (err) {
     statusBubble.remove();
@@ -312,6 +267,75 @@ async function sendMessage(): Promise<void> {
   } finally {
     sendButton.disabled = false;
     input.focus();
+  }
+}
+
+/**
+ * Espera a resposta de um turno assíncrono e a exibe. Se a espera acabar sem resposta (limite de tempo ou conexão), o turno NÃO é
+ * perdido: a resposta fica na outbox do servidor, e o aviso traz o botão "Verificar resposta", que chama esta função de novo com o
+ * mesmo turnId (a outbox é consumida uma vez, por isso só um consulente de cada vez: o botão some ao ser clicado).
+ */
+async function awaitTurnAndShow(turnId: string, serverUrl: string, token: string | null, statusBubble: HTMLElement): Promise<void> {
+  // Servidor assíncrono: o POST só aceitou o pedido. A bolha de status fica VISÍVEL, com o tempo decorrido, até a resposta chegar.
+  statusBubble.style.whiteSpace = "pre-line";
+  const getHeaders: Record<string, string> = {};
+  if (token) getHeaders["Authorization"] = `Bearer ${token}`;
+  const outcome = await waitForTurnResponse({
+    fetchFn: (url, init) => fetch(url, init),
+    serverUrl,
+    headers: getHeaders,
+    turnId,
+    onTick: (elapsedMs) => { statusBubble.textContent = processingText(elapsedMs); },
+  });
+  statusBubble.remove();
+
+  if (outcome.kind === "timeout" || outcome.kind === "unreachable") {
+    const why = outcome.kind === "timeout"
+      ? `O newclaw ainda não terminou depois de ${formatElapsed(outcome.elapsedMs)}.`
+      : `Perdi a conexão com o newclaw enquanto esperava a resposta (${outcome.lastError}).`;
+    const bubble = addMessage("error", `${why} O pedido continua em execução no servidor e a resposta fica guardada: use "Verificar resposta" para continuar esperando. (turno ${turnId})`);
+    const retry = document.createElement("button");
+    retry.type = "button";
+    retry.className = "msg-retry";
+    retry.textContent = "Verificar resposta";
+    retry.addEventListener("click", () => {
+      retry.remove();
+      const sendButton = document.getElementById("send-button") as HTMLButtonElement;
+      sendButton.disabled = true;
+      const again = addMessage("status", "Verificando a resposta…");
+      awaitTurnAndShow(turnId, serverUrl, token, again)
+        .catch((err) => { again.remove(); addMessage("error", `Falha ao verificar a resposta: ${err instanceof Error ? err.message : String(err)}`); })
+        .finally(() => { sendButton.disabled = false; });
+    });
+    bubble.appendChild(document.createElement("br"));
+    bubble.appendChild(retry);
+    return;
+  }
+  if (outcome.kind === "rejected") {
+    addMessage("error", `O servidor recusou a consulta da resposta (HTTP ${outcome.status}). Verifique o token configurado no suplemento. (turno ${turnId})`);
+    return;
+  }
+  await showReply(outcome.payload as { response?: string; attachments?: ChatAttachment[] });
+}
+
+async function showReply(reply: { response?: string; attachments?: ChatAttachment[] }): Promise<void> {
+  if (reply.response) {
+    addMessage("assistant", reply.response);
+  } else {
+    // Nunca em silêncio: o usuário não deve ter que adivinhar se terminou.
+    addMessage("status", "O newclaw terminou, mas não devolveu nenhum texto.");
+  }
+
+  const attachments = reply.attachments || [];
+  const pptxAttachment = attachments.find((a) => a.fileName?.toLowerCase().endsWith(".pptx"));
+
+  if (pptxAttachment) {
+    await insertSlidesFromAttachment(pptxAttachment);
+  }
+
+  for (const att of attachments) {
+    if (att === pptxAttachment) continue;
+    addMessage("status", `Anexo recebido (não inserido automaticamente): ${att.fileName}`);
   }
 }
 

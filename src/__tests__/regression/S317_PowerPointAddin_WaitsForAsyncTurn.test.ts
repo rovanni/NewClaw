@@ -91,7 +91,7 @@ async function main(): Promise<void> {
         const h5 = harness([{ status: 404 }]);
         const r5 = await waitForTurnResponse({ ...h5.opts, maxWaitMs: 10_000 });
         assert(r5.kind === 'timeout' && (r5 as any).elapsedMs >= 10_000, 'sem resposta até o limite → timeout com o tempo decorrido', r5);
-        assert(DEFAULT_POLL_INTERVAL_MS === 3000 && DEFAULT_MAX_WAIT_MS === 20 * 60 * 1000 && DEFAULT_MAX_CONSECUTIVE_ERRORS === 15, 'padrões: 3 s, 20 min, 15 erros (20 consultas/min cabem nos 120/min do servidor)');
+        assert(DEFAULT_POLL_INTERVAL_MS === 3000 && DEFAULT_MAX_WAIT_MS === 45 * 60 * 1000 && DEFAULT_MAX_CONSECUTIVE_ERRORS === 15, 'padrões: 3 s, 45 min (goal real levou 28 min), 15 erros (20 consultas/min cabem nos 120/min do servidor)');
     }
 
     console.log('\n[3] contrato inesperado nunca vira resposta');
@@ -114,20 +114,22 @@ async function main(): Promise<void> {
     assert(/import \{ waitForTurnResponse \} from "\.\/turnPolling";/.test(src), 'powerpoint.ts importa waitForTurnResponse');
     const branch = body.indexOf('res.status === 202 && data.turnId');
     assert(branch > -1, 'trata o 202 com turnId');
-    const afterBranch = body.slice(branch);
-    assert(afterBranch.indexOf('waitForTurnResponse(') > -1 && afterBranch.indexOf('waitForTurnResponse(') < afterBranch.indexOf('statusBubble.remove()'), 'a bolha de status só é removida DEPOIS de esperar a resposta (o defeito original apagava na hora)');
+    const fnStart = src.indexOf('async function awaitTurnAndShow');
+    const fn = src.slice(fnStart, src.indexOf('async function showReply'));
+    assert(fnStart > -1 && /awaitTurnAndShow\(data\.turnId/.test(body.slice(branch)), 'o 202 com turnId delega a espera a awaitTurnAndShow');
+    assert(fn.indexOf('waitForTurnResponse(') > -1 && fn.indexOf('waitForTurnResponse(') < fn.indexOf('statusBubble.remove()'), 'a bolha de status só é removida DEPOIS de esperar a resposta (o defeito original apagava na hora)');
     const beforeBranch = body.slice(0, branch);
     const removesBefore = (beforeBranch.match(/statusBubble\.remove\(\)/g) ?? []).length;
     assert(removesBefore === 1 && /!res\.ok \|\| !data\.success[\s\S]{0,80}statusBubble\.remove\(\)/.test(beforeBranch), 'antes do 202 só há a remoção no caminho de ERRO do POST (nunca no de sucesso)', removesBefore);
-    assert(/onTick:\s*\(elapsedMs\)\s*=>\s*\{\s*statusBubble\.textContent\s*=\s*processingText\(elapsedMs\)/.test(body), 'a cada consulta a bolha é atualizada com o tempo decorrido (processingText)');
+    assert(/onTick:\s*\(elapsedMs\)\s*=>\s*\{\s*statusBubble\.textContent\s*=\s*processingText\(elapsedMs\)/.test(fn), 'a cada consulta a bolha é atualizada com o tempo decorrido (processingText)');
     const procText = src.slice(src.indexOf('function processingText'), a);
     assert(/\$\{time\}/.test(procText) && /alguns minutos/.test(procText) && /Dashboard/.test(procText), 'o texto mostra o tempo e dicas progressivas (alguns minutos; aprovação no Dashboard)');
-    for (const kind of ['timeout', 'unreachable', 'rejected']) {
-        assert(new RegExp(`outcome\\.kind === "${kind}"[\\s\\S]{0,260}addMessage\\("error"`).test(body), `desfecho "${kind}" vira uma mensagem de erro visível, com o id do turno`);
-    }
+    assert(/outcome\.kind === "timeout" \|\| outcome\.kind === "unreachable"[\s\S]{0,900}addMessage\("error"/.test(fn) && /turno \$\{turnId\}/.test(fn), 'timeout e unreachable viram mensagem de erro visível, com o id do turno');
+    assert(/outcome\.kind === "rejected"[\s\S]{0,200}addMessage\("error"/.test(fn), 'rejected vira mensagem de erro visível');
+    assert(/"Verificar resposta"/.test(fn) && /retry\.remove\(\)[\s\S]{0,400}awaitTurnAndShow\(turnId,/.test(fn), 'timeout/unreachable oferecem "Verificar resposta", que retoma a espera do MESMO turnId (a resposta não se perde) e some ao ser clicado (um consulente só)');
     assert(/addMessage\("status", "O newclaw terminou, mas não devolveu nenhum texto\."\)/.test(body), 'resposta vazia nunca é silêncio: o usuário é avisado');
-    assert(/let reply: \{[^}]*\} = data;/.test(body), 'caminho legado preservado: servidor antigo que responde no próprio POST continua funcionando');
-    assert(/statusBubble\.style\.whiteSpace = "pre-line"/.test(body), 'a bolha aceita as duas linhas (tempo + dica)');
+    assert(/showReply\(data\)/.test(body), 'caminho legado preservado: servidor antigo que responde no próprio POST continua funcionando');
+    assert(/statusBubble\.style\.whiteSpace = "pre-line"/.test(fn), 'a bolha aceita as duas linhas (tempo + dica)');
 
     console.log(`\n${passed} passou, ${failed} falhou`);
     process.exitCode = failed === 0 ? 0 : 1;

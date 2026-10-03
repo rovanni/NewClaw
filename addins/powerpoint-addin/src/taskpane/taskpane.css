@@ -127,6 +127,16 @@ body {
     border: 1px solid #f3c6c9;
 }
 
+.msg-retry {
+    margin-top: 6px;
+    padding: 4px 10px;
+    border: 1px solid #a4262c;
+    border-radius: 4px;
+    background: #fff;
+    color: #a4262c;
+    cursor: pointer;
+}
+
 .chat-input-row {
     display: flex;
     gap: 8px;
