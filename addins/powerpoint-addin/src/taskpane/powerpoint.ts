@@ -1,5 +1,7 @@
 /* global document, localStorage, crypto, fetch, Office, PowerPoint */
 
+import { waitForTurnResponse } from "./turnPolling";
+
 interface ChatAttachment {
   type: string;
   fileName: string;
@@ -11,6 +13,8 @@ interface ChatApiResponse {
   success: boolean;
   response?: string;
   sessionId?: string;
+  /** Resposta assíncrona (HTTP 202): a resposta só sai por GET /api/chat/outbox?turnId=… */
+  turnId?: string;
   attachments?: ChatAttachment[];
   error?: string;
 }
@@ -196,6 +200,22 @@ function addMessage(role: "user" | "assistant" | "status" | "error", text: strin
   return bubble;
 }
 
+function formatElapsed(ms: number): string {
+  const total = Math.floor(ms / 1000);
+  const min = Math.floor(total / 60);
+  const sec = total % 60;
+  return min > 0 ? `${min} min ${sec} s` : `${sec} s`;
+}
+
+/** Texto da bolha enquanto o pedido é processado: tempo decorrido + dicas progressivas, para o usuário nunca ter que adivinhar. */
+function processingText(elapsedMs: number): string {
+  const secs = Math.floor(elapsedMs / 1000);
+  const time = formatElapsed(elapsedMs);
+  if (secs < 20) return `newclaw está processando… (${time})`;
+  if (secs < 180) return `newclaw está processando… (${time})\nTarefas com várias etapas podem levar alguns minutos.`;
+  return `newclaw ainda está trabalhando… (${time})\nSe a tarefa precisar de aprovação, confirme no Dashboard do newclaw.`;
+}
+
 async function sendMessage(): Promise<void> {
   const input = document.getElementById("message-input") as HTMLTextAreaElement;
   const message = input.value.trim();
@@ -226,16 +246,55 @@ async function sendMessage(): Promise<void> {
     });
 
     const data = (await res.json()) as ChatApiResponse;
-    statusBubble.remove();
 
     if (!res.ok || !data.success) {
+      statusBubble.remove();
       addMessage("error", data.error || `Erro ${res.status} ao falar com o newclaw.`);
       return;
     }
 
-    if (data.response) addMessage("assistant", data.response);
+    // Caminho legado (servidor antigo): a resposta vem no próprio POST.
+    let reply: { response?: string; attachments?: ChatAttachment[] } = data;
 
-    const attachments = data.attachments || [];
+    if (res.status === 202 && data.turnId) {
+      // Servidor assíncrono: o POST só aceitou o pedido. A bolha de status fica VISÍVEL, com o tempo decorrido, até a resposta chegar.
+      statusBubble.style.whiteSpace = "pre-line";
+      const getHeaders: Record<string, string> = {};
+      if (token) getHeaders["Authorization"] = `Bearer ${token}`;
+      const outcome = await waitForTurnResponse({
+        fetchFn: (url, init) => fetch(url, init),
+        serverUrl,
+        headers: getHeaders,
+        turnId: data.turnId,
+        onTick: (elapsedMs) => { statusBubble.textContent = processingText(elapsedMs); },
+      });
+      statusBubble.remove();
+
+      if (outcome.kind === "timeout") {
+        addMessage("error", `O newclaw ainda não terminou depois de ${formatElapsed(outcome.elapsedMs)}. O pedido pode continuar em execução no servidor; consulte o Dashboard do newclaw. (turno ${data.turnId})`);
+        return;
+      }
+      if (outcome.kind === "unreachable") {
+        addMessage("error", `Perdi a conexão com o newclaw enquanto esperava a resposta (${outcome.lastError}). O pedido pode continuar em execução; consulte o Dashboard. (turno ${data.turnId})`);
+        return;
+      }
+      if (outcome.kind === "rejected") {
+        addMessage("error", `O servidor recusou a consulta da resposta (HTTP ${outcome.status}). Verifique o token configurado no suplemento. (turno ${data.turnId})`);
+        return;
+      }
+      reply = outcome.payload as { response?: string; attachments?: ChatAttachment[] };
+    } else {
+      statusBubble.remove();
+    }
+
+    if (reply.response) {
+      addMessage("assistant", reply.response);
+    } else {
+      // Nunca em silêncio: o usuário não deve ter que adivinhar se terminou.
+      addMessage("status", "O newclaw terminou, mas não devolveu nenhum texto.");
+    }
+
+    const attachments = reply.attachments || [];
     const pptxAttachment = attachments.find((a) => a.fileName?.toLowerCase().endsWith(".pptx"));
 
     if (pptxAttachment) {

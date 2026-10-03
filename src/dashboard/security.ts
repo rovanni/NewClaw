@@ -135,7 +135,9 @@ export function isTrustedOrigin(originHeader: string | undefined, requestHost: s
  * `/api/memory` etc. continuam sem CORS para essa origem.
  */
 export const ADDIN_ORIGIN = 'https://localhost:3000';
-const ADDIN_EXACT_PATHS = ['/api/chat'];
+// `/api/chat/outbox`: o POST /api/chat responde 202 {turnId} e a resposta só sai por GET /api/chat/outbox?turnId=… (o add-in a consulta até
+// ficar pronta — turnPolling.ts). `/api/chat/active` NÃO entra: devolve detalhes de aprovações pendentes (pendingAuth).
+const ADDIN_EXACT_PATHS = ['/api/chat', '/api/chat/outbox'];
 const ADDIN_PATH_PREFIXES = ['/api/integrations/powerpoint/commands'];
 
 export function isAddinRequest(originHeader: string | undefined, requestPath: string | undefined): boolean {

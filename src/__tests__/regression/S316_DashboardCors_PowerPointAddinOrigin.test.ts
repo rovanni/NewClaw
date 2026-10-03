@@ -27,6 +27,7 @@ async function main(): Promise<void> {
     assert(ADDIN_ORIGIN === 'https://localhost:3000', 'a origem do add-in é a fixada no manifest.xml (https://localhost:3000)');
     const ok = (o: string | undefined, p: string | undefined) => isAddinRequest(o, p);
     assert(ok('https://localhost:3000', '/api/chat') === true, 'add-in + POST /api/chat → libera');
+    assert(ok('https://localhost:3000', '/api/chat/outbox') === true, 'add-in + GET /api/chat/outbox (a resposta do turno assíncrono) → libera');
     assert(ok('https://localhost:3000', '/api/integrations/powerpoint/commands') === true, 'add-in + fila de comandos → libera');
     assert(ok('https://localhost:3000', '/api/integrations/powerpoint/commands/abc-123/result') === true, 'add-in + resultado de comando → libera');
     for (const p of ['/api/chat/auth-decision', '/api/chat/active', '/api/config', '/api/memory/nodes', '/api/system/capability-mode', '/api/auth/login',
@@ -62,6 +63,10 @@ async function main(): Promise<void> {
         assert(await acao('GET', '/api/integrations/powerpoint/commands?sessionId=x', ADDIN_ORIGIN) === ADDIN_ORIGIN, 'polling do add-in recebe Access-Control-Allow-Origin = origem do add-in');
         assert(await acao('POST', '/api/chat', ADDIN_ORIGIN, true) === ADDIN_ORIGIN, 'preflight de POST /api/chat do add-in é liberado');
         assert(await acao('POST', '/api/integrations/powerpoint/commands/id/result', ADDIN_ORIGIN, true) === ADDIN_ORIGIN, 'preflight do POST de resultado do add-in é liberado');
+        assert(await acao('GET', '/api/chat/outbox?turnId=abc', ADDIN_ORIGIN) === ADDIN_ORIGIN, 'a consulta da outbox pelo add-in recebe Access-Control-Allow-Origin');
+        assert(await acao('GET', '/api/chat/outbox?turnId=abc', ADDIN_ORIGIN, true) === ADDIN_ORIGIN, 'preflight da outbox (header Authorization) é liberado');
+        assert(await acao('GET', '/api/chat/active?sessionId=x', ADDIN_ORIGIN, true) === null, 'CONTROLE: /api/chat/active (expõe pendingAuth) NÃO é liberado ao add-in');
+        assert(await acao('GET', '/api/chat/outbox?turnId=abc', 'https://attacker.evil') === null, 'CONTROLE: origem estranha NÃO lê a outbox');
         assert(await acao('POST', '/api/chat/auth-decision', ADDIN_ORIGIN, true) === null, 'CONTROLE: preflight de /api/chat/auth-decision (aprova ação perigosa) NÃO é liberado ao add-in');
         assert(await acao('GET', '/api/config', ADDIN_ORIGIN) === null, 'CONTROLE: /api/config NÃO recebe ACAO para a origem do add-in');
         assert(await acao('POST', '/api/chat', 'https://attacker.evil', true) === null, 'CONTROLE: origem estranha em /api/chat NÃO é liberada');
