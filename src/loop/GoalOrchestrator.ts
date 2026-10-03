@@ -36,6 +36,7 @@ import { GOAL_LIMITS } from './GoalLimits';
 import { ChannelContext } from './agentLoopTypes';
 import type { SessionManager } from '../session/SessionManager';
 import { composeSessionKey, parseSessionKey } from '../session/SessionKeyFactory';
+import { hostContextMode, hostAppSkillNames } from '../shared/hostAppContext';
 import type { WorkflowEngine } from './WorkflowEngine';
 
 const log = createLogger('GoalOrchestrator');
@@ -525,7 +526,8 @@ export class GoalOrchestrator {
         }
 
         // ── Injetar skill context no planner (sempre, para limpar contexto anterior) ──
-        const skillContext = this.agentLoop.getSkillContextForQuery(message);
+        const hostSkills = hostContextMode() === 'on' ? hostAppSkillNames(context?.metadata) : [];
+        const skillContext = this.agentLoop.getSkillContextForQuery(message, hostSkills);
         this.executionLoop.setSkillContext(skillContext);
         if (skillContext) {
             log.info(`[GoalOrchestrator] skill context injected into planner (${skillContext.length} chars)`);

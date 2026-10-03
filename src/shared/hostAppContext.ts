@@ -31,8 +31,43 @@ const HOST_APP_FACTS: Record<string, string[]> = {
         'Canal: suplemento Microsoft PowerPoint — a conversa acontece dentro do PowerPoint do usuário.',
         'A apresentação aberta existe no PowerPoint do usuário; não é um arquivo do workspace.',
         'Todo .pptx entregue via send_document neste canal é inserido na apresentação aberta.',
+        'Neste canal, o resultado esperado de um pedido de criação de conteúdo (aula, material, texto para apresentar) é uma apresentação de slides.',
     ],
 };
+
+/**
+ * Modo do contexto de hospedeiro (variável HOST_CONTEXT, lida a cada chamada).
+ *   'on'     → o bloco de fatos entra no contexto do Planner e as skills do hospedeiro são carregadas.
+ *   'shadow' → só loga (RC1, RFC-008); o prompt NÃO muda.
+ *   'off'    → qualquer outro valor ou ausente (igualdade estrita, caixa exata: 'ON' é 'off').
+ */
+export type HostContextMode = 'on' | 'shadow' | 'off';
+
+export function hostContextMode(env: Record<string, string | undefined> = process.env): HostContextMode {
+    const v = env.HOST_CONTEXT;
+    return v === 'on' || v === 'shadow' ? v : 'off';
+}
+
+/**
+ * Skills que pertencem ao aplicativo hospedeiro: quem escreve DENTRO do PowerPoint quer um .pptx
+ * mesmo sem dizer "pptx" na mensagem (a skill só casa por palavra-gatilho). Nomes de skill, nada mais.
+ */
+const HOST_APP_SKILLS: Record<string, string[]> = {
+    powerpoint: ['pptx-generator'],
+};
+
+/** Skills a carregar para o host do `metadata`; [] para canal comum ou host desconhecido. */
+export function hostAppSkillNames(metadata?: Record<string, unknown>): string[] {
+    const hostApp = metadata?.hostApp;
+    if (typeof hostApp !== 'string' || !Object.prototype.hasOwnProperty.call(HOST_APP_SKILLS, hostApp)) return [];
+    return [...HOST_APP_SKILLS[hostApp]];
+}
+
+/** Acrescenta o bloco do host ao contexto do Planner; sem bloco, devolve o contexto idêntico. */
+export function appendHostBlock(context: string | undefined, block: string): string | undefined {
+    if (!block) return context;
+    return context ? `${context}\n\n${block}` : block;
+}
 
 /**
  * Uma linha: sem quebras/controle, espaços colapsados, truncada com marcação explícita.

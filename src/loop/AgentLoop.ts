@@ -1235,10 +1235,21 @@ export class AgentLoop {
      *   1. Trigger match (original — mantido sem alteração)
      *   2. Capability match (novo — usa tags normalizadas via SkillDiscovery)
      */
-    public getSkillContextForQuery(query: string): string {
+    public getSkillContextForQuery(query: string, hostSkillNames: readonly string[] = []): string {
         const { discoverSkills } = require('../skills/SkillDiscovery') as typeof import('../skills/SkillDiscovery');
         const skills = this.skillLoader.loadAll();
         const discovery = discoverSkills(skills, query);
+
+        // RFC-008 (HOST_CONTEXT=on): skills que pertencem ao aplicativo hospedeiro entram mesmo sem
+        // palavra-gatilho na mensagem — quem escreve dentro do PowerPoint não precisa dizer "pptx".
+        // Só acrescenta; o que já casou por trigger/capability não é removido nem duplicado.
+        for (const name of hostSkillNames) {
+            const hostSkill = skills.find(s => s.name === name);
+            if (hostSkill && !discovery.all.some(s => s.name === hostSkill.name)) {
+                discovery.all.push(hostSkill);
+                log.info(`[SKILL-MATCH] query="${query.slice(0, 60)}" skill=${hostSkill.name} matched_by=host`);
+            }
+        }
 
         // Log para observabilidade
         if (discovery.byTrigger.length > 0) {

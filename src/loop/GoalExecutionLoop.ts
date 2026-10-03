@@ -20,7 +20,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import { createLogger } from '../shared/AppLogger';
-import { buildHostAppContextBlock } from '../shared/hostAppContext';
+import { buildHostAppContextBlock, hostContextMode, appendHostBlock } from '../shared/hostAppContext';
 import { AgentLoop } from './AgentLoop';
 import { traceManager } from '../core/ExecutionTrace';
 import { GoalStore } from './GoalStore';
@@ -121,6 +121,9 @@ export type ProgressCallback = (update: GoalProgressUpdate) => Promise<void>;
 interface GoalExecutionState {
     cognitiveContext: StepCognitiveContext;
     progressModel: GoalProgressModel | null;
+    /** RFC-008 (HOST_CONTEXT=on): fatos do aplicativo hospedeiro, anexados ao contexto de TODA chamada
+     * ao Planner desta execução (plano inicial, replan, próximo marco). '' = canal comum ou modo != on. */
+    hostBlock?: string;
 }
 
 /**
@@ -241,7 +244,8 @@ export class GoalExecutionLoop {
 
         // ── Q1: Contextualização ──────────────────────────────────────────
         // Enriquece o entendimento do objetivo com memória semântica antes de planejar
-        const q1Context = await this.contextualize(goal, 1, undefined);
+        const hostBlock = hostContextMode() === 'on' ? buildHostAppContextBlock(channelContext.metadata) : '';
+        const q1Context = appendHostBlock(await this.contextualize(goal, 1, undefined), hostBlock);
 
         // ── Capabilities summary — injetar no contexto do planner ──────────
         // Registry usa TTL por categoria; chamadas consecutivas são servidas do cache.
@@ -453,7 +457,7 @@ export class GoalExecutionLoop {
         forceQ2 = false,
     ): Promise<Goal> {
         // Q1: Contextualização — memória + feedback do ciclo anterior
-        const q1Context = await this.contextualize(goal, cycleNumber, priorFeedback);
+        const q1Context = appendHostBlock(await this.contextualize(goal, cycleNumber, priorFeedback), state.hostBlock ?? '');
 
         // Capabilities summary no replan — registry serve do cache (TTL por categoria).
         const capSummary = await this.capRegistry.getCapabilitySummary();
@@ -712,6 +716,7 @@ export class GoalExecutionLoop {
         const state: GoalExecutionState = {
             cognitiveContext: createEmptyStepCognitiveContext(),
             progressModel: this.buildInitialProgressModel(goal),
+            hostBlock: hostContextMode() === 'on' ? buildHostAppContextBlock(channelContext.metadata) : '',
         };
 
         try {
@@ -1249,7 +1254,7 @@ export class GoalExecutionLoop {
             goal = this.goalStore.getById(goal.id)!;
 
             // Planeja os steps para o próximo marco
-            const q1Context = await this.contextualize(goal, totalCycles, undefined);
+            const q1Context = appendHostBlock(await this.contextualize(goal, totalCycles, undefined), state.hostBlock ?? '');
             const capSummary = await this.capRegistry.getCapabilitySummary();
 
             const planResult = await this.planner.plan(goal, q1Context ?? '', capSummary, nextMilestone);

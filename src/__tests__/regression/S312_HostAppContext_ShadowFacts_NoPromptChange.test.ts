@@ -12,7 +12,7 @@
  *   6  (A8) → texto de slide imperativo/forjando delimitador fica contido em linhas prefixadas.
  *   7  → função pura: não altera o metadata recebido.
  *   8  (A9) → módulo-folha: sem imports; GoalPlanner/SessionContext não o consomem nesta fase.
- *   9  → sombra: o único consumidor de produção é o gancho HOST_CONTEXT=shadow, que só loga —
+ *   9  → sombra: o gancho HOST_CONTEXT=shadow só loga — por ele o prompt do Planner não recebe o bloco.
  *        o prompt do Planner não recebe o bloco.
  *
  * Execução: npx ts-node src/__tests__/regression/S312_HostAppContext_ShadowFacts_NoPromptChange.test.ts
@@ -143,15 +143,15 @@ assert(!/hostAppContext|buildHostAppContextBlock/.test(plannerSrc), 'GoalPlanner
 const sessionSrc = fs.readFileSync(path.join(root, 'session', 'SessionContext.ts'), 'utf8');
 assert(!/hostAppContext/.test(sessionSrc), 'SessionContext (AgentLoop) inalterado na fase sombra');
 
-console.log('\n[9] sombra — único consumidor é o gancho HOST_CONTEXT=shadow, que só loga');
+console.log('\n[9] sombra — o gancho HOST_CONTEXT=shadow só loga (o modo "on" é coberto por S318)');
 const loopSrc = fs.readFileSync(path.join(root, 'loop', 'GoalExecutionLoop.ts'), 'utf8');
 const uses = loopSrc.match(/buildHostAppContextBlock\(/g) ?? [];
-assert(uses.length === 1, `exatamente 1 chamada em GoalExecutionLoop (foi ${uses.length})`);
+assert(uses.length === 3, `3 chamadas em GoalExecutionLoop: sombra + 2 sob modo on, S318 (foi ${uses.length})`);
 assert(/HOST_CONTEXT === 'shadow'[\s\S]{0,400}buildHostAppContextBlock\(/.test(loopSrc), 'a chamada está sob HOST_CONTEXT === "shadow"');
 const hook = loopSrc.slice(loopSrc.indexOf("HOST_CONTEXT === 'shadow'"), loopSrc.indexOf("HOST_CONTEXT === 'shadow'") + 700);
 assert(/log\.info\([\s\S]*\[HOST-CONTEXT\]/.test(hook) && !/(runtimeContext|q1Context|capSummary|prompt|messages)\s*[+=]/.test(hook), 'o gancho só loga; não escreve em contexto/prompt do Planner');
-const gateOff = loopSrc.indexOf("HOST_CONTEXT === 'shadow'");
-assert(gateOff > -1 && !/process\.env\.HOST_CONTEXT\s*[!=]==?\s*'on'/.test(loopSrc), 'modo "on" ainda não existe (só sombra)');
+// S318 (03/10/2026): o modo `on` passou a existir; as guardas "exatamente 1 chamada" e "modo on não existe" foram atualizadas DE PROPÓSITO.
+assert(!/process\.env\.HOST_CONTEXT\s*[!=]==?\s*'on'/.test(loopSrc), 'o modo "on" é lido só por hostContextMode() (igualdade estrita, uma única definição)');
 
 console.log(`\n${passed} passaram, ${failed} falharam`);
 process.exit(failed > 0 ? 1 : 0);
