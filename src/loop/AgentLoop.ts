@@ -54,6 +54,7 @@ import { buildLoopMetric, summarizeMetrics } from './agentMetrics';
 import { extractMissingExecutable } from './planning/extractMissingExecutable';
 import { computeToolInputKey } from './planning/computeToolInputKey';
 import { SOURCE_SCRIPT_EXTENSIONS, DELIVERABLE_EXTENSIONS } from './planning/inferExpectedExtensions';
+import { hostContextMode, hostAppToolNames } from '../shared/hostAppContext';
 
 export type { ToolResult, ToolExecutor, LoopMetrics, ChannelContext, AgentLoopConfig, ProcessedResult };
 
@@ -1362,13 +1363,13 @@ export class AgentLoop {
         destructive:      ['exec_command', 'ssh_exec', 'server_config'],
     };
 
-    private buildToolDefs(intent: IntentDecision): ToolDefinition[] {
+    private buildToolDefs(intent: IntentDecision, hostToolNames: readonly string[] = []): ToolDefinition[] {
         // Preferred tools from skill + category tools (never exclude domain-appropriate tools).
         // Skills can add specific preferred tools, but category tools are always merged in so
         // the model still has access to domain-relevant tools (e.g. crypto_analysis for data_analysis).
         if (intent.preferredTools && intent.preferredTools.length > 0) {
             const categoryExtras = AgentLoop.CATEGORY_TOOLS[intent.category] ?? [];
-            const allowed = new Set([...AgentLoop.CORE_TOOLS, ...intent.preferredTools, ...categoryExtras]);
+            const allowed = new Set([...AgentLoop.CORE_TOOLS, ...intent.preferredTools, ...categoryExtras, ...hostToolNames]);
             const filtered = Array.from(this.tools.values()).filter(t => allowed.has(t.name));
             log.info(`[TOOLS] Skill-preferred filter: ${filtered.map(t => t.name).join(', ')} (${filtered.length}/${this.tools.size})`);
             return filtered.map(t => ({ name: t.name, description: t.description, parameters: t.parameters }));
@@ -1381,7 +1382,7 @@ export class AgentLoop {
             return Array.from(this.tools.values()).map(t => ({ name: t.name, description: t.description, parameters: t.parameters }));
         }
 
-        const allowed = new Set([...AgentLoop.CORE_TOOLS, ...extras]);
+        const allowed = new Set([...AgentLoop.CORE_TOOLS, ...extras, ...hostToolNames]);
         const filtered = Array.from(this.tools.values()).filter(t => allowed.has(t.name));
         log.info(`[TOOLS] Category filter '${intent.category}': ${filtered.map(t => t.name).join(', ')} (${filtered.length}/${this.tools.size})`);
         return filtered.map(t => ({ name: t.name, description: t.description, parameters: t.parameters }));
@@ -3347,7 +3348,9 @@ export class AgentLoop {
             log.info(`[SKILL] Injetando ${matchedManual.length} skill(s) manual(ais): ${matchedManual.map(s => s.name).join(', ')}`);
         }
 
-        const toolDefs: ToolDefinition[] = this.buildToolDefs(intentDecision);
+        // RFC-008 (HOST_CONTEXT=on): ferramentas do aplicativo hospedeiro entram em TODA categoria — só acrescenta.
+        const hostTools = hostContextMode() === 'on' ? hostAppToolNames(channelContext?.metadata) : [];
+        const toolDefs: ToolDefinition[] = this.buildToolDefs(intentDecision, hostTools);
 
         // O override do roteador vale só para ESTE turno. Antes, `resolveProfile()` devolvia a
         // referência do perfil guardado no registry e estas linhas escreviam nele: quando o perfil

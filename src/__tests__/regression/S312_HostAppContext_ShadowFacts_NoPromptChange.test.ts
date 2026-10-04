@@ -141,7 +141,9 @@ for (const forbidden of ['/loop/', '/session/', '/channels/', '/core/']) {
 const plannerSrc = fs.readFileSync(path.join(root, 'loop', 'GoalPlanner.ts'), 'utf8');
 assert(!/hostAppContext|buildHostAppContextBlock/.test(plannerSrc), 'GoalPlanner não consome o bloco na fase sombra');
 const sessionSrc = fs.readFileSync(path.join(root, 'session', 'SessionContext.ts'), 'utf8');
-assert(!/hostAppContext/.test(sessionSrc), 'SessionContext (AgentLoop) inalterado na fase sombra');
+// S318 (03/10/2026): o modo `on` passou a alimentar também o AgentLoop (conversa) via SessionContext, como FONTE ÚNICA.
+// Guarda atualizada DE PROPÓSITO: o que continua protegido é que o consumo só existe sob hostContextMode() === 'on'.
+assert(/hostContextMode\(\) === 'on' \? buildHostAppContextBlock\(/.test(sessionSrc), 'SessionContext só consome o bloco sob hostContextMode() === "on" (fora dele, comportamento legado)');
 
 console.log('\n[9] sombra — o gancho HOST_CONTEXT=shadow só loga (o modo "on" é coberto por S318)');
 const loopSrc = fs.readFileSync(path.join(root, 'loop', 'GoalExecutionLoop.ts'), 'utf8');

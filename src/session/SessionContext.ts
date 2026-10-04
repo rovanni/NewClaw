@@ -20,6 +20,7 @@ import { MemoryManager } from '../memory/MemoryManager';
 import { ContextBudget, ContextBlock, DEFAULT_BUDGET } from '../loop/ContextBudget';
 import { LLMMessage } from '../core/ProviderFactory';
 import { createLogger } from '../shared/AppLogger';
+import { hostContextMode, buildHostAppContextBlock } from '../shared/hostAppContext';
 const log = createLogger('SessionContext');
 
 export interface SessionContextResult {
@@ -115,7 +116,13 @@ export class SessionContext {
                 + 'Voce pode gerar e inserir slides .pptx diretamente na apresentacao ativa via send_document.',
         };
         const hostApp = channelMetadata?.hostApp as string | undefined;
-        if (hostApp && HOST_APP_HINTS[hostApp]) {
+        // RFC-008 (HOST_CONTEXT=on): FONTE ÚNICA — o mesmo bloco de fatos, sanitizado e limitado, que o Planner
+        // de goals recebe. Substitui o bloco legado abaixo, que juntava os textos do slide SEM sanitizar
+        // (uma linha hostil do slide podia forjar linhas no contexto). Fora do modo `on` o legado segue como estava.
+        const hostBlockOn = hostContextMode() === 'on' ? buildHostAppContextBlock(channelMetadata) : '';
+        if (hostBlockOn) {
+            stateBlock += `\n\n${hostBlockOn}`;
+        } else if (hostApp && HOST_APP_HINTS[hostApp]) {
             stateBlock += `\nCanal: ${HOST_APP_HINTS[hostApp]}`;
             
             // Injeta as informacoes detalhadas do slideContext se existirem

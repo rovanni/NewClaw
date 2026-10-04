@@ -32,6 +32,7 @@ const HOST_APP_FACTS: Record<string, string[]> = {
         'A apresentação aberta existe no PowerPoint do usuário; não é um arquivo do workspace.',
         'Todo .pptx entregue via send_document neste canal é inserido na apresentação aberta.',
         'Neste canal, o resultado esperado de um pedido de criação de conteúdo (aula, material, texto para apresentar) é uma apresentação de slides.',
+        'Neste canal, as palavras slide, tema, apresentação e design ditas pelo usuário se referem à apresentação aberta no PowerPoint.',
     ],
 };
 
@@ -55,6 +56,23 @@ export function hostContextMode(env: Record<string, string | undefined> = proces
 const HOST_APP_SKILLS: Record<string, string[]> = {
     powerpoint: ['pptx-generator'],
 };
+
+/**
+ * Ferramentas que pertencem ao aplicativo hospedeiro e precisam estar disponíveis no AgentLoop (conversa) mesmo
+ * quando o filtro por categoria de intenção não as inclui: "o que acha desses slides" é categoria `conversation`,
+ * que não oferece nenhuma ferramenta além das básicas — sem esta lista o modelo não tem como ler o deck aberto.
+ * Nomes de ferramenta, nada mais; a descrição e o schema continuam vindo da própria ferramenta.
+ */
+const HOST_APP_TOOLS: Record<string, string[]> = {
+    powerpoint: ['powerpoint_control'],
+};
+
+/** Ferramentas a oferecer para o host do `metadata`; [] para canal comum ou host desconhecido. */
+export function hostAppToolNames(metadata?: Record<string, unknown>): string[] {
+    const hostApp = metadata?.hostApp;
+    if (typeof hostApp !== 'string' || !Object.prototype.hasOwnProperty.call(HOST_APP_TOOLS, hostApp)) return [];
+    return [...HOST_APP_TOOLS[hostApp]];
+}
 
 /** Skills a carregar para o host do `metadata`; [] para canal comum ou host desconhecido. */
 export function hostAppSkillNames(metadata?: Record<string, unknown>): string[] {
