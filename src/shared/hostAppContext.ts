@@ -74,6 +74,46 @@ export function hostAppToolNames(metadata?: Record<string, unknown>): string[] {
     return [...HOST_APP_TOOLS[hostApp]];
 }
 
+/**
+ * Ações SOMENTE-LEITURA das ferramentas do host (o resto da ferramenta pode escrever). Distinguir pela AÇÃO, não pelo
+ * nome: `powerpoint_control` lê (getPresentation/getSlide) E escreve (addTextBox) — um turno que só leu é recuperação de
+ * informação; um que escreveu é uma operação. O contrato com a ferramenta (cada ação existir no enum dela) é testado.
+ */
+export const HOST_READ_ACTIONS: Readonly<Record<string, readonly string[]>> = {
+    powerpoint_control: ['getPresentation', 'getSlide'],
+};
+
+/** `input` é o JSON dos argumentos como o AgentLoop o guarda no histórico do ciclo. Entrada ilegível = não é leitura. */
+export function hostReadAction(tool: string, input: string): string | undefined {
+    if (!Object.prototype.hasOwnProperty.call(HOST_READ_ACTIONS, tool)) return undefined;
+    try {
+        const args = JSON.parse(input) as Record<string, unknown> | null;
+        const action = args && typeof args === 'object' ? args.action : undefined;
+        return typeof action === 'string' && HOST_READ_ACTIONS[tool].includes(action) ? action : undefined;
+    } catch {
+        return undefined;
+    }
+}
+
+/**
+ * Descrição curta e segura de UMA chamada de leitura do deck, a partir dos argumentos que o AgentLoop registrou
+ * (fato do ciclo, não do modelo). O id é dado do cliente: achatado e limitado, como todo texto vindo do deck.
+ */
+export function describeDeckRead(input: string): string {
+    try {
+        const args = JSON.parse(input) as Record<string, unknown>;
+        if (args.action === 'getPresentation') return 'lista de slides (getPresentation)';
+        if (args.action === 'getSlide') {
+            if (positiveInt(args.index) !== undefined) return `slide ${args.index} (getSlide)`;
+            if (typeof args.id === 'string' && args.id.trim()) return `slide de id ${flatten(args.id, 64)} (getSlide)`;
+            return 'slide ativo (getSlide)';
+        }
+    } catch {
+        // entrada ilegível: cai na descrição genérica abaixo
+    }
+    return 'leitura do deck';
+}
+
 /** Skills a carregar para o host do `metadata`; [] para canal comum ou host desconhecido. */
 export function hostAppSkillNames(metadata?: Record<string, unknown>): string[] {
     const hostApp = metadata?.hostApp;

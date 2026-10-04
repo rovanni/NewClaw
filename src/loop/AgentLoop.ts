@@ -54,7 +54,11 @@ import { buildLoopMetric, summarizeMetrics } from './agentMetrics';
 import { extractMissingExecutable } from './planning/extractMissingExecutable';
 import { computeToolInputKey } from './planning/computeToolInputKey';
 import { SOURCE_SCRIPT_EXTENSIONS, DELIVERABLE_EXTENSIONS } from './planning/inferExpectedExtensions';
-import { hostContextMode, hostAppToolNames } from '../shared/hostAppContext';
+import { hostContextMode, hostAppToolNames, hostReadAction, describeDeckRead } from '../shared/hostAppContext';
+
+/** Teto (caracteres) do conteúdo de ferramentas na síntese pós-ação quando o turno LEU o deck aberto. O das demais
+ * ferramentas de informação continua 2400. Contextos grandes na síntese já causaram timeouts, então não é ilimitado. */
+export const SYNTHESIS_DECK_READ_BUDGET_CHARS = 12000;
 
 export type { ToolResult, ToolExecutor, LoopMetrics, ChannelContext, AgentLoopConfig, ProcessedResult };
 
@@ -2055,8 +2059,12 @@ export class AgentLoop {
             // Distinguish info-retrieval tools from file-operation tools so the synthesis
             // instruction is context-appropriate: "present the data" vs "confirm changes".
             const INFO_TOOLS = new Set(['web_search', 'web_navigate', 'weather', 'crypto_analysis', 'memory_search', 'api_request']);
-            const executedTools = new Set(cycleHistory.map(h => h.tool));
-            const isInfoRetrieval = cycleHistory.length > 0 && [...executedTools].every(t => INFO_TOOLS.has(t));
+            // Leitura do deck aberto (powerpoint_control getPresentation/getSlide) também é recuperação de informação:
+            // o resultado É o dado a ser julgado. Antes, só o ÚLTIMO resultado chegava à síntese ("consegui acessar apenas
+            // o slide 21", 03/10/2026). Distingue pela AÇÃO: addTextBox escreve e continua sendo uma operação.
+            const deckReads = cycleHistory.filter(h => hostReadAction(h.tool, h.input) !== undefined);
+            const isInfoRetrieval = cycleHistory.length > 0
+                && cycleHistory.every(h => INFO_TOOLS.has(h.tool) || hostReadAction(h.tool, h.input) !== undefined);
             // For info-retrieval, always present collected data — even when dedup aborted.
             // dedupSynthesisBody is reserved for file/command loops where "how to proceed" makes sense.
             const infoRetrievalSynthesisBody = (() => {
@@ -2085,8 +2093,15 @@ export class AgentLoop {
                     `não contém, mesmo que soe plausível. Apresente o valor puro. Só descreva ` +
                     `tendência se o resultado da ferramenta tiver explicitamente múltiplos pontos ` +
                     `no tempo (ex: variação 24h/7d já vinda pronta da tool).`;
-                if (failedTools.length === 0) return base + noFabrication;
-                return base + ` Para as fontes que falharam, explique brevemente o motivo. NÃO peça ao usuário para repetir ou especificar novamente o que já foi solicitado.` + noFabrication;
+                // Fatos objetivos da leitura (vêm do histórico do ciclo, nunca do modelo): sem eles a resposta não diz
+                // o que cobriu, e uma avaliação de 6 slides de 29 parece uma avaliação do deck inteiro.
+                const deckNote = deckReads.length === 0 ? '' :
+                    `\n\nLEITURA DO DECK ABERTO — fatos desta rodada: ${deckReads.map(h => describeDeckRead(h.input)).join('; ')}.` +
+                    ` Se a pergunta do usuário pede opinião, avaliação ou análise, responda com ela, fundamentada SOMENTE no conteúdo lido` +
+                    ` (a regra de apresentar dados, e não o que você fez, não impede uma avaliação).` +
+                    ` Diga quais slides você leu e que os demais NÃO foram lidos; não avalie nem descreva slide que não foi lido.`;
+                if (failedTools.length === 0) return base + deckNote + noFabrication;
+                return base + deckNote + ` Para as fontes que falharam, explique brevemente o motivo. NÃO peça ao usuário para repetir ou especificar novamente o que já foi solicitado.` + noFabrication;
             })();
             const synthesisBody = isInfoRetrieval
                 ? infoRetrievalSynthesisBody
@@ -2104,12 +2119,16 @@ export class AgentLoop {
             const synthToolMessages: LLMMessage[] = [];
             if (isInfoRetrieval) {
                 const toolMsgs = loopMessages.filter(m => m.role === 'tool');
-                let budgetLeft = 2400;
+                // Leitura de deck: o conteúdo lido é a própria matéria da resposta e vem de várias chamadas; 2400 cabiam
+                // uma busca na web, não 6 slides. Teto maior, com marcador explícito do corte (nunca silencioso).
+                let budgetLeft = deckReads.length > 0 ? SYNTHESIS_DECK_READ_BUDGET_CHARS : 2400;
                 for (const tm of toolMsgs) {
-                    const content = (tm.content ?? '').slice(0, budgetLeft);
+                    const full = tm.content ?? '';
+                    const cut = full.length > budgetLeft;
+                    const content = full.slice(0, budgetLeft) + (cut && deckReads.length > 0 ? '\n...[truncado]' : '');
                     if (content.trim()) {
                         synthToolMessages.push({ role: 'tool' as const, content, tool_call_id: tm.tool_call_id });
-                        budgetLeft -= content.length;
+                        budgetLeft -= Math.min(full.length, budgetLeft);
                     }
                     if (budgetLeft <= 0) break;
                 }
