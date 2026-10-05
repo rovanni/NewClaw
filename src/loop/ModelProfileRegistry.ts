@@ -104,6 +104,12 @@ const DEFAULT_CONFIG: ProfileRegistryConfig = {
 export class ModelProfileRegistry {
     private config: ProfileRegistryConfig;
     private usageLog: Map<string, number> = new Map();
+    /**
+     * Issue 054 (D2) — perfis cujo `model` ainda é o padrão embutido em DEFAULT_CONFIG (nomes da nuvem
+     * do Ollama). Sai deste conjunto todo perfil cujo modelo foi configurado (`MODEL_<CATEGORIA>`,
+     * dashboard, `setProfile`). Ver `sanitizeProfile`.
+     */
+    private readonly builtinModelProfileIds = new Set<string>(DEFAULT_CONFIG.profiles.map(p => p.id));
     private providerFactory: ProviderFactory | null = null;
 
     constructor(config?: Partial<ProfileRegistryConfig> & Record<string, string>, providerFactory?: ProviderFactory) {
@@ -127,6 +133,7 @@ export class ModelProfileRegistry {
                 if (config[cat]) {
                     log.info(`Overriding ${cat} model: ${config[cat]}`);
                     profile.model = config[cat];
+                    this.builtinModelProfileIds.delete(profile.id);
                 }
                 const providerKey = `provider_${cat}`;
                 if (config[providerKey]) {
@@ -417,6 +424,16 @@ Category:`;
      * a mesma adivinhação que este método existe para evitar, só que na direção oposta.
      */
     private sanitizeProfile(profile: ModelProfile): Readonly<ModelProfile> | undefined {
+        // Issue 054 (D2): o padrão embutido é um nome da nuvem do OLLAMA (glm-5.2:cloud, kimi-k2.6:cloud…).
+        // Ele só vale quando o provedor efetivo do perfil é o Ollama. Para qualquer outro (endpoint
+        // OpenAI-compatível local, Gemini, OpenRouter…), o perfil sai SEM modelo — "use o que este
+        // provedor serve", mesma regra da issue 019 para o classificador. Modelo configurado nunca é
+        // tocado. Visto em 05/10/2026: com o Bonsai local como provedor, o perfil `execution` pedia
+        // `kimi-k2.6:cloud` ao llama-server (que ignora o nome; num servidor de vários modelos, 404).
+        const effectiveProvider = profile.provider || this.providerFactory?.getDefaultProvider();
+        if (this.builtinModelProfileIds.has(profile.id) && effectiveProvider && effectiveProvider !== 'ollama') {
+            return { ...profile, model: '' };
+        }
         if (profile.provider) return { ...profile };
         if (!isLocalModelFile(profile.model)) return { ...profile };
         const inheritedProvider = this.providerFactory?.getDefaultProvider();
@@ -432,6 +449,11 @@ Category:`;
     /** Única via de escrita de perfil. Guarda uma cópia — o chamador não mantém alça para dentro. */
     setProfile(profile: ModelProfile): void {
         const copy = { ...profile };
+        // Issue 054 (D2): só vira "configurado" se o modelo gravado for diferente do padrão embutido —
+        // regravar um perfil sem mudar nada (ex.: salvar o painel) não transforma o nome de nuvem
+        // padrão em escolha explícita do operador.
+        const builtin = DEFAULT_CONFIG.profiles.find(p => p.id === copy.id);
+        if (!builtin || copy.model !== builtin.model) this.builtinModelProfileIds.delete(copy.id);
         const idx = this.config.profiles.findIndex(p => p.id === copy.id);
         if (idx >= 0) this.config.profiles[idx] = copy;
         else this.config.profiles.push(copy);

@@ -33,6 +33,7 @@ function makeAgentLoop(llm: () => Record<string, unknown>): AgentLoop {
     const providerFactory = {
         chatWithFallback: async () => llm(),
         getProvider: () => ({ name: 'fake' }),
+        getDefaultProvider: () => 'ollama', // contrato do ProviderFactory lido pelo ModelProfileRegistry (issue 054 D2)
         getProviderWithModel: () => ({ chat: async () => ({ status: 'success', content: '{}' }) }),
     } as unknown as import('../../core/ProviderFactory').ProviderFactory;
     const db = new (Database as any)(':memory:');

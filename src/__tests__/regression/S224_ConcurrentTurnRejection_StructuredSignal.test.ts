@@ -67,6 +67,7 @@ function makeControllableProviderFactory() {
     const factory = {
         chatWithFallback,
         getProvider: () => ({ name: 'fake' }),
+        getDefaultProvider: () => 'ollama', // contrato do ProviderFactory lido pelo ModelProfileRegistry (issue 054 D2)
         getProviderWithModel: () => ({ chat: async () => ({ status: 'success', content: '{}' }) }),
     } as unknown as import('../../core/ProviderFactory').ProviderFactory;
     return { factory, release };
@@ -84,6 +85,7 @@ function makeAgentLoop(providerFactory?: import('../../core/ProviderFactory').Pr
             attempts: [{ provider: 'fake', model: 'fake', duration: 1, status: 'success' }],
         }),
         getProvider: () => ({ name: 'fake' }),
+        getDefaultProvider: () => 'ollama', // contrato do ProviderFactory lido pelo ModelProfileRegistry (issue 054 D2)
         getProviderWithModel: () => ({ chat: async () => ({ status: 'success', content: '{}' }) }),
     } as unknown as import('../../core/ProviderFactory').ProviderFactory);
     const db = new (Database as any)(':memory:');

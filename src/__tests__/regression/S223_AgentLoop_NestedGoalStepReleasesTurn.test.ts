@@ -48,6 +48,7 @@ function makeFakeProviderFactory() {
     return {
         chatWithFallback,
         getProvider: () => ({ name: 'fake' }),
+        getDefaultProvider: () => 'ollama', // contrato do ProviderFactory lido pelo ModelProfileRegistry (issue 054 D2)
         getProviderWithModel: () => ({ chat: async () => ({ status: 'success', content: '{}' }) }),
     } as unknown as import('../../core/ProviderFactory').ProviderFactory;
 }
