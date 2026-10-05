@@ -1,5 +1,5 @@
 import { ResponseOption } from '../channels/ChannelAdapter';
-import { EvidenceItem } from './ObserverValidator';
+import { EvidenceItem, GroundingState, ClaimVerdict } from './ObserverValidator';
 
 /** Duck-type para ferramentas que suportam injeção de contexto de canal */
 export interface ContextAwareTool {
@@ -187,4 +187,18 @@ export interface ProcessedResult {
      * prosa, exatamente o que ADR-011 e a regra "determinismo valida / LLM interpreta" proíbem).
      */
     concurrentTurnRejected?: boolean;
+    /**
+     * Presente quando a barreira de groundedness (ADR-010 C1) NÃO autorizou a entrega e `text` é a
+     * mensagem fixa de bloqueio, não a resposta (issue 049). Mesmo motivo de `concurrentTurnRejected`:
+     * o chamador que tem política de recuperação (num goal, o `GoalExecutionLoop` — ADR-010 §10)
+     * recebe o estado do juiz como fato, em vez de um segundo avaliador ter de interpretar a prosa.
+     */
+    groundingBlock?: GroundingBlock;
+}
+
+/** Veredito do juiz de groundedness que bloqueou a entrega (issue 049). */
+export interface GroundingBlock {
+    state: Exclude<GroundingState, 'VALIDATED' | 'NOT_APPLICABLE'>;
+    /** Afirmações que o juiz não confirmou. Sempre vazio em UNVALIDATED (o juiz não concluiu). */
+    unconfirmedClaims: Array<{ claim: string; verdict: Exclude<ClaimVerdict, 'SUPPORTED'> }>;
 }

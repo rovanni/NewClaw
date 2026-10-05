@@ -40,6 +40,7 @@ export type BlockerKind =
     | 'required_artifact_missing'  // artefato obrigatório existe mas está vazio — goal de modificação não pode prosseguir
     | 'semantic_mismatch'          // tool retornou sucesso mas output não é relevante para a intenção do step
     | 'content_stub'               // step write gravou placeholder em vez de conteúdo real — usar AgentLoop para síntese
+    | 'grounding_blocked'          // issue 049: barreira de groundedness (ADR-010 C1) não autorizou a resposta do step
     | 'user_supplement';           // NÃO é falha: usuário mandou info adicional durante a execução (ver GoalOrchestrator.trySupplementActiveGoal) — dispara replan levando em conta, sem registrar como falha de tool/step
 
 export interface GoalBlocker {

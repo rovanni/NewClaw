@@ -46,7 +46,7 @@ import { MultiLayerRetriever } from '../memory/MultiLayerRetriever';
 
 import {
     ToolResult, ToolExecutor, LoopMetrics, ChannelContext,
-    AgentLoopConfig, ProcessedResult, ContextAwareTool, toolResultForModel
+    AgentLoopConfig, ProcessedResult, ContextAwareTool, toolResultForModel, GroundingBlock
 } from './agentLoopTypes';
 import { buildMasterPrompt } from './agentPrompts';
 import { parseLLMResponse, extractFinalText } from './agentOutputParser';
@@ -411,6 +411,8 @@ export interface TurnState {
     lastToolExecution: { toolName: string; toolOutput: string; intent: string; category: IntentCategory } | null;
     pendingObserverFeedback: string[];
     semanticStatus?: SemanticStatusEvent;
+    /** Veredito que bloqueou a ÚLTIMA resposta comprometida neste turno (issue 049) — `run()` o devolve em `ProcessedResult`. */
+    groundingBlock?: GroundingBlock;
 }
 
 export class AgentLoop {
@@ -905,7 +907,10 @@ export class AgentLoop {
         toolFailureCount = 0,
         channelContext?: ChannelContext,
     ): Promise<string> {
-        const last = this.getTurnState(conversationId).lastToolExecution;
+        const turnState = this.getTurnState(conversationId);
+        const last = turnState.lastToolExecution;
+        // Vale o veredito da ÚLTIMA resposta comprometida: um commit posterior que passa apaga o bloqueio anterior.
+        turnState.groundingBlock = undefined;
 
         // When no tool succeeded but tools did run and fail, the LLM may fabricate a success
         // message. The normal validator is skipped when last===null, so we guard here first.
@@ -1118,10 +1123,17 @@ export class AgentLoop {
                     }
 
                     log.info(`[GROUNDING-TRACE] ${JSON.stringify({ v: 1, phase: 'decision', traceId: trace.id, conversationId, ...channelContext?.goalTrace, state: g.state, claimsTotal: g.claims.length, supported: supportedClaims.length, path: supportedClaims.length > 0 ? 'blocked_partial_rejected' : 'blocked_no_supported_claims', evidenceSources: { turn: evidences.length - (channelContext?.priorStepEvidence?.length ?? 0), priorSteps: channelContext?.priorStepEvidence?.length ?? 0 } })}`);
+                    turnState.groundingBlock = {
+                        state: g.state,
+                        unconfirmedClaims: g.claims
+                            .filter((c): c is GroundedClaim & { verdict: 'NOT_SUPPORTED' | 'NOT_EVALUABLE' } => c.verdict !== 'SUPPORTED')
+                            .map(c => ({ claim: c.claim, verdict: c.verdict })),
+                    };
                     return AgentLoop.groundingBlockedMessage(g.state);
                 }
             } catch (groundingErr) {
                 log.warn(`[${this.ts()}] [GROUNDING] falha antes do julgamento (${errorMessage(groundingErr)}) — bloqueando por segurança`);
+                turnState.groundingBlock = { state: 'UNVALIDATED', unconfirmedClaims: [] };
                 return AgentLoop.groundingBlockedMessage('UNVALIDATED');
             }
 
@@ -1287,7 +1299,13 @@ export class AgentLoop {
             pendingObserverFeedback: [],
         });
         try {
-            return await this.runWithTools(conversationId, userText, 0, userId, context, options);
+            const result = await this.runWithTools(conversationId, userText, 0, userId, context, options);
+            // Issue 049: o bloqueio de grounding sai como fato estruturado, não só como a prosa de `text`.
+            const groundingBlock = this.activeTurnStates.get(conversationId)?.groundingBlock;
+            if (!groundingBlock) return result;
+            return typeof result === 'string'
+                ? { text: result, groundingBlock }
+                : { ...result, groundingBlock };
         } finally {
             // S229: o comentário anterior aqui ("movido para clearActiveTurn via MessageBus para
             // suportar Outbox") não corresponde ao código real — WebChannelAdapter/chat.ts (onde

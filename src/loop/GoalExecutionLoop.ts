@@ -50,7 +50,7 @@ import { resolveInstallCommand } from './planning/resolveInstallCommand';
 import { inferExpectedExtensions, isExpectedDeliverableFile } from './planning/inferExpectedExtensions';
 import { MIN_DELIVERABLE_SIZE, resolveArtifactPathFromEvidence } from './planning/artifactContract';
 import { GOAL_LIMITS } from './GoalLimits';
-import { ChannelContext, ContextAwareTool } from './agentLoopTypes';
+import { ChannelContext, ContextAwareTool, GroundingBlock } from './agentLoopTypes';
 import type { EvidenceItem } from './ObserverValidator';
 import type { SessionManager } from '../session/SessionManager';
 import { parseSessionKey } from '../session/SessionKeyFactory';
@@ -753,6 +753,11 @@ export class GoalExecutionLoop {
         // ciclo (com o result correto, incluindo 'partial' de baixa confiança —
         // Sprint 0.8) antes de retornar cycleResult; ver comentário em markStepDone.
         this.markStepDone(goal, step, cycleResult.output ?? '', 'skip');
+        // Issue 050: markStepDone grava o step como 'completed' no store, mas `goal` ainda é o objeto
+        // de antes. A injeção de sends diferidos abaixo regrava `currentPlan` a partir dele — sem este
+        // reload, devolvia o step a 'pending' e ele rodava DE NOVO (4 goals reais em set-out/2026, um
+        // PDF entregue duas vezes). Mesmo reload que os outros três chamadores de markStepDone já fazem.
+        goal = this.goalStore.getById(goal.id)!;
         this.updateCognitiveContext(step, cycleResult.output ?? '', state);
         this.updateProgressModel(step, 'completed', cycleResult.output, state);
         // Fix #2: registra artefatos enviados para evitar reenvio por deliverable_check
@@ -2258,6 +2263,73 @@ export class GoalExecutionLoop {
     }
 
     /**
+     * Issue 049 — política de recuperação de um step cuja resposta a barreira de groundedness bloqueou
+     * (ADR-010 §10: "recuperação definida pela camada superior").
+     *
+     * O attempt vira 'failure' SEM output: a mensagem fixa de bloqueio nunca é produto do step (não pode
+     * ser reaproveitada como entrega final nem como evidência de step posterior). O veredito vira FATO
+     * na descrição do step — quais afirmações o juiz não confirmou —, não instrução de estratégia
+     * (Princípio da Preservação do Raciocínio): o LLM do retry decide o que fazer com ele.
+     *
+     * Primeira vez: retry do mesmo step (outcome 'partial', consome retryBudget) — o caminho agentloop
+     * regenera a resposta, então o fato pode mudar o resultado. Segunda vez (marcador presente) ou sem
+     * retryBudget: 'blocked' com kind 'grounding_blocked', que leva ao replan. Mesmo desenho de dois
+     * tempos do SEMANTIC-MISMATCH, com marcador próprio para os dois não se confundirem.
+     *
+     * Fora do escopo (etapa 2 da issue): ADR-010 §9 diz que UNVALIDATED é revalidável sem regerar a
+     * resposta; aqui ele ainda regenera, como antes — só deixa de ser confundido com conteúdo ruim.
+     */
+    private handleGroundingBlock(
+        goal: Goal,
+        step: PlanStep,
+        cycle: number,
+        startMs: number,
+        block: GroundingBlock,
+    ): CycleResult {
+        const MARKER = ' [VERIFICAÇÃO —';
+        const description = step.description ?? '';
+        const alreadyHinted = description.includes(MARKER);
+        const cleanDesc = description.split(MARKER)[0].split(' [ATENÇÃO —')[0];
+
+        this.recordFailedAttempt(goal, step, cycle, startMs, { error: `grounding_blocked:${block.state}` });
+
+        const claims = block.unconfirmedClaims.slice(0, 5)
+            .map(c => `"${c.claim.slice(0, 160)}" (${c.verdict === 'NOT_SUPPORTED' ? 'os dados coletados contradizem' : 'os dados coletados não confirmam'})`)
+            .join('; ');
+        const omitted = block.unconfirmedClaims.length > 5 ? ` (+${block.unconfirmedClaims.length - 5})` : '';
+        const fact = block.state === 'UNVALIDATED'
+            ? 'a resposta anterior deste step não pôde ser verificada contra os dados coletados (o verificador não concluiu); nada nela foi considerado falso'
+            : `na resposta anterior deste step, estas afirmações não foram confirmadas: ${claims}${omitted}. O verificador só confirma o que aparece nos resultados de ferramentas deste goal`;
+
+        log.warn(
+            `[GROUNDING-BLOCK] goal=${goal.id} step=${step.id} state=${block.state}` +
+            ` unconfirmed=${block.unconfirmedClaims.length} retryBudget=${goal.retryBudget} alreadyHinted=${alreadyHinted}`
+        );
+
+        const blocker: GoalBlocker = {
+            kind: 'grounding_blocked',
+            toolName: step.toolName,
+            description: `Step '${cleanDesc.slice(0, 100)}' teve a resposta bloqueada pela verificação contra os dados (${block.state})${alreadyHinted ? ' após 2 tentativas' : ''}: ${fact}.`,
+            userSummary: block.state === 'UNVALIDATED'
+                ? `Não foi possível verificar a tempo a resposta da etapa "${cleanDesc.slice(0, 100)}" contra os dados coletados.`
+                : `A resposta da etapa "${cleanDesc.slice(0, 100)}" trazia afirmações que os dados coletados não confirmaram.`,
+            suggestedActions: block.state === 'UNVALIDATED'
+                ? ['A falha foi da verificação, não do conteúdo — o mesmo resultado pode ser obtido de novo']
+                : ['Obter com ferramenta o dado que sustenta as afirmações não confirmadas', 'Responder só com o que os dados coletados mostram'],
+            detectedAt: Date.now(),
+        };
+
+        if (goal.retryBudget > 0 && !alreadyHinted) {
+            const enrichedPlan = goal.currentPlan.map(s =>
+                s.id === step.id ? { ...s, description: `${cleanDesc}${MARKER} ${fact}.]`.slice(0, 1200) } : s
+            );
+            this.goalStore.update(goal.id, { currentPlan: enrichedPlan });
+            return { outcome: 'partial', confidence: 0.3, blocker };
+        }
+        return { outcome: 'blocked', confidence: 0.2, blocker };
+    }
+
+    /**
      * ARCH-022: dispatch de step com `toolName` definido — via ToolRegistry + ProactiveRecovery.
      * Extraído do antigo bloco `if (step.toolName) { ... }` de `executeStep()`, sem mudança de
      * lógica.
@@ -2513,6 +2585,17 @@ export class GoalExecutionLoop {
             const errorMsg = 'internal_concurrent_turn_rejected';
             this.recordFailedAttempt(goal, step, cycle, startMs, { output: text.slice(0, 300), error: errorMsg });
             return { earlyReturn: true, cycleResult: this.evaluator.evaluate(goal, step, { success: false, output: text, error: errorMsg }) };
+        }
+
+        // Issue 049: a barreira de groundedness (ADR-010 C1) não autorizou a entrega — `text` é a
+        // mensagem fixa de bloqueio, escrita para o usuário, não o produto do step. Antes disto ela
+        // virava o output do attempt: o StepSemanticValidator (um segundo avaliador LLM) relia a prosa
+        // e concluía "output irrelevante", e quando a heurística a aceitava como 'success' ela podia ser
+        // entregue como resposta final (6 attempts reais assim, set-out/2026). A recuperação de um
+        // bloqueio pertence a esta camada (ADR-010 §10): o veredito chega como fato e decide o rumo
+        // aqui, sem passar pelo validador semântico.
+        if (typeof response !== 'string' && response.groundingBlock) {
+            return { earlyReturn: true, cycleResult: this.handleGroundingBlock(goal, step, cycle, startMs, response.groundingBlock) };
         }
 
         // Sprint 0.10 (achado L22): correlaciona o attempt com o ExecutionTrace real do
