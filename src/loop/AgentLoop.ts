@@ -10,6 +10,7 @@
  *   agentMetrics.ts      — buildLoopMetric, summarizeMetrics
  */
 
+import { createHash } from 'crypto';
 import { ProviderFactory, LLMMessage, ToolDefinition, LLMResult, MetricsSummary, ToolCall } from '../core/ProviderFactory';
 import { computeDynamicTimeout } from '../shared/dynamicTimeout';
 import { CognitiveWorkspace } from '../cognitive/CognitiveWorkspace';
@@ -118,6 +119,38 @@ export function buildInterruptionNotice(
     return `Execução interrompida pela trava de segurança (${guardLabel}). ` +
         (feito ? `Até aqui: ${feito}. ` : 'Nenhuma ferramenta chegou a ser concluída. ') +
         `Não foi possível concluir o pedido neste turno — peça para continuar ou reformule.`;
+}
+
+/**
+ * Issue 052 (Sprint 1) — o que a trava `same_tool_limit` conta.
+ *
+ * Antes: toda chamada da mesma ferramenta no turno, só pelo NOME. Quatro `exec_command` diferentes,
+ * todos com sucesso e cada um trazendo informação nova (extrair aulas passo a passo), encerravam o
+ * turno no 4º — no passo 4 de um orçamento de 15. Produção, set-out/2026: 4 sub-turnos de goal
+ * cortados assim no meio do trabalho, cada um deixando como saída a frase "Vou …" do passo seguinte.
+ *
+ * A intenção da trava continua: pegar o loop com argumentos VARIADOS que o TOOL-DEDUP (argumentos
+ * idênticos) não pega — ex. `python3`, `python`, `py` falhando um após o outro. O que distingue esse
+ * loop de progresso é observável sem interpretar texto: a chamada falhou, ou devolveu exatamente a
+ * mesma saída de uma chamada anterior da mesma ferramenta (nenhuma informação nova). Só essas contam.
+ * Chamadas produtivas continuam limitadas pelo orçamento de passos do turno (maxSteps), pelo limite
+ * de grupo, pelas falhas consecutivas e pelo crescimento de contexto.
+ */
+export class SameToolLoopTracker {
+    private readonly seenOutputs = new Map<string, Set<string>>();
+    private readonly unproductive = new Map<string, number>();
+
+    /** Registra uma chamada e devolve quantas chamadas IMPRODUTIVAS a ferramenta acumulou no turno. */
+    record(tool: string, success: boolean, output: string): number {
+        const seen = this.seenOutputs.get(tool) ?? new Set<string>();
+        this.seenOutputs.set(tool, seen);
+        const digest = createHash('sha1').update(output).digest('hex');
+        const isUnproductive = !success || seen.has(digest);
+        seen.add(digest);
+        const count = (this.unproductive.get(tool) ?? 0) + (isUnproductive ? 1 : 0);
+        this.unproductive.set(tool, count);
+        return count;
+    }
 }
 
 // ── Tool Utility Score ───────────────────────────────────────────────────────
@@ -1784,7 +1817,9 @@ export class AgentLoop {
             }
         }
 
-        // dedup abort shadow: first tool that would reach MAX_SAME_TOOL_CALLS
+        // dedup abort shadow: first tool that would reach MAX_SAME_TOOL_CALLS pela contagem BRUTA (todas as
+        // chamadas). Desde a issue 052 a trava real só conta chamadas improdutivas — este shadow passa a
+        // mostrar quando a regra ANTIGA teria encerrado o turno (mede o efeito da mudança).
         const shadowDedupTool = [...toolTypeCallCount.entries()]
             .find(([, count]) => count >= MAX_SAME_TOOL_CALLS);
         const shadowDedup = shadowDedupTool
@@ -2292,6 +2327,7 @@ export class AgentLoop {
         blockedKeyCount: Map<string, number>,
         editPathCount: Map<string, number>,
         toolTypeCallCount: Map<string, number>,
+        sameToolTracker: SameToolLoopTracker,
         groupCallCount: Map<string, number>,
         cycleHistory: Array<{ step: number; tool: string; input: string; status: string }>,
         loopMessages: LLMMessage[],
@@ -2452,17 +2488,19 @@ export class AgentLoop {
 
                 totalToolCalls++;
 
-                // Generic loop detector (JSON-action path): mirrors the native tool check.
+                // Generic loop detector (JSON-action path): mesma regra do caminho nativo (issue 052) —
+                // só chamadas improdutivas contam (SameToolLoopTracker).
                 const atomicToolTypeCount = (toolTypeCallCount.get(resolvedToolName) ?? 0) + 1;
                 toolTypeCallCount.set(resolvedToolName, atomicToolTypeCount);
-                if (atomicToolTypeCount >= MAX_SAME_TOOL_CALLS && !dedupAbort) {
+                const atomicUnproductive = sameToolTracker.record(resolvedToolName, result.success, String(result.success ? (result.output ?? '') : (result.error ?? result.output ?? '')));
+                if (atomicUnproductive >= MAX_SAME_TOOL_CALLS && !dedupAbort) {
                     log.warn(
                         `[${this.ts()}] [SAFETY-GUARD] type=tool_loop reason=same_tool_limit ` +
-                        `value=${atomicToolTypeCount} threshold=${MAX_SAME_TOOL_CALLS} tool=${resolvedToolName}`
+                        `value=${atomicUnproductive} threshold=${MAX_SAME_TOOL_CALLS} tool=${resolvedToolName} calls=${atomicToolTypeCount}`
                     );
                     loopMessages.push({
                         role: 'system',
-                        content: `[LOOP DETECTADO] A ferramenta "${resolvedToolName}" foi chamada ${atomicToolTypeCount} vezes neste turno. ` +
+                        content: `[LOOP DETECTADO] A ferramenta "${resolvedToolName}" falhou ou repetiu o mesmo resultado ${atomicUnproductive} vezes neste turno. ` +
                             `O loop foi interrompido. Use os dados já obtidos ou as informações da memória para responder agora.`,
                     });
                     dedupAbort = true;
@@ -2550,6 +2588,7 @@ export class AgentLoop {
         binaryReadFilenames: Set<string>,
         editPathCount: Map<string, number>,
         toolTypeCallCount: Map<string, number>,
+        sameToolTracker: SameToolLoopTracker,
         groupCallCount: Map<string, number>,
         cycleHistory: Array<{ step: number; tool: string; input: string; status: string }>,
         loopMessages: LLMMessage[],
@@ -2582,7 +2621,7 @@ export class AgentLoop {
                 const singleResult = await this.dispatchSingleNativeToolCall(
                     toolCall, stepCount, channelContext, conversationId, userText, intentDecision, trace,
                     turnSignal, usedToolInputs, usedToolOutputs, blockedKeyCount, failedReadFilenames,
-                    binaryReadFilenames, editPathCount, toolTypeCallCount, groupCallCount, cycleHistory,
+                    binaryReadFilenames, editPathCount, toolTypeCallCount, sameToolTracker, groupCallCount, cycleHistory,
                     loopMessages, decisionCtx, dedupAbort, dedupAbortTool, maxSteps, totalToolCalls,
                     consecutiveToolFailures, guardsTriggered, toolFailureCount,
                     MAX_SAME_TOOL_CALLS, MAX_GROUP_CALLS, MAX_CONSECUTIVE_TOOL_FAILURES, move,
@@ -2839,6 +2878,7 @@ export class AgentLoop {
         loopMessages: LLMMessage[],
         cycleHistory: Array<{ step: number; tool: string; input: string; status: string }>,
         toolTypeCallCount: Map<string, number>,
+        sameToolTracker: SameToolLoopTracker,
         groupCallCount: Map<string, number>,
         failedReadFilenames: Set<string>,
         binaryReadFilenames: Set<string>,
@@ -2854,38 +2894,26 @@ export class AgentLoop {
         MAX_CONSECUTIVE_TOOL_FAILURES: number,
         move: (event: AgentFSMEvent, meta?: Record<string, unknown>) => void,
     ): SingleToolCallDispatchResult {
-        // Generic loop detector: same tool called too many times in one turn.
-        // Exception: info-retrieval tools called in batch mode (one LLM response,
-        // each call with a unique argument) are NOT loops — they're valid parallel
-        // fetches. Use argument diversity to distinguish batch from loop.
+        // Generic loop detector (issue 052): conta só chamadas IMPRODUTIVAS da mesma ferramenta — falha ou
+        // saída idêntica a uma anterior — ver SameToolLoopTracker. Substitui a contagem por nome + a exceção
+        // info_batch (que só valia para ferramentas de informação): chamadas que trazem informação nova não
+        // são loop, em nenhuma ferramenta. toolTypeCallCount continua contando tudo, para o diagnóstico.
         const toolTypeCount = (toolTypeCallCount.get(resolvedToolName) ?? 0) + 1;
         toolTypeCallCount.set(resolvedToolName, toolTypeCount);
-        if (toolTypeCount >= MAX_SAME_TOOL_CALLS && !dedupAbort) {
-            const INFO_BATCH_TOOLS = new Set(['web_search', 'web_navigate', 'weather', 'crypto_analysis', 'memory_search', 'api_request']);
-            const uniqueArgsForTool = new Set(
-                cycleHistory.filter(h => h.tool === resolvedToolName).map(h => h.input)
-            ).size;
-            const uniqueRatio = toolTypeCount > 0 ? uniqueArgsForTool / toolTypeCount : 0;
-            const isBatch = INFO_BATCH_TOOLS.has(resolvedToolName) && uniqueRatio >= 0.75 && toolTypeCount < 10;
-            if (isBatch) {
-                log.warn(
-                    `[${this.ts()}] [SAFETY-GUARD] type=info_batch tool=${resolvedToolName} ` +
-                    `calls=${toolTypeCount} unique=${uniqueArgsForTool} ratio=${uniqueRatio.toFixed(2)} — batch mode, continuing`
-                );
-            } else {
-                log.warn(
-                    `[${this.ts()}] [SAFETY-GUARD] type=tool_loop reason=same_tool_limit ` +
-                    `value=${toolTypeCount} threshold=${MAX_SAME_TOOL_CALLS} tool=${resolvedToolName}`
-                );
-                loopMessages.push({
-                    role: 'system',
-                    content: `[LOOP DETECTADO] A ferramenta "${resolvedToolName}" foi chamada ${toolTypeCount} vezes neste turno. ` +
-                        `O loop foi interrompido. Use os dados já obtidos ou as informações da memória para responder agora.`,
-                });
-                dedupAbort = true;
-                dedupAbortTool = `${resolvedToolName}:loop`;
-                guardsTriggered++;
-            }
+        const unproductiveCount = sameToolTracker.record(resolvedToolName, result.success, String(result.success ? (result.output ?? '') : (result.error ?? result.output ?? '')));
+        if (unproductiveCount >= MAX_SAME_TOOL_CALLS && !dedupAbort) {
+            log.warn(
+                `[${this.ts()}] [SAFETY-GUARD] type=tool_loop reason=same_tool_limit ` +
+                `value=${unproductiveCount} threshold=${MAX_SAME_TOOL_CALLS} tool=${resolvedToolName} calls=${toolTypeCount}`
+            );
+            loopMessages.push({
+                role: 'system',
+                content: `[LOOP DETECTADO] A ferramenta "${resolvedToolName}" falhou ou repetiu o mesmo resultado ${unproductiveCount} vezes neste turno. ` +
+                    `O loop foi interrompido. Use os dados já obtidos ou as informações da memória para responder agora.`,
+            });
+            dedupAbort = true;
+            dedupAbortTool = `${resolvedToolName}:loop`;
+            guardsTriggered++;
         }
 
         // Related-tool group detector: catches alternation (e.g. web_search ↔ web_navigate).
@@ -3030,6 +3058,7 @@ export class AgentLoop {
         binaryReadFilenames: Set<string>,
         editPathCount: Map<string, number>,
         toolTypeCallCount: Map<string, number>,
+        sameToolTracker: SameToolLoopTracker,
         groupCallCount: Map<string, number>,
         cycleHistory: Array<{ step: number; tool: string; input: string; status: string }>,
         loopMessages: LLMMessage[],
@@ -3203,7 +3232,7 @@ export class AgentLoop {
         return this.applyPostToolCallGuardsAndFinalize(
             toolCall, toolName, execResult.result, execResult.resolvedToolName, execResult.resolvedArgs,
             stepCount, channelContext, conversationId, userText, intentDecision, trace, loopMessages,
-            cycleHistory, toolTypeCallCount, groupCallCount, failedReadFilenames, binaryReadFilenames,
+            cycleHistory, toolTypeCallCount, sameToolTracker, groupCallCount, failedReadFilenames, binaryReadFilenames,
             dedupAbort, dedupAbortTool, execResult.maxSteps, execResult.totalToolCalls,
             consecutiveToolFailures, guardsTriggered, toolFailureCount,
             MAX_SAME_TOOL_CALLS, MAX_GROUP_CALLS, MAX_CONSECUTIVE_TOOL_FAILURES, move,
@@ -3689,6 +3718,7 @@ export class AgentLoop {
         // Generic per-tool-type call counter: detects when the agent loops on the same tool
         // regardless of argument variation (which TOOL-DEDUP alone cannot catch).
         const toolTypeCallCount = new Map<string, number>();
+        const sameToolTracker = new SameToolLoopTracker();
         const MAX_SAME_TOOL_CALLS = 4;
 
         // TOOL_GROUP_REGISTRY is defined at module level — use it directly.
@@ -3968,7 +3998,7 @@ export class AgentLoop {
             const nativeDispatchResult = await this.runNativeToolCallDispatch(
                 response.toolCalls, stepCount, channelContext, conversationId, userText, intentDecision,
                 trace, turnSignal, usedToolInputs, usedToolOutputs, blockedKeyCount, failedReadFilenames,
-                binaryReadFilenames, editPathCount, toolTypeCallCount, groupCallCount, cycleHistory,
+                binaryReadFilenames, editPathCount, toolTypeCallCount, sameToolTracker, groupCallCount, cycleHistory,
                 loopMessages, decisionCtx, dedupAbort, dedupAbortTool, maxSteps, totalToolCalls,
                 consecutiveToolFailures, guardsTriggered, toolFailureCount,
                 MAX_SAME_TOOL_CALLS, MAX_GROUP_CALLS, MAX_CONSECUTIVE_TOOL_FAILURES, move,
@@ -3999,7 +4029,7 @@ export class AgentLoop {
 
             const jsonActionResult = await this.runJsonActionDispatch(
                 atomicData, stepCount, channelContext, conversationId, userText, intentDecision,
-                trace, turnSignal, usedToolInputs, blockedKeyCount, editPathCount, toolTypeCallCount,
+                trace, turnSignal, usedToolInputs, blockedKeyCount, editPathCount, toolTypeCallCount, sameToolTracker,
                 groupCallCount, cycleHistory, loopMessages, dedupAbort, dedupAbortTool,
                 consecutiveToolFailures, guardsTriggered, totalToolCalls, toolFailureCount,
                 MAX_SAME_TOOL_CALLS, MAX_GROUP_CALLS, MAX_CONSECUTIVE_TOOL_FAILURES, move,
