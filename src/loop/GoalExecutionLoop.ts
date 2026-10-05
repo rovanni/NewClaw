@@ -40,7 +40,7 @@ import { MemoryManager } from '../memory/MemoryManager';
 import { MultiLayerRetriever } from '../memory/MultiLayerRetriever';
 import { ProviderFactory, LLMMessage } from '../core/ProviderFactory';
 import { Goal, PlanStep, GoalAttempt, GoalBlocker, GoalResult, GoalProgressUpdate, CycleResult, StepCognitiveContext, StepEvaluation, createEmptyStepCognitiveContext, SuccessCriterion, GoalProgressModel, ProgressComponent, AttemptOutcome } from './GoalTypes';
-import { StepSemanticValidator } from './StepSemanticValidator';
+import { StepSemanticValidator, StepExecutionFacts } from './StepSemanticValidator';
 import { GracefulDeliveryOrchestrator } from './GracefulDeliveryOrchestrator';
 import { StrategyDiversityGuard } from '../shared/StrategyDiversityGuard';
 import { resolvePath, commandExists } from '../utils/crossPlatform';
@@ -1787,10 +1787,19 @@ export class GoalExecutionLoop {
         // endereça a intenção do step (ex: crypto_analysis retornando ENA/BCH em vez de ZEC/Pi)
         // P6: cobre também steps agentloop (sem toolName) — output do AgentLoop também é validado
         if (cycleResult.outcome === 'success' && cycleResult.output) {
+            // Issue 056 (F3): fatos estruturais da tentativa que acabou de ser gravada para este step.
+            const lastAttempt = [...goal.attempts].reverse().find(a => a.planStepId === pendingStep.id);
+            const stepFacts: StepExecutionFacts | undefined = lastAttempt ? {
+                toolsCalled: lastAttempt.subToolCalls ?? (lastAttempt.toolName && lastAttempt.toolName !== 'agentloop' ? [lastAttempt.toolName] : []),
+                toolsFailed: (lastAttempt.subToolFailures ?? []).map(f => f.tool),
+                // Sem registro de arquivos (ex.: step agentloop) é "não registrado", não "nenhum" (Nunca Adivinhar).
+                artifacts: lastAttempt.producedArtifactPaths,
+            } : undefined;
             const semanticValidation = await this.semanticValidator.validate(
                 pendingStep,
                 cycleResult.output,
                 goal.userIntent,
+                stepFacts,
             );
             if (semanticValidation.shouldDowngradeToPartial) {
                 log.warn(

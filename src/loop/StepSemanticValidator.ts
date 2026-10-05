@@ -65,6 +65,31 @@ export interface StepSemanticValidation {
     shouldPromoteToConfidentSuccess: boolean;
 }
 
+/**
+ * Issue 056 (F3) — fatos ESTRUTURAIS da execução do step, registrados pelo sistema (não narrados pelo
+ * modelo): o que o sub-turno chamou, o que falhou e que arquivos produziu. Antes o validador via só o texto
+ * da resposta (600 chars) e "Ferramenta executada: agentloop": rebaixou um step que tinha gravado o arquivo
+ * pedido ("o step pedia criar um arquivo com ferramenta de escrita, mas o output é só texto") e não tinha como
+ * notar quando nenhuma escrita aconteceu. Entram como evidência para o LLM ponderar — nenhuma decisão
+ * determinística nova (Preservação do Raciocínio).
+ */
+export interface StepExecutionFacts {
+    toolsCalled: string[];
+    toolsFailed: string[];
+    /** undefined = o sistema não registra arquivos para este tipo de step (ex.: agentloop) — NÃO é "nenhum". */
+    artifacts?: string[];
+}
+
+function describeFacts(facts: StepExecutionFacts): string[] {
+    const list = (xs: string[]) => (xs.length > 0 ? [...new Set(xs)].slice(0, 12).join(', ') : 'nenhuma');
+    return [
+        'Fatos da execução (registrados pelo sistema, não pelo modelo):',
+        `- Ferramentas chamadas: ${list(facts.toolsCalled)}`,
+        `- Ferramentas que falharam: ${list(facts.toolsFailed)}`,
+        `- Arquivos gravados/produzidos: ${facts.artifacts === undefined ? 'não registrado para este tipo de etapa' : facts.artifacts.length > 0 ? [...new Set(facts.artifacts)].slice(0, 8).join(', ') : 'nenhum'}`,
+    ];
+}
+
 const STOPWORDS = new Set([
     'para', 'com', 'sem', 'uma', 'uns', 'ela', 'ele', 'que', 'não', 'por', 'mas',
     'the', 'and', 'for', 'with', 'from', 'this', 'that', 'are', 'was', 'were',
@@ -82,6 +107,7 @@ export class StepSemanticValidator {
         step: PlanStep,
         toolOutput: string,
         goalIntent?: string,
+        facts?: StepExecutionFacts,
     ): Promise<StepSemanticValidation> {
         if (!toolOutput || toolOutput.trim().length < 15) {
             return {
@@ -114,7 +140,7 @@ export class StepSemanticValidator {
         }
 
         // Slow path: LLM call para casos ambíguos
-        const llmResult = await this.llmValidate(step, toolOutput, goalIntent);
+        const llmResult = await this.llmValidate(step, toolOutput, goalIntent, facts);
         return {
             ...llmResult,
             shouldDowngradeToPartial:
@@ -211,6 +237,7 @@ export class StepSemanticValidator {
         step: PlanStep,
         toolOutput: string,
         goalIntent?: string,
+        facts?: StepExecutionFacts,
     ): Promise<Omit<StepSemanticValidation, 'shouldDowngradeToPartial' | 'shouldPromoteToConfidentSuccess'>> {
         const truncatedOutput = this.extractRelevantSnippet(toolOutput, this.extractKeyTerms(step), 600);
         const lines = [
@@ -219,13 +246,14 @@ export class StepSemanticValidator {
             `Intenção do step: "${step.description}"`,
             goalIntent ? `Objetivo do usuário: "${goalIntent.slice(0, 200)}"` : '',
             `Ferramenta executada: ${step.toolName ?? 'agentloop'}`,
+            ...(facts ? describeFacts(facts) : []),
             '',
             'Output da ferramenta (truncado a 600 chars):',
             '"""',
             truncatedOutput,
             '"""',
             '',
-            'O output acima ENDEREÇA a intenção do step?',
+            facts ? 'O output acima, junto com os fatos da execução, ENDEREÇA a intenção do step?' : 'O output acima ENDEREÇA a intenção do step?',
             'Responda APENAS com JSON: {"result": "relevant"|"mismatch"|"unverifiable", "confidence": 0.0-1.0, "reason": "curta em português"}',
             'Exemplo de mismatch: step pede cotações de BTC/ZEC mas output lista dados de ETH/ENA; step pede criar arquivo mas output é erro genérico.',
         ].filter(Boolean);
