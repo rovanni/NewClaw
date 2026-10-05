@@ -7,7 +7,7 @@
  *
  *   1 → flag desligada (padrão): uma única chamada ao juiz, nenhuma linha [GROUNDING-SHADOW].
  *   2 → flag ligada: segunda chamada com U1 (pedido do usuário) e argumentos maiores; a PRIMEIRA
- *       (a real) continua sem U1 e com os argumentos cortados em 200 chars.
+ *       (a real) continua sem U1 (desde a issue 051 já vê os argumentos inteiros, como a sombra).
  *   3 → o veredito real é idêntico com e sem a sombra e é devolvido ANTES de a sombra terminar.
  *   4 → o registro compara real × sombra (estado, contagens, o que continua não sustentado).
  *   5 → sem recursão: exatamente 2 chamadas ao juiz.
@@ -97,7 +97,9 @@ async function main(): Promise<void> {
         assert(h.prompts.length === 2, 'exatamente 2 chamadas ao juiz (real + sombra, sem recursão)', h.prompts.length);
         const [realPrompt, shadowPrompt] = h.prompts;
         assert(!realPrompt.includes('PEDIDO-ORIGINAL') && !realPrompt.includes('pedido_do_usuario'), 'o prompt REAL não recebe o pedido do usuário');
-        assert(!realPrompt.includes('entrada_nao_numerica'), 'o prompt REAL continua com os argumentos cortados em 200 chars');
+        // Atualizado DE PROPÓSITO na issue 051: o julgamento real passou a ver os argumentos inteiros (dentro do
+        // orçamento do juiz). O que continua exclusivo da sombra é o pedido do usuário (U1), verificado acima.
+        assert(realPrompt.includes('entrada_nao_numerica'), 'o prompt REAL traz os argumentos inteiros (issue 051)');
         assert(shadowPrompt.includes('PEDIDO-ORIGINAL') && shadowPrompt.includes('pedido_do_usuario'), 'o prompt da SOMBRA traz o pedido do usuário como evidência');
         assert(shadowPrompt.includes('entrada_nao_numerica'), 'o prompt da SOMBRA traz o conteúdo escrito (argumentos ampliados)');
         const rec = shadowRecords(lines)[0];

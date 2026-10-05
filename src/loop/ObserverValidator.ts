@@ -120,8 +120,11 @@ export interface EvidenceItem {
     output: string;
 }
 
-/** Quanto de cada evidência o juiz de grounding enxerga (o resto é cortado e MARCADO no prompt). */
-const GROUNDING_EVIDENCE_CHARS = 2000;
+/**
+ * Quanto do texto de cada evidência vai para o LOG opcional (`TRACE_CONTENT=true`). Só tamanho de log:
+ * desde a issue 051 o juiz recebe a evidência inteira (ver `evidenceCapForBudget`).
+ */
+const TRACE_EVIDENCE_LOG_CHARS = 2000;
 /** Limites do modo sombra de evidência ampliada (`GROUNDING_EVIDENCE_SHADOW`) — só observação, nunca o julgamento real. */
 const GROUNDING_SHADOW_EVIDENCE_CHARS = 4000;
 const GROUNDING_SHADOW_ARGS_CHARS = 6000;
@@ -173,7 +176,7 @@ interface GroundingEvidenceFact {
     tool: string;
     inputChars: number;
     outputChars: number;
-    /** Quantos chars o juiz de fato viu (≤ GROUNDING_EVIDENCE_CHARS). */
+    /** Quantos chars o juiz de fato viu (= outputChars, salvo corte por orçamento — issue 051). */
     sentChars: number;
     truncated: boolean;
 }
@@ -619,8 +622,11 @@ export class ObserverValidator {
         /** Só o modo sombra passa isto; o julgamento real usa sempre os limites padrão. */
         limits?: GroundingEvidenceLimits,
     ): Promise<GroundingVerdict> {
-        const evidenceCharsLimit = limits?.evidenceChars ?? GROUNDING_EVIDENCE_CHARS;
-        const argsCharsLimit = limits?.argsChars ?? 200;
+        // Issue 051: o julgamento real recebe a evidência INTEIRA; só corta se o conjunto não couber no
+        // orçamento de entrada do juiz (GROUNDING_MAX_PROMPT_CHARS). O modo sombra mantém limites fixos.
+        const budgetCap = ObserverValidator.evidenceCapForBudget(response, evidences);
+        const evidenceCharsLimit = limits?.evidenceChars ?? budgetCap;
+        const argsCharsLimit = limits?.argsChars ?? budgetCap;
         const t0 = Date.now();
         const orcamento = this.providerFactory.getBudgetAuxiliar('validacao');
         const base = { budgetMs: orcamento.timeoutMs, budgetOrigin: orcamento.origem };
@@ -751,6 +757,46 @@ export class ObserverValidator {
         }
     }
 
+    /**
+     * Issue 051 — quanto de cada texto de evidência (output e args) cabe no prompt do juiz.
+     *
+     * Antes era um corte fixo de 2.000 chars por output (200 por args), sem justificativa registrada:
+     * em produção (set-out/2026) 25% das evidências passavam disso, e 20 de 55 afirmações
+     * NOT_EVALUABLE citavam justamente uma evidência cortada — o dado existia, o juiz não o via.
+     * Nenhum dos 25 julgamentos teria passado do orçamento com tudo inteiro (máximo: 31 mil chars).
+     *
+     * Sem constante nova: o limite é o orçamento de entrada que o juiz já tem
+     * (GROUNDING_MAX_PROMPT_CHARS), descontados a instrução, a resposta (nunca cortada) e o cabeçalho
+     * e a marca de corte de cada evidência. Se tudo cabe → Infinity (nada é cortado). Se não cabe,
+     * "water-filling": o maior limite único `c` tal que Σ min(tamanho, c) cabe — corta só os textos
+     * maiores, por igual, e o corte continua MARCADO no prompt. Se nem a resposta cabe, devolve 0 e
+     * o teto de prompt adiante produz UNVALIDATED, como antes.
+     *
+     * Puro e determinístico; não decide nada sobre o conteúdo.
+     */
+    static evidenceCapForBudget(response: string, evidences: EvidenceItem[]): number {
+        // Cabeçalho "[E1] ferramenta=x args=" + quebras + marcas de corte (a de evidência tem ~90 chars).
+        const PER_EVIDENCE_OVERHEAD = 160;
+        const skeleton = GROUNDING_PROMPT.replace('{evidences}', () => '').replace('{response}', () => response).length;
+        const available = GROUNDING_MAX_PROMPT_CHARS - skeleton
+            - evidences.reduce((s, e) => s + PER_EVIDENCE_OVERHEAD + e.id.length + e.tool.length, 0);
+        const sizes = evidences.flatMap(e => [e.output.length, (e.input ?? '').length]).filter(n => n > 0);
+        const total = sizes.reduce((s, n) => s + n, 0);
+        if (total <= available) return Infinity;
+        if (available <= 0) return 0;
+
+        sizes.sort((a, b) => a - b);
+        let remaining = available;
+        for (let i = 0; i < sizes.length; i++) {
+            const left = sizes.length - i;
+            // Se todos os textos restantes couberem no limite `sizes[i]`, este entra inteiro; senão o
+            // limite comum é a divisão por igual do que sobrou entre os restantes.
+            if (sizes[i] * left > remaining) return Math.floor(remaining / left);
+            remaining -= sizes[i];
+        }
+        return Infinity;
+    }
+
     // ── Modo sombra de evidência ampliada (Sprint 3, issue 048) ──────────────────────────────────
     //
     // Caso real (26/09/2026): 2 de 12 afirmações `NOT_EVALUABLE` derrubaram a resposta inteira — uma sobre
@@ -869,7 +915,7 @@ export class ObserverValidator {
                 out.evidenceSent = evidences.map(e => ({
                     id: e.id, tool: e.tool,
                     input: capForLog(e.input ?? '', 200),
-                    output: capForLog(e.output, GROUNDING_EVIDENCE_CHARS),
+                    output: capForLog(e.output, TRACE_EVIDENCE_LOG_CHARS),
                 }));
                 if (rec.judgeRaw !== undefined) out.judgeRaw = capForLog(rec.judgeRaw, 4000);
             }

@@ -5,7 +5,7 @@
  * Só observa — o veredito do juiz é idêntico com e sem o trace.
  *
  *   1  → o veredito traz TODAS as afirmações (não só a primeira) com veredito e evidência citada.
- *   2  → evidência maior que o limite do juiz é marcada como truncada (chars originais × chars vistos).
+ *   2  → chars originais × chars vistos pelo juiz por evidência (desde a issue 051: inteira dentro do orçamento).
  *   3  → por padrão, nenhum texto de evidência/resposta vai ao log; com TRACE_CONTENT=true, vai.
  *   4  → todos os caminhos de saída emitem o trace (sem evidência, prompt grande, juiz falhou, saída inválida).
  *   5  → goalId/stepId/traceId atravessam o contexto até o log.
@@ -71,7 +71,9 @@ async function main(): Promise<void> {
         assert(r.claims.length === 3 && r.claims.map((c: { verdict: string }) => c.verdict).join() === 'NOT_EVALUABLE,SUPPORTED,SUPPORTED', 'TODAS as 3 afirmações com veredito', r.claims);
         assert(JSON.stringify(r.claimCounts) === '{"SUPPORTED":2,"NOT_SUPPORTED":0,"NOT_EVALUABLE":1}', 'contagem por veredito', r.claimCounts);
         assert(r.claims[1].evidence[0] === 'E1', 'evidência citada por afirmação');
-        assert(r.evidences[0].outputChars === 5021 && r.evidences[0].sentChars === 2000 && r.evidences[0].truncated === true, 'evidência truncada: 5021 chars originais, 2000 vistos pelo juiz', r.evidences);
+        // Atualizado DE PROPÓSITO na issue 051: o juiz passou a receber a evidência inteira dentro do orçamento
+        // (antes: corte fixo em 2000). O corte por orçamento é coberto pelo S322.
+        assert(r.evidences[0].outputChars === 5021 && r.evidences[0].sentChars === 5021 && r.evidences[0].truncated === false, 'evidência de 5021 chars vista inteira pelo juiz (issue 051)', r.evidences);
         const raw = lines.map(strip).join('');
         assert(!raw.includes('SEGREDO-DA-EVIDENCIA') && !raw.includes('O programa imprime 17 anos.'), 'sem texto de evidência/resposta no log por padrão');
         assert(typeof r.responseHash === 'string' && r.responseHash.length === 8, 'hash da resposta presente');
@@ -85,7 +87,7 @@ async function main(): Promise<void> {
         const { lines } = await captureLogs(() => v.validateGrounding(response, evidences));
         const r = traces(lines, '[GROUNDING-TRACE]')[0];
         assert(r.responseText === response, 'texto da resposta avaliada');
-        assert(r.evidenceSent[0].output.length === 2000 && !r.evidenceSent[0].output.includes('SEGREDO-DA-EVIDENCIA'), 'evidência EXATAMENTE como o juiz a viu (2000 chars, sem o corte)');
+        assert(r.evidenceSent[0].output.length === 2000 && !r.evidenceSent[0].output.includes('SEGREDO-DA-EVIDENCIA'), 'log de conteúdo limitado a 2000 chars da evidência (TRACE_EVIDENCE_LOG_CHARS — limite de log, não do juiz)');
         assert(typeof r.judgeRaw === 'string' && r.judgeRaw.includes('NOT_EVALUABLE'), 'saída crua do juiz');
         delete process.env.TRACE_CONTENT;
     }
