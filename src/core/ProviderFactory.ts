@@ -168,7 +168,7 @@ export class ProviderFactory {
             log.warn(`Custom provider "${custom.label}" ignorado — nome reservado por um provider nativo`);
             return false;
         }
-        this.providers.set(custom.label, new OpenAIProvider(custom.apiKey || '', custom.model || 'default', custom.baseUrl, custom.label));
+        this.providers.set(custom.label, new OpenAIProvider(custom.apiKey || '', custom.model || 'default', custom.baseUrl, custom.label, { thinking: custom.thinking }));
         this.customConfigs.set(custom.label, { ...custom });
         return true;
     }
@@ -243,7 +243,7 @@ export class ProviderFactory {
             // mesma precedência dos nativos acima. `custom.model` é o default de quem hospeda um
             // modelo só e nunca escolheu nada por categoria; 'default' é o placeholder aceito por
             // servidores de modelo único (llamafile serve o .gguf carregado e ignora o campo).
-            return new OpenAIProvider(custom.apiKey || '', model || custom.model || 'default', custom.baseUrl, custom.label);
+            return new OpenAIProvider(custom.apiKey || '', model || custom.model || 'default', custom.baseUrl, custom.label, { thinking: custom.thinking });
         }
 
         // Ollama (padrão) ou fallback quando a key do provider alvo não está configurada.

@@ -143,12 +143,15 @@ export class OpenAIProvider implements ILLMProvider {
     private model: string;
     protected baseUrl: string;
     private label: string;
+    /** Issue 054 (D3): só provedores customizados recebem isto (ver CustomProviderConfig.thinking). */
+    private readonly thinking?: 'on' | 'off';
 
-    constructor(apiKey: string, model: string = 'gpt-4o', baseUrl: string = 'https://api.openai.com/v1', label?: string) {
+    constructor(apiKey: string, model: string = 'gpt-4o', baseUrl: string = 'https://api.openai.com/v1', label?: string, opts?: { thinking?: 'on' | 'off' }) {
         this.apiKey = apiKey;
         this.model = model;
         this.baseUrl = baseUrl;
         this.label = label || this.name;
+        this.thinking = opts?.thinking;
     }
 
     setModel(model: string): void { this.model = model; }
@@ -234,7 +237,10 @@ export class OpenAIProvider implements ILLMProvider {
                         tools: tools ? tools.map(t => ({
                             type: 'function',
                             function: { name: t.name, description: t.description, parameters: t.parameters }
-                        })) : undefined
+                        })) : undefined,
+                        // Issue 054 (D3): só quando o operador declarou `thinking` no provedor. Nunca por
+                        // padrão — a API oficial da OpenAI pode recusar parâmetro desconhecido.
+                        ...(this.thinking ? { chat_template_kwargs: { enable_thinking: this.thinking === 'on' } } : {}),
                     })
                 });
             } catch (err) {

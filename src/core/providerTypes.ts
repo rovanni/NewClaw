@@ -280,6 +280,14 @@ export interface CustomProviderConfig {
     model?: string;
     /** Política de substituição deste provider. Ausente = o padrão global (`SUBSTITUTION_POLICY`). */
     substitutionPolicy?: SubstitutionPolicy;
+    /**
+     * Issue 054 (D3) — raciocínio ("thinking") do modelo servido por este endpoint. `'off'` pede ao
+     * servidor para não gerar raciocínio (`chat_template_kwargs.enable_thinking=false`, o parâmetro dos
+     * templates Qwen no llama-server). Ausente = comportamento padrão do modelo. Escolha DO OPERADOR
+     * (Soberania da Configuração): troca qualidade possível por velocidade — num 27B local, o plano
+     * levou 23 s sem raciocínio e 218 s com, sem chegar a responder.
+     */
+    thinking?: 'on' | 'off';
 }
 
 export interface ChatOptions {
