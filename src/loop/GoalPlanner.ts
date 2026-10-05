@@ -13,6 +13,7 @@
 
 import path from 'path';
 import { createLogger } from '../shared/AppLogger';
+import { errorMessage } from '../shared/errors';
 import { ProviderFactory, LLMMessage } from '../core/ProviderFactory';
 import { computeDynamicTimeout } from '../shared/dynamicTimeout';
 import { ReflectionMemory } from '../memory/ReflectionMemory';
@@ -1131,7 +1132,16 @@ export class GoalPlanner {
                 }));
 
             return { steps, strategy: String(parsed.strategy ?? ''), adjustedRoadmap, successCriteria };
-        } catch {
+        } catch (err) {
+            // Issue 056 (F1): antes o erro era engolido em silêncio e o log só dizia "plan empty", com os
+            // primeiros 120 chars — que num JSON válido no início não explicam nada (05/10/2026: modelo local,
+            // plano completo e plano mínimo descartados, goal caiu no plano direto e terminou em falso
+            // sucesso). O MOTIVO do parse e o FIM da resposta (onde costuma estar o texto extra ou o corte).
+            const raw = String(content ?? '');
+            log.warn(
+                `[GoalPlanner] plan JSON inválido: ${errorMessage(err).slice(0, 160)}` +
+                ` | chars=${raw.length} | fim="${raw.slice(-200).replace(/\s+/g, ' ')}"`
+            );
             return { steps: [], strategy: '' };
         }
     }
@@ -1241,11 +1251,14 @@ Regras:
     // ── Fallbacks sem LLM ─────────────────────────────────────────────────────
 
     private fallbackPlan(goal: Goal): PlanResult {
-        // Plano minimalista: passa o objetivo direto para o AgentLoop sem decomposição
+        // Plano minimalista: passa o objetivo direto para o AgentLoop sem decomposição.
+        // Issue 056 (F2): o objetivo vai INTEIRO. Cortado em 100 chars, a tarefa da etapa terminava no meio do
+        // pedido (05/10/2026: "...pasta aulas/ do workspace: u") — o modelo fez só a parte que estava na tarefa
+        // (listar e ler), não gravou o arquivo pedido, e o goal foi dado como concluído.
         return {
             steps: [{
                 id: 'step_direct',
-                description: `Executar diretamente: ${goal.objective.slice(0, 100)}`,
+                description: `Executar diretamente: ${goal.objective}`,
                 status: 'pending',
                 fallbackSteps: [],
             }],
