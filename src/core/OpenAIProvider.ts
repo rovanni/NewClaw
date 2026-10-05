@@ -93,6 +93,35 @@ function toOpenAIContent(m: LLMMessage): unknown {
     ];
 }
 
+/**
+ * Issue 054 — mensagens `system` fora do início da conversa.
+ *
+ * O AgentLoop insere avisos `system` no meio do turno (falha de ferramenta, trava de segurança,
+ * dicas — 33 pontos). A nuvem do Ollama aceita; templates de chat estritos de servidores
+ * OpenAI-compatíveis rejeitam. Observado em 05/10/2026 com um modelo local (Bonsai 27B, família Qwen,
+ * `llama-server`): HTTP 500 "Jinja Exception: System message must be at the beginning" — com isso,
+ * nenhum turno com ferramenta funcionava offline. O mesmo template rejeita DUAS mensagens `system`
+ * seguidas no início (a segunda não é `loop.first`).
+ *
+ * Tradução de formato, não de conteúdo (ARCHITECTURE.md, princípio 7): as `system` iniciais viram uma
+ * só; uma `system` depois que a conversa começou vai como `user` marcada como instrução do sistema, NA
+ * MESMA POSIÇÃO — a ordem dos fatos do turno não muda. O Ollama (OllamaProvider) não passa por aqui.
+ */
+export function normalizeSystemMessages(messages: LLMMessage[]): LLMMessage[] {
+    let i = 0;
+    const leading: string[] = [];
+    while (i < messages.length && messages[i].role === 'system') {
+        if (messages[i].content) leading.push(messages[i].content);
+        i++;
+    }
+    const out: LLMMessage[] = leading.length > 0 ? [{ role: 'system', content: leading.join('\n\n') }] : [];
+    for (; i < messages.length; i++) {
+        const m = messages[i];
+        out.push(m.role === 'system' ? { ...m, role: 'user', content: `[Instrução do sistema] ${m.content}` } : m);
+    }
+    return out;
+}
+
 /** Assinatura dos primeiros bytes em base64. Sem dependência externa e sem chute por extensão. */
 function sniffImageMime(b64: string): string {
     if (b64.startsWith('/9j/')) return 'image/jpeg';
@@ -201,7 +230,7 @@ export class OpenAIProvider implements ILLMProvider {
                         // Imagem viaja dentro de `content` (ver toOpenAIContent) — um campo
                         // `images` solto seria ignorado pelo servidor, e a visão responderia
                         // sobre uma imagem que nunca chegou.
-                        messages: messages.map(m => ({ ...m, images: undefined, content: toOpenAIContent(m) })),
+                        messages: normalizeSystemMessages(messages).map(m => ({ ...m, images: undefined, content: toOpenAIContent(m) })),
                         tools: tools ? tools.map(t => ({
                             type: 'function',
                             function: { name: t.name, description: t.description, parameters: t.parameters }
