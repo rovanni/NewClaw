@@ -3557,6 +3557,21 @@ export class AgentLoop {
      * existia no bloco original (aborta o turno, cai na síntese); `proceed` replica a queda
      * (com ou sem a extensão de +2 steps) para a chamada de LLM logo abaixo no `while`.
      */
+    /**
+     * Issue 052 (Sprint 2) — até quantos chars de contexto (todas as mensagens do turno) cabem na
+     * janela do modelo com folga para a resposta. `OLLAMA_NUM_CTX` é o `num_ctx` que o OllamaProvider
+     * envia em toda chamada (padrão 32.768 tokens); ~3 chars/token em pt-BR, a mesma conversão do teto
+     * do juiz de grounding (`GROUNDING_MAX_PROMPT_CHARS`, ObserverValidator); 25% da janela reservados
+     * para a saída do modelo (que pode trazer o conteúdo inteiro de um `write`). Padrão: ~73,7 mil chars.
+     */
+    static contextCapacityChars(): number {
+        const CHARS_PER_TOKEN = 3;
+        const OUTPUT_RESERVE = 0.25;
+        const parsed = parseInt(process.env.OLLAMA_NUM_CTX || '32768', 10);
+        const numCtx = Number.isFinite(parsed) && parsed > 0 ? parsed : 32768;
+        return Math.floor(numCtx * CHARS_PER_TOKEN * (1 - OUTPUT_RESERVE));
+    }
+
     private checkContextGrowthGuard(
         cycleHistory: Array<{ step: number; tool: string; input: string; status: string }>,
         userText: string,
@@ -3570,28 +3585,22 @@ export class AgentLoop {
         initialContextChars: number,
         loopMessages: LLMMessage[],
     ): ContextGrowthGuardResult {
-        // Context Growth Guard — two independent limits:
-        //   ratio    : relative growth, only meaningful when baseline is large enough.
-        //              A small initial context (fresh session) can triple in size after one
-        //              legitimate file read; ratio alone would produce false positives.
-        //   absolute : hard ceiling on chars added, regardless of baseline size.
-        // MIN_RATIO_BASELINE prevents ratio guard from firing on short initial contexts.
-        const MIN_RATIO_BASELINE = 4_000;   // chars; below this, only absolute limit applies
-        const CONTEXT_RATIO_LIMIT = 2.5;    // 150 % growth cap (when baseline is substantial)
-        const CONTEXT_ABSOLUTE_DELTA = 16_000; // ~4 000 tokens of added content
+        // Context Growth Guard (issue 052, Sprint 2) — UM limite, derivado da janela real do modelo.
+        //
+        // Antes: dois números sem derivação desde a 1ª versão (502dca9) — crescimento de 2,5× o contexto
+        // inicial e +16.000 chars acrescentados (~4 mil tokens). Produção, 01–03/10/2026: 10 de 17
+        // disparos de trava depois do S298 foram estes; os de absolute_limit com ~30 mil chars no total,
+        // folgados numa janela de 32.768 tokens. O risco real que a trava evita é o contexto passar da
+        // janela (`num_ctx`), onde o servidor descarta o início em silêncio — então o limite é ela.
         const currentContextChars = getContextChars();
+        const capacity = AgentLoop.contextCapacityChars();
         const contextGrowthRatio = initialContextChars > 0 ? currentContextChars / initialContextChars : 1;
-        const useRatioGuard = initialContextChars >= MIN_RATIO_BASELINE;
-        const ratioTriggered = useRatioGuard && contextGrowthRatio > CONTEXT_RATIO_LIMIT;
-        const absoluteTriggered = currentContextChars > initialContextChars + CONTEXT_ABSOLUTE_DELTA;
-        if ((ratioTriggered || absoluteTriggered) && stepCount > 1 && !dedupAbort) {
-            const triggerReason = ratioTriggered ? 'ratio_limit' : 'absolute_limit';
-            const triggerValue  = ratioTriggered ? contextGrowthRatio : (currentContextChars - initialContextChars);
-            const threshold     = ratioTriggered ? CONTEXT_RATIO_LIMIT : CONTEXT_ABSOLUTE_DELTA;
+        if (currentContextChars > capacity && stepCount > 1 && !dedupAbort) {
+            const triggerReason = 'capacity_limit';
             log.warn(
                 `[${this.ts()}] [SAFETY-GUARD] type=context_growth reason=${triggerReason} ` +
-                `value=${triggerValue.toFixed(2)} threshold=${threshold} ` +
-                `initial=${initialContextChars} current=${currentContextChars}`
+                `value=${currentContextChars} threshold=${capacity} ` +
+                `initial=${initialContextChars} current=${currentContextChars} ratio=${contextGrowthRatio.toFixed(2)}`
             );
             // Context-aware abort message: when the last tool was 'read', the agent loaded
             // a file but performed no write/edit. Prevent the model from claiming write success.

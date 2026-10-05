@@ -583,7 +583,7 @@ MARCO ATUAL A SER RESOLVIDO: ${activeMilestone}\n`
         : '';
 
     // Dica específica quando o blocker é estouro de contexto por leitura de arquivo grande
-    const ratioLimitHint = /ratio.?limit|estouro.*contexto|context.*overflow|contexto.*cresceu|limite.*técnico.*sistema|proporção.*contexto|html.*não.*foi.*criado|não.*gerou.*html|apenas.*txt|apenas.*texto.*criado|arquivo.*html.*ausente|entregável.*não.*produzido/i.test(blocker.description)
+    const ratioLimitHint = /ratio.?limit|capacity.?limit|estouro.*contexto|context.*overflow|contexto.*cresceu|limite.*técnico.*sistema|proporção.*contexto|html.*não.*foi.*criado|não.*gerou.*html|apenas.*txt|apenas.*texto.*criado|arquivo.*html.*ausente|entregável.*não.*produzido/i.test(blocker.description)
         ? `\n⚡ DICA CRÍTICA (ESTOURO DE CONTEXTO): A estratégia anterior falhou porque ler o arquivo inteiro no contexto excedeu o limite de proporção (ratio_limit). ` +
           `Para modificar arquivos HTML/texto grandes (> 8KB), use exec_command com Python/sed DIRETO — nunca read + write:\n` +
           `  Exemplo: exec_command → python3 -c "c=open('workspace/arquivo.html').read(); open('workspace/arquivo.html','w').write('<div>CAPA</div>\\\\n'+c)"\n` +
