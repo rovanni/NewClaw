@@ -63,6 +63,15 @@ const EMPTY_CONTEXT: StepCognitiveContext = {
 
 const NEXT_STEP = 'Você pode reformular o pedido ou fornecer mais informações para eu tentar de outra forma.';
 
+/**
+ * Issue 055 — quando o último bloqueio é do AMBIENTE (`environment_limit`: o modelo de linguagem ou
+ * outro serviço não respondeu), reformular o pedido não ajuda; o próximo passo é tentar de novo.
+ * Mapeamento por valor de enum já decidido por quem registrou o bloqueio — não interpreta texto.
+ */
+const NEXT_STEP_BY_KIND: Partial<Record<string, string>> = {
+    environment_limit: 'Isso não depende do seu pedido: tente de novo quando o serviço voltar a responder.',
+};
+
 const baseName = (p: string): string => (p.split(/[\\/]/).pop() ?? p).toLowerCase();
 
 const isAbsolutePath = (p: string): boolean => /^(?:[a-zA-Z]:[\\/]|[\\/])/.test(p);
@@ -157,7 +166,7 @@ export class GracefulDeliveryOrchestrator {
         if (blockerText && (!reasonText || !reasonText.includes(blockerText))) {
             lines.push('', `**O que faltou:** ${blockerText}`);
         }
-        lines.push('', NEXT_STEP);
+        lines.push('', (lastBlocker && NEXT_STEP_BY_KIND[lastBlocker.kind]) || NEXT_STEP);
 
         log.info(
             `[GracefulDelivery] goal=${goal.id} delivered=${delivered.length} undelivered=${undelivered.length}` +

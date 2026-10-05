@@ -1159,6 +1159,10 @@ export class GoalExecutionLoop {
             this.goalStore.recordBlocker(goal.id, cycleResult.blocker);
         }
         this.goalStore.setStatus(goal.id, 'failed');
+        // Issue 055: recordBlocker gravou no store; a mensagem abaixo lê `goal.blockers` — sem reload,
+        // um bloqueio registrado AGORA (falha na 1ª tentativa, sem retry antes) não aparecia nela.
+        // Mesmo padrão da issue 050.
+        goal = this.goalStore.getById(goal.id) ?? goal;
         this.recordFailedStrategy(step, cycleResult.output ?? 'step falhou', goal.id, state);
         this.updateProgressModel(step, 'failed', cycleResult.output, state);
         // cycleResult.output carrega o motivo específico quando existe (ex: dep install falhou →
