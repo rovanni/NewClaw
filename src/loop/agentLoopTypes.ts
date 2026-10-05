@@ -194,6 +194,19 @@ export interface ProcessedResult {
      * recebe o estado do juiz como fato, em vez de um segundo avaliador ter de interpretar a prosa.
      */
     groundingBlock?: GroundingBlock;
+    /**
+     * Presente quando o turno terminou porque o provedor de LLM não respondeu (timeout ou erro, depois
+     * de toda a cadeia de fallback) e `text` é a mensagem fixa de indisponibilidade, não uma resposta
+     * (issue 053). Mesmo motivo de `groundingBlock`: num goal essa frase virava o output do step.
+     */
+    providerFailure?: ProviderFailure;
+}
+
+/** O provedor de LLM não respondeu ao turno (issue 053). */
+export interface ProviderFailure {
+    status: 'timeout' | 'error';
+    /** `fallbackReason` do ProviderFactory, quando houver (ex.: 'unavailable', 'timeout', 'error'). */
+    reason?: string;
 }
 
 /** Veredito do juiz de groundedness que bloqueou a entrega (issue 049). */

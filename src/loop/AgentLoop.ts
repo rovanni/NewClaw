@@ -47,7 +47,7 @@ import { MultiLayerRetriever } from '../memory/MultiLayerRetriever';
 
 import {
     ToolResult, ToolExecutor, LoopMetrics, ChannelContext,
-    AgentLoopConfig, ProcessedResult, ContextAwareTool, toolResultForModel, GroundingBlock
+    AgentLoopConfig, ProcessedResult, ContextAwareTool, toolResultForModel, GroundingBlock, ProviderFailure
 } from './agentLoopTypes';
 import { buildMasterPrompt } from './agentPrompts';
 import { parseLLMResponse, extractFinalText } from './agentOutputParser';
@@ -446,6 +446,8 @@ export interface TurnState {
     semanticStatus?: SemanticStatusEvent;
     /** Veredito que bloqueou a ÚLTIMA resposta comprometida neste turno (issue 049) — `run()` o devolve em `ProcessedResult`. */
     groundingBlock?: GroundingBlock;
+    /** O provedor de LLM não respondeu e o turno terminou com a mensagem fixa (issue 053) — `run()` o devolve. */
+    providerFailure?: ProviderFailure;
 }
 
 export class AgentLoop {
@@ -1333,12 +1335,17 @@ export class AgentLoop {
         });
         try {
             const result = await this.runWithTools(conversationId, userText, 0, userId, context, options);
-            // Issue 049: o bloqueio de grounding sai como fato estruturado, não só como a prosa de `text`.
-            const groundingBlock = this.activeTurnStates.get(conversationId)?.groundingBlock;
-            if (!groundingBlock) return result;
+            // Issues 049/053: bloqueio de grounding e falha do provedor saem como fato estruturado, não só
+            // como a prosa de `text`.
+            const turnState = this.activeTurnStates.get(conversationId);
+            const facts = {
+                ...(turnState?.groundingBlock ? { groundingBlock: turnState.groundingBlock } : {}),
+                ...(turnState?.providerFailure ? { providerFailure: turnState.providerFailure } : {}),
+            };
+            if (Object.keys(facts).length === 0) return result;
             return typeof result === 'string'
-                ? { text: result, groundingBlock }
-                : { ...result, groundingBlock };
+                ? { text: result, ...facts }
+                : { ...result, ...facts };
         } finally {
             // S229: o comentário anterior aqui ("movido para clearActiveTurn via MessageBus para
             // suportar Outbox") não corresponde ao código real — WebChannelAdapter/chat.ts (onde
@@ -3914,6 +3921,7 @@ export class AgentLoop {
                         timeoutMsg = `O modelo demorou mais que o esperado ao finalizar. O arquivo foi criado parcialmente em: ${filePaths.join(', ')} — você pode pedir para continuar.`;
                     }
                 }
+                this.getTurnState(conversationId).providerFailure = { status: 'timeout', reason: response.fallbackReason };
                 traceManager.completeTrace(trace, 'timeout', timeoutMsg);
                 this.persistTrace(trace, stepCount, 'timeout', timeoutMsg, channelContext);
                 // removed: this.activeTurns.delete(conversationId);
@@ -3923,6 +3931,7 @@ export class AgentLoop {
             if (response.status === 'error') {
                 log.warn(`[${this.ts()}] [FALLBACK] Provider error at step ${stepCount}: ${response.fallbackReason}`);
                 move('FAIL', { step: stepCount, status: response.status });
+                this.getTurnState(conversationId).providerFailure = { status: 'error', reason: response.fallbackReason };
                 traceManager.completeTrace(trace, 'error', response.fallbackMessage);
                 this.persistTrace(trace, stepCount, 'error', response.fallbackMessage || 'Error', channelContext);
                 // removed: this.activeTurns.delete(conversationId);

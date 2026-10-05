@@ -50,7 +50,7 @@ import { resolveInstallCommand } from './planning/resolveInstallCommand';
 import { inferExpectedExtensions, isExpectedDeliverableFile } from './planning/inferExpectedExtensions';
 import { MIN_DELIVERABLE_SIZE, resolveArtifactPathFromEvidence } from './planning/artifactContract';
 import { GOAL_LIMITS } from './GoalLimits';
-import { ChannelContext, ContextAwareTool, GroundingBlock } from './agentLoopTypes';
+import { ChannelContext, ContextAwareTool, GroundingBlock, ProviderFailure } from './agentLoopTypes';
 import type { EvidenceItem } from './ObserverValidator';
 import type { SessionManager } from '../session/SessionManager';
 import { parseSessionKey } from '../session/SessionKeyFactory';
@@ -2330,6 +2330,51 @@ export class GoalExecutionLoop {
     }
 
     /**
+     * Issue 053 — o provedor de LLM não respondeu ao sub-turno de um step.
+     *
+     * Attempt 'failure' SEM output (a frase de indisponibilidade nunca é produto do step). Primeira vez
+     * neste step: retry ('partial', consome retryBudget) — tolera uma falha passageira. Se o attempt
+     * anterior DESTE step também foi falha de provedor: 'failed' com `environment_limit`, que encerra o
+     * goal com a mensagem honesta. Replanejar não adianta: o planejador, o validador e o próximo step
+     * dependem do mesmo provedor. `userMessage` (a frase do ProviderFactory, já voltada ao usuário) entra
+     * como fato da mensagem de falha (`output` do CycleResult), nunca no attempt.
+     */
+    private handleProviderFailure(
+        goal: Goal,
+        step: PlanStep,
+        cycle: number,
+        startMs: number,
+        failure: ProviderFailure,
+        userMessage: string,
+    ): CycleResult {
+        const ERROR_PREFIX = 'provider_unavailable:';
+        const previous = [...goal.attempts].reverse().find(a => a.planStepId === step.id);
+        const repeated = previous?.result === 'failure' && (previous.error ?? '').startsWith(ERROR_PREFIX);
+
+        this.recordFailedAttempt(goal, step, cycle, startMs, { error: `${ERROR_PREFIX}${failure.status}${failure.reason ? `:${failure.reason}` : ''}` });
+        log.warn(
+            `[PROVIDER-FAILURE] goal=${goal.id} step=${step.id} status=${failure.status} reason=${failure.reason ?? '-'}` +
+            ` repeated=${repeated} retryBudget=${goal.retryBudget}`
+        );
+
+        const blocker: GoalBlocker = {
+            kind: 'environment_limit',
+            toolName: step.toolName,
+            description: `O provedor de LLM não respondeu ao step '${(step.description ?? '').split(' [')[0].slice(0, 100)}' (${failure.status}${failure.reason ? `, ${failure.reason}` : ''})${repeated ? ' pela segunda vez seguida' : ''}.`,
+            userSummary: failure.status === 'timeout'
+                ? 'O modelo de linguagem demorou demais para responder.'
+                : 'O modelo de linguagem não respondeu (serviço indisponível ou limite de uso atingido).',
+            suggestedActions: ['Tentar de novo quando o provedor de LLM voltar a responder'],
+            detectedAt: Date.now(),
+        };
+
+        if (!repeated && goal.retryBudget > 0) {
+            return { outcome: 'partial', confidence: 0.2, blocker };
+        }
+        return { outcome: 'failed', confidence: 0.1, blocker, output: userMessage };
+    }
+
+    /**
      * ARCH-022: dispatch de step com `toolName` definido — via ToolRegistry + ProactiveRecovery.
      * Extraído do antigo bloco `if (step.toolName) { ... }` de `executeStep()`, sem mudança de
      * lógica.
@@ -2596,6 +2641,14 @@ export class GoalExecutionLoop {
         // aqui, sem passar pelo validador semântico.
         if (typeof response !== 'string' && response.groundingBlock) {
             return { earlyReturn: true, cycleResult: this.handleGroundingBlock(goal, step, cycle, startMs, response.groundingBlock) };
+        }
+
+        // Issue 053: o provedor de LLM não respondeu (depois de toda a cadeia de fallback) e `text` é a
+        // mensagem fixa de indisponibilidade. Antes ela virava o output do step com 'success' — com a
+        // nuvem em HTTP 429, um goal queimou 12 ciclos e 5 replans em 1,3 s, cada step "concluído" com a
+        // frase de indisponibilidade do ProviderFactory.
+        if (typeof response !== 'string' && response.providerFailure) {
+            return { earlyReturn: true, cycleResult: this.handleProviderFailure(goal, step, cycle, startMs, response.providerFailure, text) };
         }
 
         // Sprint 0.10 (achado L22): correlaciona o attempt com o ExecutionTrace real do
