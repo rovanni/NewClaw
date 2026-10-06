@@ -186,7 +186,7 @@
           </div>
           <div class="node-name">${esc(n.name || '')}</div>
           <div class="node-content">${esc((n.content||'').slice(0,120))}</div>
-          <div class="node-meta">${n.updated_at || ''}</div>
+          <div class="node-meta">${n.updated_at ? esc(new Date(n.updated_at).toLocaleString(newclawGetLang())) : ''}</div>
         </div>
       `).join('');
     }

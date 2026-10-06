@@ -555,7 +555,7 @@
     // === Voice Input ===
     function startVoiceInput() {
       const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-      if (!SR) { alert('Reconhecimento de voz não suportado. Use Chrome ou Edge.'); return; }
+      if (!SR) { alert(t('voice_input_unsupported')); return; }
       if (isListening) { recognition?.stop(); return; }
       recognition = new SR();
       recognition.lang = newclawGetLang(); recognition.interimResults = false; recognition.continuous = false;
@@ -1281,7 +1281,8 @@
       }
     }
 
-    window.addEventListener('newclaw-lang-changed', () => syncServerState());
+    // Issue 063: horários da lista e das mensagens seguem o idioma escolhido sem precisar recarregar.
+    window.addEventListener('newclaw-lang-changed', () => { syncServerState(); renderSidebar(); renderChat(); });
 
     async function syncServerState() {
       try {

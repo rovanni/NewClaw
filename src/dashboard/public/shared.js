@@ -17,6 +17,7 @@ const TRANSLATIONS = {
 
     // Chat status
     status_thinking: "Pensando...",
+    voice_input_unsupported: "Reconhecimento de voz não suportado neste navegador. Use Chrome ou Edge.",
     status_still_running: "Ainda processando — já faz {min} min. Clique em ■ para parar.",
     status_connection_lost: "⚠️ Conexão com o servidor perdida — tentando reconectar…",
     status_sending: "Enviando...",
@@ -757,6 +758,7 @@ const TRANSLATIONS = {
     
     // Chat status
     status_thinking: "Thinking...",
+    voice_input_unsupported: "Speech recognition is not supported in this browser. Use Chrome or Edge.",
     status_still_running: "Still working — {min} min so far. Click ■ to stop.",
     status_connection_lost: "⚠️ Lost connection to the server — trying to reconnect…",
     status_sending: "Sending...",
@@ -1495,6 +1497,7 @@ const TRANSLATIONS = {
 
     // Chat status
     status_thinking: "Pensando...",
+    voice_input_unsupported: "El reconocimiento de voz no es compatible con este navegador. Usa Chrome o Edge.",
     status_still_running: "Aún procesando — ya van {min} min. Haz clic en ■ para detener.",
     status_connection_lost: "⚠️ Conexión con el servidor perdida — intentando reconectar…",
     status_sending: "Enviando...",

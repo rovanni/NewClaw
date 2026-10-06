@@ -141,7 +141,16 @@ export class DashboardMemoryRepository {
 
     // ── Nodes ────────────────────────────────────────────────────────────────
 
+    /** Issue 063: datas de nó saem em ISO-8601 UTC (o SQLite grava UTC sem fuso — ver shared/sqliteTimestamp). */
+    private withIsoTimes<T extends { updated_at?: string; created_at?: string }>(row: T): T {
+        return { ...row, updated_at: sqliteUtcToIso(row.updated_at), ...(row.created_at !== undefined ? { created_at: sqliteUtcToIso(row.created_at) } : {}) } as T;
+    }
+
     listNodes(type?: string, limit: number = 50): NodePreview[] {
+        return this.listNodeRows(type, limit).map(r => this.withIsoTimes(r));
+    }
+
+    private listNodeRows(type?: string, limit: number = 50): NodePreview[] {
         const cap = Math.min(limit, 200);
         if (type) {
             return this.db.prepare(
@@ -164,7 +173,7 @@ export class DashboardMemoryRepository {
             'SELECT from_node, to_node, relation, weight FROM memory_edges WHERE from_node = ? OR to_node = ?'
         ).all(id, id) as EdgeRow[];
 
-        return { node, edges };
+        return { node: this.withIsoTimes(node as NodePreview & { created_at?: string }), edges };
     }
 
     createNode(id: string, type: string, name: string, content: string): void {
@@ -192,6 +201,10 @@ export class DashboardMemoryRepository {
 
     /** FTS or LIKE search on memory_nodes */
     searchNodes(q: string, ids?: string[]): NodePreview[] {
+        return this.searchNodeRows(q, ids).map(r => this.withIsoTimes(r));
+    }
+
+    private searchNodeRows(q: string, ids?: string[]): NodePreview[] {
         if (ids && ids.length > 0) {
             const placeholders = ids.map(() => '?').join(',');
             return this.db.prepare(

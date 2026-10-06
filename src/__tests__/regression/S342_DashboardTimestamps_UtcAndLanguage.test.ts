@@ -50,10 +50,25 @@ console.log('\n=== S342-2 — API do painel (repositório real, SQLite real) dev
     assert(Math.abs(new Date(conv.updated_at).getTime() - Date.now()) < 60_000, 'updated_at lido pelo navegador ≈ agora (não deslocado pelo fuso)', conv.updated_at);
 }
 
+console.log('\n=== S342-2b — nós de memória (lista, busca, detalhe) também saem com fuso ===');
+{
+    const db = new (Database as any)(':memory:');
+    initializeSchema(db);
+    const repo = new DashboardMemoryRepository(db);
+    repo.createNode('n_s342', 'fact', 'Lista de compras', 'arroz, feijão, café');
+    const iso = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+    const [listed] = repo.listNodes();
+    const found = repo.searchNodes('compras');
+    const detail = repo.getNodeWithEdges('n_s342');
+    assert(iso.test(listed.updated_at), 'listNodes: updated_at ISO UTC', listed);
+    assert(found.length > 0 && found.every(n => iso.test(n.updated_at)), 'searchNodes: updated_at ISO UTC', found);
+    assert(!!detail && iso.test(detail.node.updated_at), 'getNodeWithEdges: updated_at ISO UTC', detail?.node);
+}
+
 console.log("\n=== S342-3 — painel: nenhuma data/hora ou voz com 'pt-BR' fixo ===");
 {
     const pub = path.join(process.cwd(), 'src', 'dashboard', 'public');
-    const files = ['index.html', 'traces.html', path.join('config', 'views', 'BackupView.js')];
+    const files = ['index.html', 'traces.html', 'memory.html', path.join('config', 'views', 'BackupView.js')];
     for (const f of files) {
         const src = fs.readFileSync(path.join(pub, f), 'utf-8');
         assert(!/toLocale(Date|Time)?String\(\s*'pt-BR'/.test(src), `${f}: formatação de data/hora sem 'pt-BR' fixo`);
@@ -61,6 +76,10 @@ console.log("\n=== S342-3 — painel: nenhuma data/hora ou voz com 'pt-BR' fixo 
     const index = fs.readFileSync(path.join(pub, 'index.html'), 'utf-8');
     assert(/recognition\.lang = newclawGetLang\(\)/.test(index), 'ditado usa o idioma do painel');
     assert(/u\.lang = lang;/.test(index) && /const lang = newclawGetLang\(\);/.test(index), 'leitura em voz alta usa o idioma do painel');
+    assert(/alert\(t\('voice_input_unsupported'\)\)/.test(index) && !/Reconhecimento de voz não suportado\. Use Chrome/.test(index), 'aviso de ditado indisponível traduzido (sem texto fixo em pt-BR)');
+    assert(/newclaw-lang-changed', \(\) => \{ syncServerState\(\); renderSidebar\(\); renderChat\(\); \}/.test(index), 'trocar o idioma re-renderiza horários sem recarregar');
+    const memoryHtml = fs.readFileSync(path.join(pub, 'memory.html'), 'utf-8');
+    assert(/toLocaleString\(newclawGetLang\(\)\)/.test(memoryHtml), 'memória: data do nó formatada no idioma do painel (não texto cru do SQLite)');
     // Cache do navegador com horário adiantado pelo bug: sem ressincronização única, a hora certa (mais antiga)
     // nunca substituiria a errada — e mensagens novas do servidor deixariam de ser puxadas por horas.
     assert(/forceUtcResync \|\| serverUpdatedAt > \(local\.updatedAt \|\| 0\)/.test(index)
