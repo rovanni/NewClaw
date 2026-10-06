@@ -77,6 +77,7 @@ export function createProvidersRouter(ctx: DashboardContext): Router {
             available: true,
             hasKey: !!p.apiKey,
             model: p.model,
+            thinking: p.thinking,
         }));
 
         res.json({
@@ -142,8 +143,12 @@ export function createProvidersRouter(ctx: DashboardContext): Router {
         }
     });
 
+    // Issue 057 (G4): raciocínio do modelo do provedor customizado ('on' | 'off'); qualquer outro valor (inclusive
+    // vazio) = padrão do modelo (campo ausente). Ver CustomProviderConfig.thinking (issue 054, D3).
+    const parseThinking = (v: unknown): 'on' | 'off' | undefined => (v === 'on' || v === 'off' ? v : undefined);
+
     router.post('/providers/custom', (req: Request, res: Response) => {
-        const { label, baseUrl, apiKey, model } = req.body;
+        const { label, baseUrl, apiKey, model, thinking } = req.body;
         if (!label?.trim() || !baseUrl?.trim()) {
             return res.status(400).json({ success: false, error: 'label e baseUrl são obrigatórios' });
         }
@@ -157,6 +162,7 @@ export function createProvidersRouter(ctx: DashboardContext): Router {
             baseUrl: String(baseUrl).trim(),
             apiKey: apiKey ? String(apiKey) : undefined,
             model: model ? String(model).trim() : undefined,
+            thinking: parseThinking(thinking),
         };
         customProviders.push(entry);
         ctx.config.customProviders = customProviders;
@@ -178,7 +184,7 @@ export function createProvidersRouter(ctx: DashboardContext): Router {
     router.put('/providers/custom/:label', (req: Request, res: Response) => {
         const { label } = req.params;
         const name = String(label);
-        const { baseUrl, apiKey, model } = req.body;
+        const { baseUrl, apiKey, model, thinking } = req.body;
         if (!baseUrl?.trim()) {
             return res.status(400).json({ success: false, error: 'baseUrl é obrigatório' });
         }
@@ -194,6 +200,8 @@ export function createProvidersRouter(ctx: DashboardContext): Router {
             // propósito) — só undefined (campo nem enviado) preserva o que já estava salvo.
             apiKey: apiKey !== undefined ? (apiKey ? String(apiKey) : undefined) : customProviders[idx].apiKey,
             model: model !== undefined ? (model ? String(model).trim() : undefined) : customProviders[idx].model,
+            // Mesma regra de model: ausente no body preserva; enviado (inclusive vazio = padrão) substitui.
+            thinking: thinking !== undefined ? parseThinking(thinking) : customProviders[idx].thinking,
         };
         customProviders[idx] = updated;
         ctx.config.customProviders = customProviders;

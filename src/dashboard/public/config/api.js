@@ -114,11 +114,11 @@ export async function getCloudCatalog() {
   } catch { return []; }
 }
 
-export async function addCustomProvider({ label, baseUrl, apiKey, model }) {
+export async function addCustomProvider({ label, baseUrl, apiKey, model, thinking }) {
   return json(f('/api/providers/custom', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ label, baseUrl, apiKey, model }),
+    body: JSON.stringify({ label, baseUrl, apiKey, model, thinking }),
   }));
 }
 
@@ -128,11 +128,11 @@ export async function removeCustomProvider(label) {
 
 // apiKey ausente (undefined, não string vazia) preserva a chave já salva no servidor — deixar o
 // campo de senha em branco no formulário de edição significa "não mudar", não "apagar".
-export async function editCustomProvider(label, { baseUrl, apiKey, model }) {
+export async function editCustomProvider(label, { baseUrl, apiKey, model, thinking }) {
   return json(f(`/api/providers/custom/${encodeURIComponent(label)}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ baseUrl, apiKey, model }),
+    body: JSON.stringify({ baseUrl, apiKey, model, thinking }),
   }));
 }
 

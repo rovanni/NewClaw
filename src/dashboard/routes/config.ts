@@ -140,7 +140,7 @@ export function createConfigRouter(ctx: DashboardContext): Router {
                 modelRouter: ctx.config.modelRouter || {},
                 localModelsDir: ctx.config.localModelsDir || '',
                 localModelOptions: ctx.config.localModelOptions || {},
-                customProviders: (ctx.config.customProviders || []).map(p => ({ label: p.label, baseUrl: p.baseUrl, hasKey: !!p.apiKey, model: p.model })),
+                customProviders: (ctx.config.customProviders || []).map(p => ({ label: p.label, baseUrl: p.baseUrl, hasKey: !!p.apiKey, model: p.model, thinking: p.thinking })),
                 // Política (ENV, nunca guardada em config — lida ao vivo) + preferência (persistida).
                 // Wizard usa isto pra decidir se tenta o seletor nativo do SO sem precisar de uma
                 // sondagem própria a cada render — a sondagem real só acontece dentro da própria

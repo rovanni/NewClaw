@@ -1,3 +1,4 @@
+import type { CustomProviderConfig } from './providerTypes';
 export interface NewClawConfig {
     telegramBotToken: string;
     telegramAllowedUserIds: string[];
@@ -52,7 +53,8 @@ export interface NewClawConfig {
      *  a política for religada depois). Ausente = 'native' (tenta nativo quando a política permite
      *  — o comportamento padrão já estabelecido nas sprints de investigação). */
     directoryPickerPreference?: 'native' | 'web';
-    customProviders?: { label: string; baseUrl: string; apiKey?: string; model?: string }[];
+    /** Mesmo contrato do ProviderFactory (fonte única — antes era uma cópia à mão sem os campos novos, issue 057 G4). */
+    customProviders?: CustomProviderConfig[];
     modelRouter?: {
         chat?: string;
         code?: string;

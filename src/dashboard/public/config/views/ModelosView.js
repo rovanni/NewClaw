@@ -533,6 +533,14 @@ export function render(container) {
                 <label class="form-label">${t('ml_provider_model_optional')}</label>
                 <input type="text" class="form-input" id="ml-newProvModel" placeholder="${t('ml_optional_placeholder')}">
               </div>
+              <div class="form-group">
+                <label class="form-label" title="${t('ml_provider_thinking_hint')}">${t('ml_provider_thinking_label')}</label>
+                <select class="form-input" id="ml-newProvThinking" title="${t('ml_provider_thinking_hint')}">
+                  <option value="">${t('ml_provider_thinking_default')}</option>
+                  <option value="off">${t('ml_provider_thinking_off')}</option>
+                  <option value="on">${t('ml_provider_thinking_on')}</option>
+                </select>
+              </div>
             </div>
             <div style="display:flex;gap:8px;flex-wrap:wrap;">
               <button class="btn btn-ghost btn-sm" id="ml-testProvBtn">${t('ml_provider_test_btn')}</button>
@@ -1374,6 +1382,8 @@ function wireProviderOverview() {
     const baseUrl = document.getElementById('ml-newProvUrl')?.value.trim();
     const apiKeyRaw = document.getElementById('ml-newProvKey')?.value.trim();
     const model   = document.getElementById('ml-newProvModel')?.value.trim();
+    // Issue 057 (G4): '' = padrão do modelo (o servidor não grava o campo).
+    const thinking = document.getElementById('ml-newProvThinking')?.value || '';
     if (!label || !baseUrl) { showToast(t('ml_provider_fill_required'), 'error'); return; }
 
     const btn = document.getElementById('ml-addProvBtn');
@@ -1382,22 +1392,23 @@ function wireProviderOverview() {
       if (editingProviderLabel) {
         // Campo de senha em branco → apiKey undefined → PUT preserva a chave já salva
         // (ver editCustomProvider em api.js). Label não muda (é a chave do provider).
-        await editCustomProvider(editingProviderLabel, { baseUrl, apiKey: apiKeyRaw || undefined, model: model || undefined });
+        await editCustomProvider(editingProviderLabel, { baseUrl, apiKey: apiKeyRaw || undefined, model: model || undefined, thinking });
         cs.set('customProviders', (cs.get('customProviders') || []).map(p =>
           p.label === editingProviderLabel
-            ? { ...p, baseUrl, model: model || undefined, hasKey: apiKeyRaw ? true : p.hasKey }
+            ? { ...p, baseUrl, model: model || undefined, thinking: thinking || undefined, hasKey: apiKeyRaw ? true : p.hasKey }
             : p
         ));
         showToast(t('ml_provider_updated_toast', { label: editingProviderLabel }), 'success');
         stopEditingCustomProvider();
       } else {
-        await addCustomProvider({ label, baseUrl, apiKey: apiKeyRaw || undefined, model: model || undefined });
-        cs.set('customProviders', [...(cs.get('customProviders') || []), { label, baseUrl, model: model || undefined, hasKey: !!apiKeyRaw }]);
+        await addCustomProvider({ label, baseUrl, apiKey: apiKeyRaw || undefined, model: model || undefined, thinking: thinking || undefined });
+        cs.set('customProviders', [...(cs.get('customProviders') || []), { label, baseUrl, model: model || undefined, thinking: thinking || undefined, hasKey: !!apiKeyRaw }]);
         showToast(t('ml_provider_added_toast', { label }), 'success');
         document.getElementById('ml-newProvLabel').value = '';
         document.getElementById('ml-newProvUrl').value   = '';
         document.getElementById('ml-newProvKey').value   = '';
         document.getElementById('ml-newProvModel').value = '';
+        document.getElementById('ml-newProvThinking').value = '';
       }
     } catch (err) { showToast(t('ui_error_prefix') + ': ' + err.message, 'error'); }
     finally { btn.disabled = false; }
@@ -2566,6 +2577,8 @@ function startEditingCustomProvider(label) {
     if (keyInput) { keyInput.value = ''; keyInput.placeholder = p.hasKey ? t('ml_provider_key_unchanged_placeholder') : t('ml_optional_placeholder'); }
     const modelInput = document.getElementById('ml-newProvModel');
     if (modelInput) modelInput.value = p.model || '';
+    const thinkingInput = document.getElementById('ml-newProvThinking');
+    if (thinkingInput) thinkingInput.value = p.thinking || '';
 
     const summary = document.getElementById('ml-addProvSummary');
     if (summary) summary.textContent = t('ml_edit_provider_title', { label: p.label });
@@ -2591,6 +2604,8 @@ function stopEditingCustomProvider() {
     if (keyInput) { keyInput.value = ''; keyInput.placeholder = t('ml_optional_placeholder'); }
     const modelInput = document.getElementById('ml-newProvModel');
     if (modelInput) modelInput.value = '';
+    const thinkingInput = document.getElementById('ml-newProvThinking');
+    if (thinkingInput) thinkingInput.value = '';
 
     const summary = document.getElementById('ml-addProvSummary');
     if (summary) summary.textContent = t('ml_add_provider_title');
