@@ -6,6 +6,7 @@
  */
 
 import type Database from 'better-sqlite3';
+import { sqliteUtcToIso } from '../shared/sqliteTimestamp';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -89,9 +90,11 @@ export class DashboardMemoryRepository {
      * provider='web' é o que de fato corresponde a "todo o histórico do chat web".
      */
     listWebConversations(): ConvRow[] {
-        return this.db.prepare(
+        const rows = this.db.prepare(
             "SELECT id, user_id, provider, created_at, updated_at FROM conversations WHERE provider = 'web' ORDER BY updated_at DESC"
         ).all() as ConvRow[];
+        // Issue 063: datas do SQLite são UTC sem fuso — entregar ISO-8601 com 'Z' para o cliente não ler como local.
+        return rows.map(r => ({ ...r, created_at: sqliteUtcToIso(r.created_at), updated_at: sqliteUtcToIso(r.updated_at) }));
     }
 
     exportAllConversations(): { conversations: unknown[]; messages: unknown[] } {
@@ -116,7 +119,7 @@ export class DashboardMemoryRepository {
                     if (Array.isArray(parsed)) attachments = parsed;
                 } catch { /* JSON malformado — trata como sem anexo */ }
             }
-            return { role: r.role, content: r.content, created_at: r.created_at, attachments };
+            return { role: r.role, content: r.content, created_at: sqliteUtcToIso(r.created_at), attachments };
         });
     }
 

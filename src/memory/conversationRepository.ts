@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import { Message } from './memoryTypes';
 import { createLogger } from '../shared/AppLogger';
+import { sqliteUtcToIso } from '../shared/sqliteTimestamp';
 import { serializeAttachment, type ResponseAttachment } from '../channels/ChannelAdapter';
 const log = createLogger('ConversationRepository');
 
@@ -10,7 +11,7 @@ export function getOrCreateConversation(db: Database.Database, userId: string): 
     ).get(userId) as { id: string; updated_at: string } | undefined;
 
     if (existing) {
-        const lastUpdate = new Date(existing.updated_at.replace(' ', 'T') + 'Z').getTime();
+        const lastUpdate = new Date(sqliteUtcToIso(existing.updated_at)).getTime();
         if ((Date.now() - lastUpdate) > 4 * 60 * 60 * 1000) {
             return createNewConversation(db, userId);
         }

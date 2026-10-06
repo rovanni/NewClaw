@@ -539,10 +539,12 @@
       if (!ttsEnabled || !('speechSynthesis' in window) || !text) return;
       window.speechSynthesis.cancel();
       const u = new SpeechSynthesisUtterance(text);
-      u.lang = 'pt-BR'; u.rate = 1.0;
+      // Issue 063: voz no idioma escolhido no painel (pt-BR/en-US/es-ES), não sempre pt-BR.
+      const lang = newclawGetLang();
+      u.lang = lang; u.rate = 1.0;
       const voices = window.speechSynthesis.getVoices();
-      const ptVoice = voices.find(v => v.lang.startsWith('pt'));
-      if (ptVoice) u.voice = ptVoice;
+      const langVoice = voices.find(v => v.lang === lang) || voices.find(v => v.lang.startsWith(lang.slice(0, 2)));
+      if (langVoice) u.voice = langVoice;
       window.speechSynthesis.speak(u);
     }
     if ('speechSynthesis' in window) {
@@ -556,7 +558,7 @@
       if (!SR) { alert('Reconhecimento de voz não suportado. Use Chrome ou Edge.'); return; }
       if (isListening) { recognition?.stop(); return; }
       recognition = new SR();
-      recognition.lang = 'pt-BR'; recognition.interimResults = false; recognition.continuous = false;
+      recognition.lang = newclawGetLang(); recognition.interimResults = false; recognition.continuous = false;
       recognition.onstart = () => {
         isListening = true;
         document.getElementById('listeningBar').classList.add('active');
@@ -898,7 +900,7 @@
         return;
       }
       const rows = conv.messages.map((m, idx) => {
-        const time = new Date(m.timestamp).toLocaleTimeString('pt-BR', {hour:'2-digit',minute:'2-digit'});
+        const time = new Date(m.timestamp).toLocaleTimeString(newclawGetLang(), {hour:'2-digit',minute:'2-digit'});
         const content = md(m.content);
         const attachHtml = (m.attachments || []).map((a, ai) => {
           const icon = a.type === 'photo' ? '🖼️' : a.type === 'audio' ? '🎵' : `<span class="attach-tag mono">${fileExt(a.fileName)}</span>`;
@@ -1412,7 +1414,7 @@
       return out;
     }
     function esc(t) { const d=document.createElement('div'); d.textContent=t; return d.innerHTML; }
-    function fmtTime(ts) { if(!ts) return ''; const d=new Date(ts),n=new Date(); return d.toDateString()===n.toDateString() ? d.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}) : d.toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'}); }
+    function fmtTime(ts) { if(!ts) return ''; const d=new Date(ts),n=new Date(); return d.toDateString()===n.toDateString() ? d.toLocaleTimeString(newclawGetLang(),{hour:'2-digit',minute:'2-digit'}) : d.toLocaleDateString(newclawGetLang(),{day:'2-digit',month:'2-digit'}); }
     function showToast(msg) {
       let toast = document.getElementById('newclawToast');
       if (!toast) {

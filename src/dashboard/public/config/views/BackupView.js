@@ -7,7 +7,7 @@ import { guideBox } from '../app.js';
 
 function fmtDate(iso) {
   if (!iso) return '—';
-  return new Date(iso).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
+  return new Date(iso).toLocaleString(newclawGetLang(), { dateStyle: 'short', timeStyle: 'short' });
 }
 
 function esc(str) {
