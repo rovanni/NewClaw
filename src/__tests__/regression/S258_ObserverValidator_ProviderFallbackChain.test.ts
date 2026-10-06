@@ -73,7 +73,9 @@ console.log('\n=== S258-1 — estrutural: nem validate() nem validateGrounding()
     const bodyValidate = source.slice(startValidate, endValidate);
     assert(!/\.getProviderWithModel\(/.test(bodyValidate), 'validate() não CHAMA mais getProviderWithModel (menção em comentário é esperada)');
     assert(/this\.providerFactory\.chatWithFallback\(/.test(bodyValidate), 'validate() chama chatWithFallback');
-    assert(/this\.observerModel/.test(bodyValidate), 'validate() ainda repassa observerModel (como modelOverride, não mais preso a getProviderWithModel)');
+    // Atualizado DE PROPÓSITO na issue 057 (G1): o modelo passa por effectiveModel, que devolve o observerModel
+    // configurado e só aplica o padrão de nuvem quando o provedor padrão é o Ollama (S332).
+    assert(/this\.(observerModel|effectiveModel)/.test(bodyValidate), 'validate() ainda repassa o modelo do observer (como modelOverride, não mais preso a getProviderWithModel)');
 
     const startGrounding = source.indexOf('async validateGrounding(');
     const endGrounding = source.indexOf('\n    /**\n     * Validação ESTRUTURAL');

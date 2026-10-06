@@ -1,6 +1,6 @@
 /**
  * ObserverValidator — LLM-based post-execution quality checker
- * Uses a fast model (qwen3.5:cloud) to validate responses
+ * Uses OBSERVER_MODEL (default: qwen3.5:cloud only when the default provider is Ollama) to validate responses
  * Only runs when tools are executed, not for simple conversations
  */
 
@@ -337,9 +337,22 @@ export class ObserverValidator {
     private observerModel: string;
     private providerFactory: ProviderFactory;
 
-    constructor(providerFactory: ProviderFactory, observerModel: string = process.env.OBSERVER_MODEL || 'qwen3.5:cloud') {
+    constructor(providerFactory: ProviderFactory, observerModel: string = process.env.OBSERVER_MODEL || '') {
         this.providerFactory = providerFactory;
         this.observerModel = observerModel;
+    }
+
+    /**
+     * Issue 057 (G1) — mesmo padrão da issue 054 (D2) para os perfis: sem OBSERVER_MODEL configurado, o
+     * nome de nuvem 'qwen3.5:cloud' só vale quando o provedor padrão é o Ollama, para quem ele existe.
+     * Para outro provedor (endpoint local OpenAI-compatível, Gemini...), sem modelo = o do provedor
+     * (issue 019). Visto em 05/10/2026: o juiz de grounding pedia 'qwen3.5:cloud' ao llama-server local.
+     * Modelo configurado (OBSERVER_MODEL, setModel) nunca é tocado.
+     */
+    private get effectiveModel(): string {
+        if (this.observerModel) return this.observerModel;
+        const provider = typeof this.providerFactory?.getDefaultProvider === 'function' ? this.providerFactory.getDefaultProvider() : 'ollama';
+        return provider === 'ollama' ? 'qwen3.5:cloud' : '';
     }
 
     setModel(model: string): void {
@@ -439,7 +452,7 @@ export class ObserverValidator {
             // Issue 038: mesmo perfil 'validacao' já usado pro timeout externo — reasoningIntensive
             // aplica o mesmo fator (4×) ao orçamento interno de "thinking" do provider, evitando
             // que o juiz de grounding seja abortado por raciocínio legítimo (ver ChatFallbackOptions).
-            const fallbackResult = await this.providerFactory.chatWithFallback(messages, undefined, undefined, orcamento.timeoutMs, signal, this.observerModel, { reasoningIntensive: true, diag: { component: 'ObserverValidator', role: 'observer', phase: 'quality' } });
+            const fallbackResult = await this.providerFactory.chatWithFallback(messages, undefined, undefined, orcamento.timeoutMs, signal, this.effectiveModel, { reasoningIntensive: true, diag: { component: 'ObserverValidator', role: 'observer', phase: 'quality' } });
             const elapsed = Date.now() - startTime;
 
             // If the signal aborted while the LLM was running, discard the result silently.
@@ -717,7 +730,7 @@ export class ObserverValidator {
             // Issue 038: mesmo motivo do outro call site de grounding acima — reasoningIntensive
             // evita que o juiz seja abortado pelo teto de "thinking" pensado para chat curto.
             const fallbackResult = await this.providerFactory.chatWithFallback(
-                [{ role: 'user', content: prompt }], undefined, undefined, orcamento.timeoutMs, signal, limits?.model ?? this.observerModel,
+                [{ role: 'user', content: prompt }], undefined, undefined, orcamento.timeoutMs, signal, limits?.model ?? this.effectiveModel,
                 { reasoningIntensive: true, diag: { component: 'ObserverValidator', role: 'observer', phase: 'grounding' } },
             );
 
@@ -886,7 +899,7 @@ export class ObserverValidator {
             v: 1,
             goalId: traceCtx.goalId, stepId: traceCtx.stepId, traceId: traceCtx.traceId, planGeneration: traceCtx.planGeneration,
             phase: traceCtx.phase ?? 'initial',
-            realModel: this.observerModel || null, shadowModel: model,
+            realModel: this.effectiveModel || null, shadowModel: model,
             realState: real.state, realCounts: ObserverValidator.countClaims(real.claims), realElapsedMs: real.elapsedMs,
             shadowState: verdict.state, shadowCounts: ObserverValidator.countClaims(verdict.claims), shadowElapsedMs: Date.now() - t0,
             stateAgrees: real.state === verdict.state,
