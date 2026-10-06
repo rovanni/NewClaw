@@ -17,7 +17,7 @@
  */
 
 import { createLogger } from '../shared/AppLogger';
-import type { ParsedLLMResponse } from './agentOutputParser';
+import { parseProtocolJson, type ParsedLLMResponse } from './agentOutputParser';
 
 // ── Protocol Types (inlined from ProtocolTypes.ts) ────────────────────────────
 
@@ -277,39 +277,11 @@ export class ProtocolParser {
      * Attempt JSON parse with multiple strategies.
      */
     private attemptJsonParse(content: string): ParsedLLMResponse | null {
-        // Strategy 1: Direct parse
-        try {
-            return JSON.parse(content.trim());
-        } catch {
-            /* Strategy 1 failed: Not a direct JSON string, moving to block extraction */
-        }
-
-        // Strategy 2: Extract JSON block from mixed content.
-        // Walks the string char-by-char to find the outermost balanced {} block,
-        // avoiding the greedy-regex pitfall of matching from the first '{' to the
-        // last '}' across multiple disjoint JSON objects or trailing punctuation.
-        try {
-            const start = content.indexOf('{');
-            if (start !== -1) {
-                let depth = 0;
-                let end = -1;
-                for (let i = start; i < content.length; i++) {
-                    if (content[i] === '{') depth++;
-                    else if (content[i] === '}') {
-                        depth--;
-                        if (depth === 0) { end = i; break; }
-                    }
-                }
-                if (end !== -1) {
-                    let jsonStr = content.slice(start, end + 1);
-                    jsonStr = jsonStr.replace(/```json/g, '').replace(/```/g, '');
-                    jsonStr = jsonStr.replace(/,\s*([\}\]])/g, '$1');
-                    return JSON.parse(jsonStr);
-                }
-            }
-        } catch {
-            /* Strategy 2 failed: Block found but not valid JSON, moving to partial extraction */
-        }
+        // Strategies 1–2: whole text, then the outermost balanced {} block — via the SAME reader the AgentLoop uses
+        // to extract the text it delivers (`parseProtocolJson`, issue 065b). Two readers used to diverge here: this
+        // one decided "final_answer" while the delivery reader failed, and the user got the raw protocol JSON.
+        const parsed = parseProtocolJson(content);
+        if (parsed !== null) return parsed;
 
         // Strategy 3: Extract partial content from malformed JSON
         // Guard: if content looks like a tool call, don't misidentify action.input.content

@@ -29,26 +29,87 @@ export function sanitizeContent(content: string): string {
         .trim();
 }
 
+/**
+ * Fonte única de "ler o JSON do protocolo" (issue 065b, 06/10/2026). Antes havia duas leituras que divergiam:
+ * `ProtocolParser.attemptJsonParse` (decide o rumo do turno) e `parseLLMResponse` (de onde sai o texto entregue).
+ * Teste pelo painel, glm-5.3: o modelo devolveu `{"thought":…,"action":{"type":"final_answer","content":"…"}}` com
+ * QUEBRAS DE LINHA CRUAS dentro das strings (JSON inválido: "Bad control character in string literal"). O
+ * ProtocolParser caiu na extração parcial e encerrou como final_answer; `parseLLMResponse` devolveu null e o usuário
+ * recebeu o JSON interno inteiro na tela. Produção: 4 respostas assim entregues (maio–julho).
+ *
+ * Só SINTAXE, nenhuma interpretação: (1) o texto inteiro; (2) o bloco `{…}` mais externo, achado respeitando
+ * strings (chave dentro de string não conta); para cada um, tenta como está e, se falhar, com caracteres de
+ * controle crus escapados DENTRO de strings (\n, \r, \t — o que o modelo quis dizer é inequívoco); por último,
+ * sem vírgula sobrando antes de `}`/`]`.
+ */
+export function parseProtocolJson(text: string): ParsedLLMResponse | null {
+    if (!text) return null;
+    const candidatos = [text.trim()];
+    const bloco = outermostJsonBlock(text);
+    if (bloco && bloco !== candidatos[0]) candidatos.push(bloco);
+    for (const c of candidatos) {
+        const leniente = escapeControlCharsInStrings(c, true);
+        for (const tentativa of [c, escapeControlCharsInStrings(c), leniente, leniente.replace(/,\s*([}\]])/g, '$1')]) {
+            try { return JSON.parse(tentativa); } catch { /* próxima */ }
+        }
+    }
+    return null;
+}
+
+/** O bloco `{…}` mais externo a partir do primeiro `{`, contando chaves só FORA de strings JSON. */
+function outermostJsonBlock(text: string): string | null {
+    const start = text.indexOf('{');
+    if (start === -1) return null;
+    let depth = 0, inString = false, escaped = false;
+    for (let i = start; i < text.length; i++) {
+        const ch = text[i];
+        if (inString) {
+            if (escaped) escaped = false;
+            else if (ch === '\\') escaped = true;
+            else if (ch === '"') inString = false;
+            continue;
+        }
+        if (ch === '"') inString = true;
+        else if (ch === '{') depth++;
+        else if (ch === '}' && --depth === 0) return text.slice(start, i + 1);
+    }
+    return null;
+}
+
+/**
+ * Escapa \n, \r e \t crus que aparecem DENTRO de strings JSON (fora delas são espaço em branco válido).
+ * Com `aspasLenientes` (última tentativa): uma `"` dentro de string só a FECHA se o próximo caractere significativo
+ * for `,`, `}`, `]` ou `:` — senão é aspa literal do texto (ex.: `a sensação de "frio" é maior`) e é escapada. Mesma
+ * regra sintática de reparadores de JSON; nada de interpretação de conteúdo.
+ */
+function escapeControlCharsInStrings(text: string, aspasLenientes = false): string {
+    const chars = [...text];
+    let out = '', inString = false, escaped = false;
+    for (let i = 0; i < chars.length; i++) {
+        const ch = chars[i];
+        if (inString) {
+            if (escaped) { escaped = false; out += ch; continue; }
+            if (ch === '\\') { escaped = true; out += ch; continue; }
+            if (ch === '"') {
+                if (aspasLenientes) {
+                    let j = i + 1;
+                    while (j < chars.length && /\s/.test(chars[j])) j++;
+                    if (j < chars.length && !',}]:'.includes(chars[j])) { out += '\\"'; continue; }
+                }
+                inString = false; out += ch; continue;
+            }
+            out += ch === '\n' ? '\\n' : ch === '\r' ? '\\r' : ch === '\t' ? '\\t' : ch;
+            continue;
+        }
+        if (ch === '"') inString = true;
+        out += ch;
+    }
+    return out;
+}
+
 export function parseLLMResponse(content: string): ParsedLLMResponse | null {
     if (!content) return null;
-
-    const cleaned = sanitizeContent(content);
-
-    // Fast path: the whole string is JSON
-    try {
-        return JSON.parse(cleaned);
-    } catch { /* fall through */ }
-
-    // Locate the outermost JSON object without regex
-    const start = cleaned.indexOf('{');
-    const end = cleaned.lastIndexOf('}');
-    if (start !== -1 && end > start) {
-        try {
-            return JSON.parse(cleaned.slice(start, end + 1));
-        } catch { /* fall through */ }
-    }
-
-    return null;
+    return parseProtocolJson(sanitizeContent(content));
 }
 
 export function extractFinalText(response: LLMResult, _atomicData: unknown): string {
