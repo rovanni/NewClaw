@@ -524,6 +524,8 @@ export class ProviderFactory {
                             thinking: result.thinking || undefined,
                             toolCalls: result.toolCalls,
                             usage: result.usage,
+                            // Issue 060: o abort desta tentativa (teto de tempo) com conteúdo parcial também é interrupção.
+                            interrupted: result.interrupted === true || currentAbort.signal.aborted ? true : result.interrupted,
                             attempts: attemptLog,
                             substitution: substituicao
                         };
@@ -637,6 +639,7 @@ export class ProviderFactory {
                             content: result.content,
                             toolCalls: result.toolCalls,
                             usage: result.usage,
+                            interrupted: result.interrupted,
                             fallbackReason: 'streaming_failed',
                             attempts: attemptLog,
                             substitution: substituicao

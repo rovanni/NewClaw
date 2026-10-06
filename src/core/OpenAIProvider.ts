@@ -273,7 +273,10 @@ export class OpenAIProvider implements ILLMProvider {
                 usage: data.usage ? {
                     prompt_tokens: data.usage?.prompt_tokens ?? 0,
                     completion_tokens: data.usage?.completion_tokens ?? 0
-                } : undefined
+                } : undefined,
+                // Issue 060: requisição não-streaming — a resposta chega inteira; só o corte por limite de
+                // tokens (finish_reason=length) a interrompe.
+                interrupted: data.choices?.[0]?.finish_reason === 'length',
             };
         }, { priority: TaskPriority.INTERACTIVE });
     }

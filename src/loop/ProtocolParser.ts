@@ -4,15 +4,16 @@
  * Pipeline:
  *   LLM Response → Strict Parse → [parsed=YES] → StructuredAgentResponse
  *                          ↓
- *                   [parsed=NO] → semanticRecovery → planning (short) | final_answer (long)
+ *                   [parsed=NO] → semanticRecovery → final_answer (geração completa) | planning (interrompida)
  *                                        ↓
  *                              Recovery Prompt → Reparse → [parsed=YES]
  *                                                      ↓
  *                                               [parsed=NO] → ProtocolViolationError
  *
- * Semantic recovery uses content length as a heuristic: substantive responses
- * (≥ MIN_FINAL_ANSWER_LENGTH chars) are treated as final answers; short fragments
- * (typically activity-timeout artifacts) are treated as planning and retried.
+ * Semantic recovery — texto fora do protocolo: quando o provedor registra que a geração terminou
+ * normalmente (`interrupted === false`), o texto é a resposta final, de qualquer tamanho; quando
+ * registra interrupção, é fragmento e volta como planning. Só quando o provedor NÃO registra
+ * (`undefined`) vale o limiar de tamanho (MIN_FINAL_ANSWER_LENGTH) — issue 060.
  */
 
 import { createLogger } from '../shared/AppLogger';
@@ -176,7 +177,7 @@ export class ProtocolParser {
      * Returns null ONLY when the response is genuinely empty.
      * Throws ProtocolViolationError when recovery fails.
      */
-    strictParse(content: string, hasNativeToolCalls = false): StructuredAgentResponse | null {
+    strictParse(content: string, hasNativeToolCalls = false, interrupted?: boolean): StructuredAgentResponse | null {
         if (!content || !content.trim()) {
             return null;
         }
@@ -219,7 +220,7 @@ export class ProtocolParser {
 
         // Build a StructuredAgentResponse from the violation
         // This is the SEMANTIC RECOVERY — we preserve the content but mark it as unverified
-        const recovered = this.semanticRecovery(content);
+        const recovered = this.semanticRecovery(content, interrupted);
         // Obs #10: log estruturado de recovery para rastrear frequência e tipo de falha
         log.info(
             `[PROTOCOL-RECOVERY] reason="strict_parse_failed" response_length=${content.length} ` +
@@ -476,16 +477,19 @@ export class ProtocolParser {
     /**
      * SEMANTIC RECOVERY — Convert unstructured content into a StructuredAgentResponse.
      *
-     * Uses content length as the primary heuristic:
-     * - ≥ MIN_FINAL_ANSWER_LENGTH chars → final_answer (isComplete=true): model likely finished
-     * - < MIN_FINAL_ANSWER_LENGTH chars → planning (isComplete=false): likely a timeout fragment
+     * Depois dos guards de vazamento (raciocínio, JSON interno, tool-call), decide pelo FATO de
+     * interrupção que o provedor registrou (`LLMResponse.interrupted`, issue 060):
+     * - false (geração terminou normalmente) → final_answer, de qualquer tamanho: "3" é resposta;
+     * - true  (stream abortado/sem fim/corte por limite) → planning: é fragmento;
+     * - undefined (provedor não registra) → limiar de tamanho, como antes:
+     *   ≥ MIN_FINAL_ANSWER_LENGTH → final_answer; menor → planning (provável fragmento de timeout).
      *
      * The runtime should then for planning:
      * 1. Inject a recovery prompt
      * 2. Let the LLM restructure its response
      * 3. Retry the strict parse
      */
-    private semanticRecovery(content: string): StructuredAgentResponse {
+    private semanticRecovery(content: string, interrupted?: boolean): StructuredAgentResponse {
         const trimmed = content.trim();
 
         // Guard: se o conteúdo parece JSON interno do protocolo (thought/action vazado),
@@ -571,11 +575,14 @@ export class ProtocolParser {
             };
         }
 
-        // Substantive plain-text responses (≥500 chars, no tool-call markers) are treated
-        // as final answers. Short fragments (<500 chars) are typically activity-timeout
-        // artifacts — keep them as planning so the loop retries.
-        if (trimmed.length >= MIN_FINAL_ANSWER_LENGTH && !this.hasNativeToolCallStructure(trimmed)) {
-            log.warn(`[PROTOCOL] 🔄 Semantic recovery — substantive plain-text (${trimmed.length} chars) treated as final_answer`);
+        // Issue 060: o tamanho só decide quando o provedor não registrou se a geração terminou.
+        // Achado real (06/10/2026, goal_1791302526056_qofd0): o modelo respondeu "3" — correto e
+        // completo — e o limiar de tamanho o tratou como fragmento; o AgentLoop girou até cair
+        // na mensagem padrão de falha. Fragmento de timeout é fato do provedor, não do comprimento.
+        const generationComplete = interrupted === false
+            || (interrupted === undefined && trimmed.length >= MIN_FINAL_ANSWER_LENGTH);
+        if (generationComplete && !this.hasNativeToolCallStructure(trimmed)) {
+            log.warn(`[PROTOCOL] 🔄 Semantic recovery — plain-text (${trimmed.length} chars, interrupted=${interrupted ?? 'not_reported'}) treated as final_answer`);
             return {
                 type: 'final_answer',
                 content: trimmed,
@@ -584,7 +591,7 @@ export class ProtocolParser {
                 evaluation: {
                     is_complete: true,
                     confidence: 'low',
-                    reason: 'Protocol violation: long unstructured content recovered as final answer.',
+                    reason: 'Protocol violation: unstructured content from a completed generation recovered as final answer.',
                 },
                 metadata: {
                     protocolViolation: true,
@@ -594,7 +601,7 @@ export class ProtocolParser {
             };
         }
 
-        log.warn(`[PROTOCOL] 🔄 Semantic recovery — wrapping unstructured content as 'planning' with isComplete=false`);
+        log.warn(`[PROTOCOL] 🔄 Semantic recovery — wrapping unstructured content as 'planning' with isComplete=false (interrupted=${interrupted ?? 'not_reported'}, ${trimmed.length} chars)`);
         return {
             type: 'planning',
             content: trimmed,

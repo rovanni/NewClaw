@@ -3948,7 +3948,7 @@ export class AgentLoop {
             // (e.g. kimi-k2.6 puts its reasoning in the thinking field, not JSON protocol)
             const hasNativeToolCalls = (response.toolCalls?.length ?? 0) > 0;
 
-            const structured = this.protocolParser.strictParse(response.content || '', hasNativeToolCalls);
+            const structured = this.protocolParser.strictParse(response.content || '', hasNativeToolCalls, response.interrupted);
             const atomicData = parseLLMResponse(response.content || '');
             const finalText = extractFinalText(response, atomicData);
 

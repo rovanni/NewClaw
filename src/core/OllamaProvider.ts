@@ -408,7 +408,7 @@ export class OllamaProvider implements ILLMProvider {
                         log.info(`[${streamId}] [STREAM] DONE done_reason="${doneReason}" prompt_eval=${chunk.prompt_eval_count || 0} eval=${chunk.eval_count || 0} stats=${JSON.stringify(stats)} elapsed=${Date.now() - startTime}ms`);
                         yield {
                             type: 'done',
-                            value: { prompt_tokens: chunk.prompt_eval_count || 0, completion_tokens: chunk.eval_count || 0 }
+                            value: { prompt_tokens: chunk.prompt_eval_count || 0, completion_tokens: chunk.eval_count || 0, done_reason: chunk.done_reason as string | undefined }
                         } as StreamChunk;
                         return;
                     }
@@ -439,7 +439,7 @@ export class OllamaProvider implements ILLMProvider {
                     if (chunk.done) {
                         const doneReason = chunk.done_reason || '(not provided)';
                         log.info(`[${streamId}] [STREAM] DONE in buffer flush. done_reason="${doneReason}" stats=${JSON.stringify(stats)}`);
-                        yield { type: 'done', value: { prompt_tokens: chunk.prompt_eval_count || 0, completion_tokens: chunk.eval_count || 0 } } as StreamChunk;
+                        yield { type: 'done', value: { prompt_tokens: chunk.prompt_eval_count || 0, completion_tokens: chunk.eval_count || 0, done_reason: chunk.done_reason as string | undefined } } as StreamChunk;
                     }
                 } catch {
                     log.warn(`[${streamId}] [STREAM] Failed to parse remaining buffer: ${buffer.trim().slice(0, 80)}...`);
@@ -473,6 +473,10 @@ export class OllamaProvider implements ILLMProvider {
         let thinking = '';
         const toolCalls: RawToolCall[] = [];
         let usage: OpenAIChatResponse['usage'] | undefined = undefined;
+        // Issue 060: fim normal = chunk 'done' recebido e não cortado por limite de tokens.
+        let doneReason: string | undefined;
+        let sawDone = false;
+        let streamFailed = false;
         let chunkCount = 0;
         const startTime = Date.now();
         const consumeId = `sc-${Date.now().toString(36)}`;
@@ -488,10 +492,11 @@ export class OllamaProvider implements ILLMProvider {
                     case 'content': content += chunk.value; break;
                     case 'thinking': thinking += chunk.value; break;
                     case 'tool_call': toolCalls.push(chunk.value); break;
-                    case 'done': usage = chunk.value; break;
+                    case 'done': usage = chunk.value; sawDone = true; doneReason = chunk.value.done_reason; break;
                 }
             }
         } catch (streamErr) {
+            streamFailed = true;
             const elapsed = Date.now() - startTime;
 
             // REASONING_BUDGET: do NOT expose raw internal reasoning to the caller.
@@ -578,7 +583,9 @@ export class OllamaProvider implements ILLMProvider {
                 name: tc.function?.name || '',
                 arguments: parseToolArgs(tc.function?.arguments)
             })) : undefined,
-            usage: usage ? { prompt_tokens: usage.prompt_tokens ?? 0, completion_tokens: usage.completion_tokens ?? 0 } : undefined
+            usage: usage ? { prompt_tokens: usage.prompt_tokens ?? 0, completion_tokens: usage.completion_tokens ?? 0 } : undefined,
+            // Conteúdo recuperado de stream abortado, stream sem 'done', ou corte por limite de tokens.
+            interrupted: streamFailed || !sawDone || doneReason === 'length',
         };
     }
 
@@ -631,7 +638,9 @@ export class OllamaProvider implements ILLMProvider {
                 usage: data.usage ? {
                     prompt_tokens: data.usage?.prompt_tokens ?? 0,
                     completion_tokens: data.usage?.completion_tokens ?? 0
-                } : undefined
+                } : undefined,
+                // Issue 060: resposta não-streaming chega inteira; só o corte por limite de tokens a interrompe.
+                interrupted: (data as { done_reason?: string }).done_reason === 'length',
             };
         } finally {
             clearTimeout(timeout);

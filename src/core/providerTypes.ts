@@ -67,7 +67,7 @@ export type StreamChunk =
     | { type: 'content'; value: string }
     | { type: 'thinking'; value: string }
     | { type: 'tool_call'; value: RawToolCall }
-    | { type: 'done'; value: { prompt_tokens: number; completion_tokens: number } };
+    | { type: 'done'; value: { prompt_tokens: number; completion_tokens: number; done_reason?: string } };
 
 export interface LLMMessage {
     role: 'user' | 'assistant' | 'system' | 'tool';
@@ -82,6 +82,13 @@ export interface LLMResponse {
     thinking?: string;
     toolCalls?: ToolCall[];
     usage?: { prompt_tokens: number; completion_tokens: number };
+    /**
+     * Issue 060 — a geração terminou normalmente? `true`: interrompida (stream abortado ou encerrado sem
+     * o sinal de fim, ou cortada por limite de tokens) — o conteúdo pode ser fragmento. `false`: o
+     * provedor observou o fim normal. `undefined`: o provedor não registra — NÃO significa "completa"
+     * (NUNCA_ADIVINHAR).
+     */
+    interrupted?: boolean;
 }
 
 export interface ToolCall {
@@ -119,6 +126,8 @@ export interface LLMResult {
     fallbackReason?: FallbackReason;
     fallbackMessage?: string;
     attempts: AttemptInfo[];
+    /** Issue 060 — ver `LLMResponse.interrupted`; o ProviderFactory soma o próprio abort da tentativa. */
+    interrupted?: boolean;
     /**
      * Preenchido quando a resposta veio de um recurso diferente do que o usuário declarou.
      *
