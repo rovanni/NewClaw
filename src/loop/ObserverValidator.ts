@@ -254,6 +254,19 @@ const GROUNDING_MAX_PROMPT_CHARS = 60_000;
 // 2. Fatos triviais independentes de qualquer evidência (dia da semana de uma data, por
 //    exemplo) também caíam em NOT_EVALUABLE — nenhuma evidência de ferramenta "trata do
 //    assunto" porque nenhuma precisa tratar: não é um fato que dependa de fonte externa.
+//
+// Issue 065 (06/10/2026): o escopo do prompt era MAIOR que o da ADR-010. A §2 decide sobre
+// "afirmações factuais DERIVADAS DE FERRAMENTAS"; o prompt pedia "CADA afirmação factual da
+// resposta". Como o gatilho é "o turno usou alguma ferramenta", uma aula escrita pelo agente
+// (rodou um script para gerar o .pptx) virava 23 afirmações a fundamentar — conteúdo didático,
+// contexto do pedido, ações do agente —, que nenhuma evidência determina por definição. Produção:
+// 1 VALIDATED em 22 julgamentos do glm-5.3, 95–317 s cada; 57 de 280 afirmações NOT_EVALUABLE; a
+// sombra gemma4 concordava em 7/13. Agora o próprio juiz (LLM — a distinção é semântica) separa o
+// que a resposta apresenta como DADO OBTIDO de ferramenta do que é redigido; o resto do contrato
+// não muda. Experimento (19 casos: 10 curtos de 03/10, 5 realistas, 4 armadilhas com dado de
+// ferramenta errado dentro de texto redigido — River/Clima em resposta longa): glm-5.3 de 14/19
+// para 19/19, gemma4 de 18/19 para 19/19, armadilhas 4/4 em todos; os dois modelos concordam
+// nos 19.
 const GROUNDING_PROMPT = `Você verifica quais afirmações de uma RESPOSTA são sustentadas pelas EVIDÊNCIAS.
 
 EVIDÊNCIAS:
@@ -264,7 +277,9 @@ RESPOSTA:
 {response}
 """
 
-Para CADA afirmação factual da resposta, indique quais evidências a sustentam e o veredito.
+Para CADA afirmação que a resposta apresenta como DADO OBTIDO das evidências — valor, resultado,
+conteúdo lido, contagem, estado ou nome informado por uma ferramenta —, indique quais evidências a
+sustentam e o veredito.
 
 - SUPPORTED: a evidência DETERMINA POSITIVAMENTE a afirmação — está presente nela, ou é obtida
   dela por transformação determinística (arredondamento, mudança de unidade declarada,
@@ -280,11 +295,15 @@ REGRA CRÍTICA: ausência de contradição NÃO é suporte. Se a evidência não
 o veredito é NOT_EVALUABLE, nunca SUPPORTED. Exemplo: evidência "X: 25" e afirmação "X está a
 25°C" — o número aparece, mas a unidade não está determinada, então NÃO é SUPPORTED.
 
-Opinião, recomendação, cortesia, comentário sobre o que você fez, e fato verificável por si só
-sem depender de nenhuma fonte externa (ex: dia da semana correspondente a uma data, resultado de
-um cálculo já classificado acima) não são afirmações que dependam de evidência — não os inclua.
-Se a resposta não contiver nenhuma afirmação factual derivada das evidências, devolva a lista
-vazia.
+NÃO são dado obtido das evidências — não os inclua: texto que o assistente redigiu (explicação,
+conteúdo didático, conhecimento geral, opinião, recomendação, cortesia), contexto que vem do pedido
+do usuário, o que o assistente diz que fez ou vai fazer, e fato verificável por si só sem depender
+de fonte externa (ex: dia da semana correspondente a uma data, resultado de um cálculo já
+classificado acima). Um valor que a resposta atribui a uma ferramenta ou apresenta como resultado
+de consulta (preço, temperatura, quantidade, nome de arquivo...) É dado obtido, mesmo no meio de
+texto redigido — inclua-o.
+Se a resposta não contiver nenhuma afirmação apresentada como dado obtido das evidências, devolva a
+lista vazia.
 
 Responda APENAS com JSON:
 {"claims":[{"claim":"...","evidence":["E1"],"verdict":"SUPPORTED|NOT_SUPPORTED|NOT_EVALUABLE"}]}`;
