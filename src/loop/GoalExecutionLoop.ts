@@ -2955,11 +2955,12 @@ export class GoalExecutionLoop {
      * `StepSemanticValidator`, que roda depois para todo step com outcome==='success'.
      *
      * Ordem de precedência:
-     *  1. Resposta vazia/curta (<15 chars) → success=false, conf=0.85
+     *  1. Resposta VAZIA (só espaços) → success=false, conf=0.85
      *  2. subToolFailures undefined (attempts antigos, sem observação) → success=true,
      *     conf=0.70, não-confiante (fallback ao comportamento anterior — ADR-011 §5)
-     *  3. subToolFailures com falhas reais → success=false, conf=0.92
-     *  4. subToolFailures vazio (nenhuma falha observada) + resposta ≥15 chars
+     *  3. subToolFailures com falhas reais → success=true, conf=0.55, não-confiante (o
+     *     StepSemanticValidator decide se a resposta cumpre a intenção apesar da falha parcial)
+     *  4. subToolFailures vazio (nenhuma falha observada) + resposta não vazia
      *     → success=true, conf=0.80, confiante (fato: ferramentas funcionaram,
      *     resposta produzida — StepSemanticValidator decide se endereça a intenção)
      */
@@ -2968,9 +2969,14 @@ export class GoalExecutionLoop {
         response: string,
         subToolFailures?: Array<{ tool: string; error?: string }>,
     ): StepEvaluation {
-        // 1. Resposta vazia ou muito curta — forma objetiva, não conteúdo
-        if (response.trim().length < 15) {
-            log.debug(`[GoalLoop] step-heuristic: empty/short response tool=${step.toolName ?? 'agentloop'}`);
+        // 1. Resposta VAZIA — forma objetiva, não conteúdo.
+        // Issue 058: era "< 15 chars", e resposta curta e CORRETA virava falha. 06/10/2026: "Quantos itens tem a
+        // lista? Responda só o número" — a etapa respondeu "3" (certo), foi gravada como failure ('Erro em
+        // unknown: 3'), e o goal girou 10 ciclos/4 replans (~10 min) até falhar. "3", "sim", "R$ 42" são respostas;
+        // se uma resposta curta atende ou não é pergunta semântica — do StepSemanticValidator (ADR-011), que já trata
+        // saída curta como 'unverifiable' sem rebaixar.
+        if (response.trim().length === 0) {
+            log.debug(`[GoalLoop] step-heuristic: empty response tool=${step.toolName ?? 'agentloop'}`);
             return { success: false, confidence: 0.85, reason: 'empty_response' };
         }
 
