@@ -20,8 +20,6 @@ import { PLACEHOLDER_ARG_PATTERN as PATH_PLACEHOLDER_PATTERN } from '../shared/p
 
 const log = createLogger('ReadTool');
 
-// Limiar para conteúdo suspeito (arquivo quase vazio mas não zero)
-const NEAR_EMPTY_THRESHOLD_BYTES = 50;
 
 export class ReadTool implements ToolExecutor {
     name = 'read';
@@ -129,14 +127,14 @@ export class ReadTool implements ToolExecutor {
 
             const filename = path.basename(filePath);
             const sizeKb = (stat.size / 1024).toFixed(1);
-            const lineCount = content ? content.split('\n').length : 0;
+            // Quebra de linha final não abre uma linha nova: "a\nb\n" tem 2 linhas, não 3.
+            const lineCount = content ? content.split('\n').length - (content.endsWith('\n') ? 1 : 0) : 0;
             const isEmpty = stat.size === 0;
-            const isNearEmpty = !isEmpty && stat.size < NEAR_EMPTY_THRESHOLD_BYTES;
 
             // FIX A: [READ-RESULT] — registra estado real do arquivo para diagnóstico
             log.info(
                 `[READ-RESULT] file="${filename}" bytes=${stat.size} lines=${lineCount}` +
-                ` empty=${isEmpty} near_empty=${isNearEmpty} placeholder_injected=false`
+                ` empty=${isEmpty} placeholder_injected=false`
             );
 
             // FIX A: arquivo completamente vazio — erro explícito, nunca tratado como conteúdo
@@ -159,10 +157,11 @@ export class ReadTool implements ToolExecutor {
                 return { success: true, output: header + content };
             }
 
-            // Aviso de conteúdo suspeito (não falha, mas informa o LLM)
-            const nearEmptyWarning = isNearEmpty
-                ? `\n⚠️ [CONTEÚDO SUSPEITO] Arquivo tem apenas ${stat.size} bytes (${lineCount} linha(s)). O conteúdo pode ser um placeholder. Verifique se o objetivo foi escrito corretamente antes de usar este conteúdo.`
-                : '';
+            // Issue 062 (06/10/2026): removido o aviso "[CONTEÚDO SUSPEITO] … pode ser um placeholder" para arquivos
+            // < 50 bytes. "É um placeholder?" é pergunta semântica decidida por tamanho (RESPONSABILIDADE_ANTES_DO_
+            // MECANISMO); o modelo já recebe o conteúdo inteiro e julga. O aviso acompanhava um arquivo legítimo de 44
+            // bytes (lista de 3 itens) com contagem de linhas errada ("5 linha(s)" para 4). Arquivo VAZIO (0 bytes) é
+            // fato estrutural e continua tratado acima.
 
             // ARTIFACT-DRIFT FIX: removido "NÃO releia" — essa instrução persistia na sessão via
             // loopMessages=sessionMessages e bloqueava releituras em ciclos subsequentes do GoalExecutionLoop,
@@ -177,7 +176,7 @@ export class ReadTool implements ToolExecutor {
             const largeFileAdvisory = stat.size > LARGE_FILE_ADVISORY_BYTES
                 ? `⚠️ [ARQUIVO GRANDE: ${(stat.size / 1024).toFixed(0)}KB injetado no contexto] Para MODIFICAR este arquivo use exec_command (Python/sed/awk) — nunca read+write em arquivos grandes, pois isso provoca estouro de contexto (ratio_limit). Exemplo: exec_command com python3 -c "c=open('arquivo').read(); open('arquivo','w').write(novo+c)"\n`
                 : '';
-            return { success: true, output: header + largeFileAdvisory + content + nearEmptyWarning };
+            return { success: true, output: header + largeFileAdvisory + content };
         } catch (error) {
             return { success: false, output: '', error: errorMessage(error) };
         }
