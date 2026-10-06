@@ -50,7 +50,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { OllamaProvider, AbortReason } from '../../core/OllamaProvider';
+import { OllamaProvider } from '../../core/OllamaProvider';
 import { LLMMessage } from '../../core/providerTypes';
 
 let passed = 0;
@@ -107,23 +107,22 @@ function makeInfiniteThinkingFetch(): typeof fetch {
 
 async function main(): Promise<void> {
 
-console.log('\n=== S72-1 [estrutural] — o abort por thinking-budget lança exceção, não só faz break silencioso ===');
+// Issue 064 (06/10/2026): o orçamento de raciocínio por caracteres saiu (em produção, abortava modelos que não estavam
+// travados e a chamada era refeita sem limite). A garantia deste teste continua — o CoT truncado do incidente nunca
+// vira resposta —, agora sustentada pela ESTRUTURA do stream: raciocínio só é promovido a conteúdo quando a geração
+// terminou normalmente (chunk 'done', sem corte por limite).
+console.log('\n=== S72-1 [estrutural] — raciocínio só vira conteúdo quando a geração terminou normalmente ===');
 {
     const src = readSrc('core/OllamaProvider.ts');
-    assert(src.includes('thinkingBudgetAbort = true;'), 'flag thinkingBudgetAbort ainda existe no código');
-    // O check que roda DEPOIS dos dois loops (`for` de linhas + `while(true)` de leitura) —
-    // não o `if (...) break` interno que só sai do for de linhas — precisa terminar em throw,
-    // não em um break mudo que deixa o generator retornar normalmente sem exceção.
-    const checkIdx = src.indexOf('if (thinkingBudgetAbort) {');
-    assert(checkIdx !== -1, 'existe um `if (thinkingBudgetAbort) {` (bloco, não mais `if (thinkingBudgetAbort) break;` de uma linha só)');
-    const block = src.slice(checkIdx, checkIdx + 700);
+    assert(src.includes("const interrupted = streamFailed || !sawDone || doneReason === 'length';"), 'o fato "geração interrompida" é calculado num ponto só');
     assert(
-        /if\s*\(thinkingBudgetAbort\)\s*\{[^}]*throw new Error/s.test(block),
-        '`if (thinkingBudgetAbort)` é seguido por `throw new Error(...)` — não mais por um `break` isolado que deixa o generator terminar sem exceção',
+        /if \(!content && thinking && toolCalls\.length === 0 && interrupted\) \{[\s\S]{0,400}thinking = '';/.test(src),
+        'geração interrompida com só raciocínio: o raciocínio é descartado (não promovido)',
     );
+    assert(!/recovering thinking as content/.test(src), 'o caminho de erro não promove mais raciocínio a conteúdo (vazamento da issue 042 fechado)');
 }
 
-console.log('\n=== S72-2 [runtime] — stream de thinking que estoura o orçamento REJEITA a Promise (não resolve com o CoT como conteúdo) ===');
+console.log('\n=== S72-2 [runtime] — stream só de thinking que termina sem "done" REJEITA a Promise (não resolve com o CoT como conteúdo) ===');
 {
     const provider = new OllamaProvider('http://fake-ollama.invalid', 'glm-5.2:cloud', '');
     const originalFetch = global.fetch;
@@ -135,21 +134,39 @@ console.log('\n=== S72-2 [runtime] — stream de thinking que estoura o orçamen
     ];
 
     let threw = false;
-    let abortReason: string | undefined;
     let leakedContent: string | undefined;
     try {
         const result = await provider.chat(messages);
         // Se chegou aqui, o bug está de volta: o CoT truncado virou "resposta" normal.
         leakedContent = result.content;
-    } catch (err) {
+    } catch {
         threw = true;
-        abortReason = (err as { abortReason?: string })?.abortReason;
     } finally {
         global.fetch = originalFetch;
     }
 
-    assert(threw, `chat() deve REJEITAR quando o thinking estoura o orçamento sem nunca produzir content (antes do fix: resolvia com content="${(leakedContent || '').slice(0, 40)}..." de ${leakedContent?.length ?? 0} chars)`);
-    assert(abortReason === AbortReason.REASONING_BUDGET, `erro propagado deve ser marcado como AbortReason.REASONING_BUDGET (encontrado: ${abortReason}) — é esse marcador que diz pro ProviderFactory tratar como timeout/fallback, não como resposta válida`);
+    assert(threw, `chat() deve REJEITAR quando a geração termina sem "done" e sem content (incidente: resolvia com content="${(leakedContent || '').slice(0, 40)}..." de ${leakedContent?.length ?? 0} chars)`);
+}
+
+console.log('\n=== S72-3 [runtime] — modelo que entrega a resposta INTEIRA no campo thinking (geração completa) continua funcionando ===');
+{
+    // Caso legítimo que o fallback "thinking como conteúdo" existe para atender (ex.: deepseek-v4-flash:cloud).
+    const provider = new OllamaProvider('http://fake-ollama.invalid', 'deepseek-v4-flash:cloud', '');
+    const originalFetch = global.fetch;
+    global.fetch = (async () => ({
+        ok: true, status: 200,
+        body: new ReadableStream<Uint8Array>({
+            start(c) {
+                c.enqueue(ndjson({ message: { thinking: 'Bitcoin está em US$ 61.200 hoje.' } }));
+                c.enqueue(ndjson({ done: true, done_reason: 'stop', prompt_eval_count: 5, eval_count: 9 }));
+                c.close();
+            },
+        }),
+    })) as unknown as typeof fetch;
+    let content = '';
+    try { content = (await provider.chat([{ role: 'user', content: 'cotação do bitcoin?' }])).content; } catch { /* falha registrada abaixo */ }
+    finally { global.fetch = originalFetch; }
+    assert(content === 'Bitcoin está em US$ 61.200 hoje.', `resposta completa no campo thinking é entregue — obtido "${content}"`);
 }
 
 console.log(`\n${'─'.repeat(60)}`);

@@ -38,8 +38,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { OllamaProvider, AbortReason } from '../../core/OllamaProvider';
-import { LLMMessage } from '../../core/providerTypes';
+import { OllamaProvider } from '../../core/OllamaProvider';
 
 let passed = 0;
 let failed = 0;
@@ -95,70 +94,63 @@ function makeConvergingThinkingFetch(thinkingChunks: number, chunkChars: number,
 
 async function main(): Promise<void> {
 
-console.log('\n=== S286.1 — CONTROLE NEGATIVO: sem reasoningIntensive, cenário do S72 (10.000 chars) continua abortando ===');
+// Issue 064 (06/10/2026): o orçamento de raciocínio (8.000 / 32.000 chars) foi REMOVIDO — em produção, 85/85 abortos
+// foram refeitos sem streaming com o mesmo modelo e sem orçamento, e 58/85 terminaram com sucesso (o modelo não estava
+// travado). S286.1–3 passam a garantir: raciocínio longo que converge NUNCA é abortado (com ou sem reasoningIntensive),
+// e raciocínio que nunca converge continua sem virar resposta — agora pela ESTRUTURA (stream sem 'done'), não pelo tamanho.
+console.log('\n=== S286.1 — sem reasoningIntensive, raciocínio acima do antigo teto (12.000 > 8.000) converge e entrega o conteúdo ===');
 {
-    const provider = new OllamaProvider('http://fake-ollama.invalid', 'glm-5.2:cloud', '');
+    const provider = new OllamaProvider('http://fake-ollama.invalid', 'glm-5.3:cloud', '');
     const originalFetch = global.fetch;
-    global.fetch = makeInfiniteThinkingFetch(20, 500); // 10_000 chars total
-    const messages: LLMMessage[] = [{ role: 'user', content: 'oi' }];
-    let threw = false;
-    let abortReason: string | undefined;
-    try {
-        // abortReason só é marcado em _consumeStream (chat()), não em streamChat() isolado —
-        // mesma camada que o S72 original testa.
-        await provider.chat(messages);
-    } catch (err) {
-        threw = true;
-        abortReason = (err as Error & { abortReason?: string }).abortReason;
-    } finally {
-        global.fetch = originalFetch;
-    }
-    assert(threw, 'sem reasoningIntensive, o stream de 10.000 chars ainda lança exceção (comportamento do S72 preservado)');
-    assert(abortReason === AbortReason.REASONING_BUDGET, `abortReason continua REASONING_BUDGET — obtido: ${abortReason}`, abortReason);
-}
-
-console.log('\n=== S286.2 — CASO POSITIVO: com reasoningIntensive=true, 20.000 chars de raciocínio NÃO aborta — converge pra conteúdo real ===');
-{
-    const provider = new OllamaProvider('http://fake-ollama.invalid', 'glm-5.2:cloud', '');
-    const originalFetch = global.fetch;
-    // 20.000 chars > teto antigo (8.000), < novo teto com reasoningIntensive (8.000*4=32.000).
-    global.fetch = makeConvergingThinkingFetch(20, 1000, 'O plano tem 3 steps: write, exec_command, send_document.');
-    const messages: LLMMessage[] = [{ role: 'user', content: 'gere um plano complexo' }];
+    global.fetch = makeConvergingThinkingFetch(24, 500, 'A previsão para amanhã é de sol, máxima de 31 °C.');
     let content = '';
     let threw = false;
     try {
-        for await (const chunk of provider.streamChat(messages, undefined, undefined, undefined, true)) {
-            if (chunk.type === 'content') content += chunk.value;
-        }
+        content = (await provider.chat([{ role: 'user', content: 'previsão do tempo?' }])).content;
     } catch (err) {
         threw = true;
         console.error('  (erro inesperado)', err);
     } finally {
         global.fetch = originalFetch;
     }
-    assert(!threw, 'com reasoningIntensive=true, 20.000 chars de thinking NÃO lança exceção (ANTES do fix: abortava aos 8.000)');
-    assert(content === 'O plano tem 3 steps: write, exec_command, send_document.', `o conteúdo real (pós-raciocínio) é entregue — obtido: "${content}"`, content);
+    assert(!threw, 'sem reasoningIntensive, 12.000 chars de thinking NÃO abortam (ANTES: abortava aos 8.000 e refazia sem streaming)');
+    assert(content === 'A previsão para amanhã é de sol, máxima de 31 °C.', `conteúdo real entregue — obtido: "${content}"`, content);
 }
 
-console.log('\n=== S286.3 — o novo teto ainda existe: raciocínio genuinamente travado além de 32.000 chars continua abortando mesmo com reasoningIntensive ===');
+console.log('\n=== S286.2 — com reasoningIntensive=true, raciocínio acima do antigo teto (40.000 > 32.000) converge e entrega o conteúdo ===');
 {
-    const provider = new OllamaProvider('http://fake-ollama.invalid', 'glm-5.2:cloud', '');
+    const provider = new OllamaProvider('http://fake-ollama.invalid', 'glm-5.3:cloud', '');
     const originalFetch = global.fetch;
-    // 40 chunks x 1000 chars = 40_000 chars > 32_000 (novo teto com reasoningIntensive).
-    global.fetch = makeInfiniteThinkingFetch(40, 1000);
-    const messages: LLMMessage[] = [{ role: 'user', content: 'nunca converge' }];
+    global.fetch = makeConvergingThinkingFetch(40, 1000, '{"verdict":"SUPPORTED"}');
+    let content = '';
     let threw = false;
-    let abortReason: string | undefined;
     try {
-        await provider.chat(messages, undefined, { reasoningIntensive: true });
+        content = (await provider.chat([{ role: 'user', content: 'julgue' }], undefined, { reasoningIntensive: true })).content;
     } catch (err) {
         threw = true;
-        abortReason = (err as Error & { abortReason?: string }).abortReason;
+        console.error('  (erro inesperado)', err);
     } finally {
         global.fetch = originalFetch;
     }
-    assert(threw, 'mesmo com reasoningIntensive=true, um raciocínio que nunca converge além do novo teto (32.000) ainda aborta — rede de segurança do S72 não foi removida, só ampliada');
-    assert(abortReason === AbortReason.REASONING_BUDGET, `abortReason continua REASONING_BUDGET — obtido: ${abortReason}`, abortReason);
+    assert(!threw, 'com reasoningIntensive=true, 40.000 chars de thinking NÃO abortam (ANTES: abortava aos 32.000 — juiz de grounding com glm-5.3)');
+    assert(content === '{"verdict":"SUPPORTED"}', `veredito real entregue — obtido: "${content}"`, content);
+}
+
+console.log('\n=== S286.3 — raciocínio que nunca converge (stream termina sem "done") continua sem virar resposta — com ou sem reasoningIntensive ===');
+for (const reasoningIntensive of [false, true]) {
+    const provider = new OllamaProvider('http://fake-ollama.invalid', 'glm-5.3:cloud', '');
+    const originalFetch = global.fetch;
+    global.fetch = makeInfiniteThinkingFetch(40, 1000);
+    let threw = false;
+    let leaked = '';
+    try {
+        leaked = (await provider.chat([{ role: 'user', content: 'nunca converge' }], undefined, { reasoningIntensive })).content;
+    } catch {
+        threw = true;
+    } finally {
+        global.fetch = originalFetch;
+    }
+    assert(threw && leaked === '', `reasoningIntensive=${reasoningIntensive}: rejeita, sem entregar o CoT truncado (S72) — obtido ${leaked.length} chars`, leaked.slice(0, 40));
 }
 
 console.log('\n=== S286.4 — AUDITORIA DE CÓDIGO: só os call sites com evidência real de bug recebem reasoningIntensive; o turno conversacional (origem do S72) não recebe ===');

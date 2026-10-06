@@ -70,7 +70,11 @@ function makeTimeoutBeforeContentFetch(thinkingChars: number): typeof fetch {
 
 async function main(): Promise<void> {
 
-console.log('\n=== S287.1 — CONTROLE NEGATIVO: sem reasoningIntensive, recovery de thinking-como-content continua funcionando ===');
+// Issue 064 (06/10/2026): o S287.1 garantia que, SEM reasoningIntensive, o raciocínio de um stream abortado virava
+// resposta ("turno conversacional aceita prosa aproximada"). É o mesmo vazamento do S72 por outro caminho — e com o
+// fim do orçamento de raciocínio, todo modelo travado chegaria aqui pelo prazo. A garantia foi INVERTIDA de propósito:
+// raciocínio de geração interrompida nunca é resposta, para nenhum chamador.
+console.log('\n=== S287.1 — sem reasoningIntensive, o timeout com thinking acumulado TAMBÉM propaga erro (issue 064: CoT truncado nunca é resposta) ===');
 {
     const provider = new OllamaProvider('http://fake-ollama.invalid', 'glm-5.2:cloud', '');
     const originalFetch = global.fetch;
@@ -88,8 +92,8 @@ console.log('\n=== S287.1 — CONTROLE NEGATIVO: sem reasoningIntensive, recover
     } finally {
         global.fetch = originalFetch;
     }
-    assert(!threw, 'sem reasoningIntensive, o timeout com thinking acumulado NÃO lança — recupera como content (comportamento pré-existente preservado)', { threw, content });
-    assert(content.length > 0, `content recuperado do thinking (turno conversacional aceita prosa aproximada) — obtido ${content.length} chars`, content.length);
+    assert(threw, 'sem reasoningIntensive, o timeout com thinking acumulado lança — o raciocínio truncado NÃO vira content', { threw, content });
+    assert(content.length === 0, `nenhum content devolvido — obtido ${content.length} chars`, content.length);
 }
 
 console.log('\n=== S287.2 — CASO POSITIVO: com reasoningIntensive=true, o mesmo timeout propaga erro em vez de "recuperar" CoT como resposta ===');

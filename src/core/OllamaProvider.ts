@@ -1,6 +1,6 @@
 import { createLogger } from '../shared/AppLogger';
 import { errorMessage } from '../shared/errors';
-import { ILLMProvider, LLMMessage, LLMResponse, ToolDefinition, ChatOptions, StreamChunk, OpenAIChatResponse, RawApiChunk, RawToolCall, ModelInfo } from './providerTypes';
+import { ILLMProvider, LLMMessage, LLMResponse, ToolDefinition, ChatOptions, StreamChunk, OpenAIChatResponse, RawApiChunk, RawToolCall, ModelInfo, REASONING_INTENSIVE_TIMEOUT_FLOOR_MS } from './providerTypes';
 import { guessCapabilities, mapOllamaCapabilities } from './modelCapabilityHeuristics';
 import { taskQueue, TaskPriority } from './providerQueue';
 import { assertNotSsrfTarget } from './ssrfGuard';
@@ -75,7 +75,6 @@ function isChunkActive(chunk: RawApiChunk): boolean {
  */
 export const AbortReason = {
     TIMEOUT:          'timeout',
-    REASONING_BUDGET: 'reasoning_budget',
     USER_CANCEL:      'user_cancel',
     PROVIDER_ERROR:   'provider_error',
 } as const;
@@ -87,11 +86,6 @@ export class OllamaProvider implements ILLMProvider {
     private model: string;
     private apiKey: string;
     private readonly numCtx: number;
-    /**
-     * Set by streamChat when the reasoning budget fires; cleared by _consumeStream
-     * before each call. Safe because taskQueue serialises all stream executions.
-     */
-    private _reasoningBudgetAborted = false;
 
     constructor(baseUrl: string = 'http://localhost:11434', model: string = 'glm-5.2:cloud', apiKey: string = '') {
         this.baseUrl = baseUrl;
@@ -191,43 +185,25 @@ export class OllamaProvider implements ILLMProvider {
         const approxInputTokens = messages.reduce((sum, m) => sum + Math.ceil((m.content?.length || 0) / 4), 0);
         const CONNECTION_TIMEOUT = Math.max(150_000, Math.min(300_000, Math.ceil(approxInputTokens / 30) * 1000));
 
-        // Generic thinking budget: if model generates thinking without ever producing
-        // content or tool_calls, the reasoning loop is stuck. Abort before MAX_TIMEOUT.
-        // Two independent limits — whichever fires first:
-        //   chars  (~2× normal thinking for a conversational reply)
-        //   time   (absolute wall-clock cap regardless of chunk rate)
-        //
-        // Issue 038 (22/09/2026): este teto único, calibrado para o caso conversacional do S72
-        // (chat curto), também abortava chamadas legitimamente pesadas (juiz de grounding,
-        // planejamento) que precisam raciocinar mais antes da primeira linha de conteúdo —
-        // reproduzido ao vivo descartando ~8000 chars de raciocínio real repetidamente.
-        // `reasoningIntensive` é opt-in explícito de quem chama (`ChatFallbackOptions`, mesmo
-        // padrão de `anunciarSubstituicao`) — o multiplicador reusa o fator (4×) já calibrado
-        // com evidência real para chamadas de validação em `shared/auxTimeout.ts`
-        // (`PERFIS.validacao.fator`), não um número novo inventado para este achado. Sem o
-        // opt-in, o teto original do S72 continua intacto — nenhuma chamada existente muda de
-        // comportamento.
-        const THINKING_BUDGET_MULTIPLIER = reasoningIntensive ? 4 : 1;
-        const MAX_THINKING_BUDGET_CHARS = 8_000 * THINKING_BUDGET_MULTIPLIER;
-        const MAX_THINKING_DURATION_MS  = 60_000 * THINKING_BUDGET_MULTIPLIER;
+        // Issue 064 (06/10/2026): REMOVIDO o "orçamento de raciocínio" (abortar quando o modelo passava de 8.000 chars
+        // / 60 s — ou 32.000 / 240 s com reasoningIntensive — só raciocinando, sem conteúdo). Ele respondia "o modelo
+        // travou?" por contagem de caracteres (heurística para pergunta não estrutural), e a camada seguinte desfazia a
+        // decisão: em 85/85 abortos de produção o ProviderFactory refez a chamada sem streaming, com o MESMO modelo e
+        // SEM orçamento, recomeçando do zero; em 58/85 ela terminou com sucesso — o modelo não estava travado, só
+        // raciocina mais (glm-5.3: juiz com mediana de 15k chars). O aborto nunca economizou tempo, só descartou
+        // trabalho (~188 min desde 24/09). O limite é o PRAZO de quem chama (MAX_TIMEOUT/ACTIVITY/CONNECTION abaixo).
+        // O risco real do S72 — raciocínio truncado entregue como resposta — é coberto em _consumeStream: raciocínio
+        // só vira resposta quando a geração terminou normalmente.
 
-        // Issue 044 (23/09/2026): MAX_TIMEOUT (teto DURO, aborta a chamada inteira) é
-        // independente de MAX_THINKING_DURATION_MS (teto SUAVE, só sobre o tempo em "thinking")
-        // — mas quando quem chama passa `customTimeoutMs` menor que o teto suave (achado ao
-        // vivo: `ObserverValidator` passa `getBudgetAuxiliar('validacao').timeoutMs`, que na
-        // prática fica preso no piso de 30s — ver `shared/auxTimeout.ts` sobre a média de
-        // latência por provedor ficar contaminada por chamadas rápidas), o teto duro dispara
-        // ANTES do suave ter qualquer chance de atuar — reproduzido ao vivo, juiz de grounding
-        // abortado aos exatos 30000ms com 8119 chars de thinking (bem abaixo do teto suave de
-        // 32000 com reasoningIntensive), goal=weather bloqueado com UNVALIDATED mesmo com dado
-        // real e correto já obtido. `reasoningIntensive` já eleva o teto suave (4×) desde a
-        // issue 038 — sem também elevar o piso do teto duro, essa elevação nunca tem efeito
-        // prático para o call site que mais precisa dela. Só se aplica quando `reasoningIntensive`
-        // é true — sem o opt-in, `MAX_TIMEOUT` continua exatamente `customTimeoutMs || 300_000`,
-        // como antes (não pode elevar o teto de chamadas rápidas como `GoalExtractor`, que passa
-        // `customTimeoutMs` propositalmente curto — 6s — para desistir cedo e cair em heurística).
+        // Issue 044 (23/09/2026): chamadas `reasoningIntensive` (juiz, planejador, validador de conclusão) têm um PISO
+        // de prazo — achado ao vivo: o `ObserverValidator` passava um prazo preso no piso de 30 s (ver
+        // `shared/auxTimeout.ts`) e o juiz de grounding era abortado aos exatos 30000 ms, goal=weather bloqueado com
+        // UNVALIDATED mesmo com dado real e correto. O piso é `REASONING_INTENSIVE_TIMEOUT_FLOOR_MS` (providerTypes —
+        // mesmo valor usado pelo timer de tentativa do ProviderFactory, issue 047). Sem o opt-in, `MAX_TIMEOUT`
+        // continua exatamente `customTimeoutMs || 300_000` (não pode elevar o prazo de chamadas rápidas como o
+        // `GoalExtractor`, que passa 6 s de propósito para desistir cedo e cair em heurística).
         const MAX_TIMEOUT = reasoningIntensive
-            ? Math.max(customTimeoutMs || 300_000, MAX_THINKING_DURATION_MS)
+            ? Math.max(customTimeoutMs || 300_000, REASONING_INTENSIVE_TIMEOUT_FLOOR_MS)
             : (customTimeoutMs || 300_000);
         // Scale activity timeout with MAX_TIMEOUT so long-generation tasks (e.g. 385s budget)
         // aren't killed after 90s of model silence. Cap at 180s to keep a safety ceiling.
@@ -246,10 +222,6 @@ export class OllamaProvider implements ILLMProvider {
         let maxTimer: NodeJS.Timeout | null = null;
         let connectionTimer: NodeJS.Timeout | null = null;
 
-        let thinkingYielded = 0;
-        let thinkingStartMs: number | null = null;
-        let hasNonThinkingOutput = false;
-        let thinkingBudgetAbort = false;
 
         const resetActivityTimer = () => {
             if (activityTimer) clearTimeout(activityTimer);
@@ -370,33 +342,10 @@ export class OllamaProvider implements ILLMProvider {
 
                     if (text) {
                         const yieldType = (type === 'thinking' || type === 'reasoning') ? 'thinking' : 'content';
-                        if (yieldType === 'thinking') {
-                            if (thinkingStartMs === null) thinkingStartMs = Date.now();
-                            thinkingYielded += text.length;
-                            const thinkingDurationMs = Date.now() - thinkingStartMs;
-                            log.debug(`[${streamId}] [STREAM] Thinking chunk: ${text.length} chars (total=${thinkingYielded} duration=${thinkingDurationMs}ms)`);
-                            if (!hasNonThinkingOutput && (
-                                thinkingYielded > MAX_THINKING_BUDGET_CHARS ||
-                                thinkingDurationMs > MAX_THINKING_DURATION_MS
-                            )) {
-                                const reason = thinkingYielded > MAX_THINKING_BUDGET_CHARS ? 'chars' : 'duration';
-                                log.warn(
-                                    `[${streamId}] [STREAM] THINKING BUDGET exceeded ` +
-                                    `(${thinkingYielded} chars, ${thinkingDurationMs}ms, reason=${reason}) — aborting`
-                                );
-                                this._reasoningBudgetAborted = true;
-                                controller.abort();
-                                thinkingBudgetAbort = true;
-                                break;
-                            }
-                        } else {
-                            hasNonThinkingOutput = true;
-                        }
                         yield { type: yieldType, value: text } as StreamChunk;
                     }
 
                     if (chunk.message?.tool_calls) {
-                        hasNonThinkingOutput = true;
                         for (const tc of chunk.message.tool_calls) {
                             log.info(`[${streamId}] [STREAM] Tool call: ${tc.function?.name || 'unknown'}`);
                             yield { type: 'tool_call', value: tc } as StreamChunk;
@@ -412,16 +361,6 @@ export class OllamaProvider implements ILLMProvider {
                         } as StreamChunk;
                         return;
                     }
-                }
-                if (thinkingBudgetAbort) {
-                    // Must throw (not just break) so this reaches the catch block below and
-                    // propagates to _consumeStream's REASONING_BUDGET handling, which discards
-                    // the raw thinking instead of leaking it to the user as content. A silent
-                    // break here would make streamChat return normally with no 'done' chunk,
-                    // and _consumeStream's thinking-as-content fallback (for models that route
-                    // their whole response through the thinking field) would promote the
-                    // truncated internal reasoning as the final answer.
-                    throw new Error(`Reasoning budget exceeded — stream aborted (${thinkingYielded} chars)`);
                 }
             }
 
@@ -482,8 +421,6 @@ export class OllamaProvider implements ILLMProvider {
         const consumeId = `sc-${Date.now().toString(36)}`;
 
         log.info(`[${consumeId}] [STREAM-CONSUME] START timeout=${customTimeoutMs || 'default'}ms`);
-        // Reset per-call abort reason (taskQueue guarantees serial execution).
-        this._reasoningBudgetAborted = false;
 
         try {
             for await (const chunk of this.streamChat(messages, tools, customTimeoutMs, externalSignal, reasoningIntensive)) {
@@ -498,59 +435,20 @@ export class OllamaProvider implements ILLMProvider {
         } catch (streamErr) {
             streamFailed = true;
             const elapsed = Date.now() - startTime;
-
-            // REASONING_BUDGET: do NOT expose raw internal reasoning to the caller.
-            // Discard thinking and propagate as an error so ProviderFactory can apply
-            // its normal fallback/timeout policy — same UX as a provider timeout.
-            if (this._reasoningBudgetAborted) {
-                this._reasoningBudgetAborted = false;
-                log.warn(
-                    `[${consumeId}] [STREAM-CONSUME] ${AbortReason.REASONING_BUDGET}: ` +
-                    `discarding ${thinking.length} chars of thinking — propagating as provider error`
-                );
-                throw Object.assign(
-                    new Error(`Reasoning budget exceeded after ${thinking.length} chars`),
-                    { abortReason: AbortReason.REASONING_BUDGET }
-                );
-            }
-
-            // TIMEOUT / PROVIDER_ERROR: models like deepseek-v4-flash:cloud route their entire
-            // response through the thinking field. Recover thinking as content only here.
-            // User-cancel discarding is handled by the caller (chatWithFallback checks
-            // externalSignal after we return, so no thinking leaks to a cancelled user).
-            // Do NOT promote thinking when there are also tool calls: the thinking is internal
-            // reasoning accompanying the action and must never reach the user as a response.
-            //
-            // Issue 042 (22/09/2026, achado no mesmo teste ao vivo que motivou a issue 038):
-            // reproduzido com reasoningIntensive=true — o teto de TEMPO da chamada (não o de
-            // chars, já corrigido) estourou primeiro, e este recovery promoveu ~11800 chars de
-            // raciocínio bruto e incompleto a "content". Para um chamador que espera prosa livre
-            // (turno conversacional), isso é uma recuperação legítima. Para um chamador que
-            // opta por reasoningIntensive — os 4 call sites hoje esperam JSON estruturado
-            // (veredito de grounding, plano, conclusão de goal) — um CoT truncado NUNCA é um
-            // substituto válido: só troca um timeout limpo por "saída do juiz sem estrutura
-            // válida", mais confuso. `reasoningIntensive` já é o sinal de "este chamador produz
-            // saída estruturada, não prosa" — reusar em vez de inventar uma segunda flag
-            // (Nunca Adivinhar: reportar o timeout real, não chutar que o CoT bruto é a resposta).
-            if (!reasoningIntensive && !content && thinking && thinking.length > 50 && toolCalls.length === 0) {
-                log.info(`[${consumeId}] [STREAM-CONSUME] Aborted with ${thinking.length} chars of thinking, no content — recovering thinking as content`);
-                content = thinking;
-                thinking = '';
-            } else if (!content && thinking && toolCalls.length > 0) {
-                log.debug(`[${consumeId}] [STREAM-CONSUME] Aborted with ${thinking.length} chars of thinking alongside tool calls — not promoting (internal reasoning, not deliverable)`);
-            }
+            // Stream abortado (prazo, erro de provedor): raciocínio acumulado é TRUNCADO por definição e nunca vira
+            // resposta (lição do S72: 8000 chars de CoT incompleto entregues no Telegram). Conteúdo real já recebido
+            // segue, marcado interrupted=true (issue 060). Issue 064: antes, a issue 042 ainda promovia o raciocínio de
+            // chamadas sem reasoningIntensive — o mesmo vazamento, por outro caminho; agora a regra é uma só.
             if (!content) {
-                // Nothing to recover — propagate the error so ProviderFactory can retry
+                if (thinking) log.warn(`[${consumeId}] [STREAM-CONSUME] Aborted with ${thinking.length} chars of thinking, no content — discarding (interrupted reasoning is never an answer)`);
                 log.error(`[${consumeId}] [STREAM-CONSUME] FAILED after ${chunkCount} chunks, ${elapsed}ms: ${errorMessage(streamErr)}`);
                 throw streamErr;
             }
-            // Content was recovered from thinking — fall through to the normal return path.
-            // Same result as if the model had completed normally in thinking-only mode.
-            // Avoids a wasted retry+backoff cycle when valid content is already available.
-            log.warn(`[${consumeId}] [STREAM-CONSUME] Recovered ${content.length} chars from aborted stream after ${chunkCount} chunks, ${elapsed}ms — using recovered content instead of retrying`);
+            log.warn(`[${consumeId}] [STREAM-CONSUME] Aborted after ${content.length} chars of content, ${chunkCount} chunks, ${elapsed}ms — returning it marked interrupted`);
         }
 
         const elapsed = Date.now() - startTime;
+        const interrupted = streamFailed || !sawDone || doneReason === 'length';
 
         // Some models (e.g. deepseek-v4-flash:cloud via Ollama) return their full response
         // in message.thinking instead of message.content. When content is empty but thinking
@@ -558,7 +456,12 @@ export class OllamaProvider implements ILLMProvider {
         // also tool calls: in that case the thinking is internal reasoning accompanying the
         // action and must never be stored as a deliverable response (it would leak as the
         // final answer if the turn is aborted after the tool call fails).
-        if (!content && thinking && toolCalls.length === 0) {
+        // Issue 064: e SÓ quando a geração terminou normalmente — stream sem 'done' ou cortado por limite traz
+        // raciocínio incompleto (S72), que não é resposta.
+        if (!content && thinking && toolCalls.length === 0 && interrupted) {
+            log.warn(`[${consumeId}] [STREAM-CONSUME] ${thinking.length} chars of thinking from an interrupted generation (done=${sawDone}, done_reason=${doneReason ?? 'n/a'}) — discarding, not an answer`);
+            thinking = '';
+        } else if (!content && thinking && toolCalls.length === 0) {
             log.info(`[${consumeId}] [STREAM-CONSUME] No content but ${thinking.length} chars of thinking — using as content (model returned response in thinking field)`);
             content = thinking;
             thinking = '';
@@ -585,7 +488,7 @@ export class OllamaProvider implements ILLMProvider {
             })) : undefined,
             usage: usage ? { prompt_tokens: usage.prompt_tokens ?? 0, completion_tokens: usage.completion_tokens ?? 0 } : undefined,
             // Conteúdo recuperado de stream abortado, stream sem 'done', ou corte por limite de tokens.
-            interrupted: streamFailed || !sawDone || doneReason === 'length',
+            interrupted,
         };
     }
 
@@ -626,8 +529,10 @@ export class OllamaProvider implements ILLMProvider {
             if (!response.ok) throw new Error(`Ollama fallback error: ${response.status}`);
             const data = await response.json() as OpenAIChatResponse;
             const message = data.message;
-            // Same fallback as streaming: some models return response in thinking field
-            const content = message?.content || (message as unknown as { thinking?: string })?.thinking || '';
+            // Same fallback as streaming: some models return response in thinking field — only when the generation
+            // finished normally (issue 064: thinking cut by the token limit is incomplete reasoning, not an answer).
+            const cutByLimit = (data as { done_reason?: string }).done_reason === 'length';
+            const content = message?.content || (cutByLimit ? '' : (message as unknown as { thinking?: string })?.thinking) || '';
             return {
                 content,
                 toolCalls: message?.tool_calls?.map((tc: RawToolCall, i: number) => ({
@@ -640,7 +545,7 @@ export class OllamaProvider implements ILLMProvider {
                     completion_tokens: data.usage?.completion_tokens ?? 0
                 } : undefined,
                 // Issue 060: resposta não-streaming chega inteira; só o corte por limite de tokens a interrompe.
-                interrupted: (data as { done_reason?: string }).done_reason === 'length',
+                interrupted: cutByLimit,
             };
         } finally {
             clearTimeout(timeout);

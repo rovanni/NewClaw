@@ -140,7 +140,9 @@ console.log('\n=== S290.3 — auditoria de código: elevação do teto duro só 
     const src = require('fs').readFileSync(require('path').join(process.cwd(), 'src', 'core', 'OllamaProvider.ts'), 'utf-8') as string;
     const trecho = src.slice(src.indexOf('const MAX_TIMEOUT = reasoningIntensive'), src.indexOf('const ACTIVITY_TIMEOUT'));
     assert(
-        /reasoningIntensive\s*\n?\s*\?\s*Math\.max\(customTimeoutMs \|\| 300_000, MAX_THINKING_DURATION_MS\)\s*\n?\s*:\s*\(customTimeoutMs \|\| 300_000\)/.test(trecho),
+        // Issue 064: o teto suave de "thinking" saiu; o piso agora é a constante única REASONING_INTENSIVE_TIMEOUT_FLOOR_MS
+        // (mesmo valor, 240 s, já usada pelo timer de tentativa do ProviderFactory — issue 047).
+        /reasoningIntensive\s*\n?\s*\?\s*Math\.max\(customTimeoutMs \|\| 300_000, REASONING_INTENSIVE_TIMEOUT_FLOOR_MS\)\s*\n?\s*:\s*\(customTimeoutMs \|\| 300_000\)/.test(trecho),
         'MAX_TIMEOUT só eleva o teto quando reasoningIntensive é true; caso contrário é customTimeoutMs || 300_000, sem alteração',
         trecho,
     );
