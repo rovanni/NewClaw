@@ -44,7 +44,7 @@ import { StepSemanticValidator, StepExecutionFacts } from './StepSemanticValidat
 import { GracefulDeliveryOrchestrator } from './GracefulDeliveryOrchestrator';
 import { StrategyDiversityGuard } from '../shared/StrategyDiversityGuard';
 import { resolvePath, commandExists } from '../utils/crossPlatform';
-import { ensureDeliverySuccessCriteria, ensureResponseContractCriterion, AUTO_DELIVERY_CRITERION_IDS, trackPromisedDeliveryTools, detectAbandonedDeliveryTools, ensureDeliveryNotAbandonedCriterion } from './planning/ensureDeliverySuccessCriteria';
+import { ensureDeliverySuccessCriteria, ensureResponseContractCriterion, AUTO_DELIVERY_CRITERION_IDS, trackPromisedDeliveryTools, detectAbandonedDeliveryTools, ensureDeliveryNotAbandonedCriterion, findResponseContractGap } from './planning/ensureDeliverySuccessCriteria';
 import type { IntentCategory } from '../shared/domainTypes';
 import { resolveInstallCommand } from './planning/resolveInstallCommand';
 import { inferExpectedExtensions, isExpectedDeliverableFile } from './planning/inferExpectedExtensions';
@@ -385,6 +385,11 @@ export class GoalExecutionLoop {
         }
         this.tracePlan(goal, 'initial', initialPlan, initialCriteria, planResult.successCriteria ?? [], intentCategory);
 
+        if (this.rejectPlanWithoutAnswerStep(goal, initialPlan, initialCriteria)) {
+            this.goalStore.update(goal.id, { successCriteria: initialCriteria, deliveryToolsEverPromised: promisedDeliveryTools });
+            return this.runLoop(this.goalStore.getById(goal.id)!, channelContext, onProgress, 0, 0);
+        }
+
         this.goalStore.update(goal.id, {
             currentPlan: initialPlan,
             status: 'executing',
@@ -662,6 +667,7 @@ export class GoalExecutionLoop {
             ensureDeliverySuccessCriteria(finalPlan, mergedCriteria),
         );
         this.tracePlan(goal, 'replan', finalPlan, replanCriteria, planResult.successCriteria ?? [], undefined);
+        if (this.rejectPlanWithoutAnswerStep(goal, finalPlan, replanCriteria)) return this.goalStore.getById(goal.id)!;
 
         this.goalStore.update(goal.id, {
             currentPlan: finalPlan,
@@ -698,6 +704,31 @@ export class GoalExecutionLoop {
             state.progressModel.updatedAt = Date.now();
         }
         return this.goalStore.getById(goal.id)!;
+    }
+
+    /**
+     * Issue 059 — admissão do plano: com contrato de resposta declarado e nenhuma etapa capaz de
+     * responder (`findResponseContractGap`), o plano não executa. Mesmo caminho do plano rejeitado
+     * pelo Q2 (CR#3, planWithSpiral): o fato vira blocker — que o Planner lê em "Blockers anteriores" —,
+     * o plano fica vazio e o loop segue para validação → replan. Não consome replanBudget aqui: o
+     * replan que se segue já consome, como qualquer validação não cumprida.
+     *
+     * Goal de construção fica fora: marcos intermediários não precisam responder ao usuário.
+     */
+    private rejectPlanWithoutAnswerStep(goal: Goal, steps: PlanStep[], criteria: SuccessCriterion[]): boolean {
+        if (goal.isConstruction) return false;
+        const gap = findResponseContractGap(steps, criteria);
+        if (!gap) return false;
+        log.warn(`[GoalLoop] [PLAN-REJECTED] goal=${goal.id} reason=response_contract_without_answer_step tools=[${steps.map(s => s.toolName ?? 'agentloop').join(',')}]`);
+        this.goalStore.addStrategyTried(goal.id, `plan_rejected: sem etapa de resposta [${steps.map(s => s.toolName ?? 'agentloop').join(',')}]`);
+        this.goalStore.addBlocker(goal.id, {
+            kind: 'goal_incomplete',
+            description: gap,
+            suggestedActions: ['Incluir uma etapa final sem toolName que responda ao usuário com os dados coletados'],
+            detectedAt: Date.now(),
+        });
+        this.goalStore.update(goal.id, { currentPlan: [], status: 'replanning' });
+        return true;
     }
 
     // ── Loop de ciclos (compartilhado entre executeGoal e resumeGoal) ─────────
