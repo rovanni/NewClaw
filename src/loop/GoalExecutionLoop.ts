@@ -29,7 +29,7 @@ import { GoalEvaluator } from './GoalEvaluator';
 import { RiskAnalyzer } from './RiskAnalyzer';
 import { CapabilityRegistry } from '../core/CapabilityRegistry';
 import { ProactiveRecovery, ToolExecutorLike } from './ProactiveRecovery';
-import { ToolRegistry, DIRECT_DELIVERABLE_TOOLS } from '../core/ToolRegistry';
+import { ToolRegistry, producesUserReadableText } from '../core/ToolRegistry';
 import { ReflectionMemory } from '../memory/ReflectionMemory';
 import { CaseMemory } from '../memory/CaseMemory';
 import { OperationalKnowledge } from '../memory/OperationalKnowledge';
@@ -4735,11 +4735,8 @@ OU
         const currentGeneration = goal.planGeneration ?? 0;
         const lastSuccess = [...goal.attempts].reverse()
             .find(a => a.result === 'success' && (a.planGeneration ?? 0) === currentGeneration
-                && (a.toolName === 'agentloop' || DIRECT_DELIVERABLE_TOOLS.includes(a.toolName)));
-        const lastSuccessIsSafeToDeliverRaw = !!lastSuccess && (
-            lastSuccess.toolName === 'agentloop' ||
-            DIRECT_DELIVERABLE_TOOLS.includes(lastSuccess.toolName)
-        );
+                && producesUserReadableText(a.toolName));
+        const lastSuccessIsSafeToDeliverRaw = !!lastSuccess && producesUserReadableText(lastSuccess.toolName);
         const hasGenericSummary = fallbackText === GENERIC_CRITERIA_SUMMARY;
         return (lastSuccessIsSafeToDeliverRaw ? (lastSuccess?.output || undefined) : undefined)
             ?? (!hasGenericSummary ? fallbackText : undefined);

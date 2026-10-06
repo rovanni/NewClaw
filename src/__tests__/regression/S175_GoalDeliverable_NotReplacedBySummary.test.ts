@@ -219,7 +219,8 @@ console.log('\n=== S175-5 — D2 presente estruturalmente em buildResult() ===')
     // 15/08/2026: a precedência "conteúdo real > resumo" foi extraída para pickBestAvailableContent()
     // — compartilhada com o ramo de falha de envio diferido (ver S234). Guarda contra duplicação.
     assert(
-        (SOURCE.match(/const lastSuccessIsSafeToDeliverRaw = !!lastSuccess && \(/g) ?? []).length === 1,
+        // Issue 059: o gate passou a ser o predicado único producesUserReadableText (ToolRegistry).
+        (SOURCE.match(/const lastSuccessIsSafeToDeliverRaw = !!lastSuccess && producesUserReadableText\(lastSuccess\.toolName\);/g) ?? []).length === 1,
         'a lógica de "seguro para entrega crua" existe em UM lugar só — não duplicada em buildResult() e no ramo de falha',
     );
     assert(
@@ -229,16 +230,17 @@ console.log('\n=== S175-5 — D2 presente estruturalmente em buildResult() ===')
     // Achado A (14/08/2026): o gate por identidade de tool existe e reusa a MESMA allowlist que
     // AgentLoop.ts já usava para o bypass de síntese — fonte única em core/ToolRegistry.ts.
     assert(
-        /const lastSuccessIsSafeToDeliverRaw = !!lastSuccess && \(/.test(SOURCE),
+        /const lastSuccessIsSafeToDeliverRaw = !!lastSuccess && producesUserReadableText\(lastSuccess\.toolName\);/.test(SOURCE),
         'lastSuccessIsSafeToDeliverRaw existe como gate explícito, não implícito',
     );
     assert(
-        /lastSuccess\.toolName === 'agentloop' \|\|\s*\n\s*DIRECT_DELIVERABLE_TOOLS\.includes\(lastSuccess\.toolName\)/.test(SOURCE),
+        // Issue 059: a regra (agentloop OU allowlist) vive em producesUserReadableText — conferida no próprio ToolRegistry.
+        /return toolName === undefined \|\| toolName === 'agentloop' \|\| DIRECT_DELIVERABLE_TOOLS\.includes\(toolName\);/.test(TOOL_REGISTRY_SOURCE),
         "o gate permite step 'agentloop' (já sintetizado) ou tool na allowlist — nunca tool arbitrária",
     );
     assert(
-        /import \{ ToolRegistry, DIRECT_DELIVERABLE_TOOLS \} from '\.\.\/core\/ToolRegistry';/.test(SOURCE),
-        'DIRECT_DELIVERABLE_TOOLS é importado de core/ToolRegistry — mesma fonte que AgentLoop.ts, não duplicado',
+        /import \{ ToolRegistry, producesUserReadableText \} from '\.\.\/core\/ToolRegistry';/.test(SOURCE) && !/DIRECT_DELIVERABLE_TOOLS\.includes/.test(SOURCE),
+        'GoalExecutionLoop consome a regra de core/ToolRegistry (producesUserReadableText) — sem cópia local da allowlist',
     );
     // Fonte única de fato: só uma declaração de DIRECT_DELIVERABLE_TOOLS em todo o repo (guarda
     // contra uma futura cópia local divergindo, mesmo bug que TERMINAL_DELIVERY_TOOLS já corrige

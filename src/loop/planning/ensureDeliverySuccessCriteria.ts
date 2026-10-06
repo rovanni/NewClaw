@@ -27,7 +27,7 @@
 
 import { PlanStep, SuccessCriterion } from '../GoalTypes';
 import type { IntentCategory } from '../../shared/domainTypes';
-import { DIRECT_DELIVERABLE_TOOLS } from '../../core/ToolRegistry';
+import { producesUserReadableText } from '../../core/ToolRegistry';
 
 export const AUTO_DELIVERY_CRITERION_IDS = {
     send_document: 'auto_delivery_send_document',
@@ -182,23 +182,20 @@ export function ensureResponseContractCriterion(
  * geração 4, com os ciclos já esgotados. 12 ciclos, ~4,5 min, goal failed.
  *
  * Checagem de EXISTÊNCIA, não de qualidade (determinismo valida, LLM interpreta): só o tipo de cada
- * etapa. Capazes de responder são as mesmas que `pickBestAvailableContent` (GoalExecutionLoop) aceita
- * entregar como resposta — etapa do agente (sem toolName, ou 'agentloop') e `DIRECT_DELIVERABLE_TOOLS`
- * —, mais as ferramentas de entrega de artefato, pela mesma razão da EXCEÇÃO ESTRUTURAL de
+ * etapa. Capazes de responder são as que `producesUserReadableText` (ToolRegistry — a mesma fonte que
+ * `pickBestAvailableContent` usa para decidir o que entregar), mais as ferramentas de entrega de artefato, pela mesma razão da EXCEÇÃO ESTRUTURAL de
  * `ensureResponseContractCriterion` (o artefato É a resposta). Não decide o plano: o chamador rejeita
  * e o fato vai ao Planner, que escolhe como responder.
  */
 export function findResponseContractGap(steps: PlanStep[], successCriteria: SuccessCriterion[]): string | null {
     if (!successCriteria.some(c => c.check === 'response_produced')) return null;
     const canAnswer = steps.some(s =>
-        s.toolName === undefined || s.toolName === 'agentloop' ||
-        DIRECT_DELIVERABLE_TOOLS.includes(s.toolName) ||
-        (DELIVERY_TOOLS as readonly string[]).includes(s.toolName));
+        producesUserReadableText(s.toolName) || (DELIVERY_TOOLS as readonly string[]).includes(s.toolName ?? ''));
     if (canAnswer) return null;
     const tools = Array.from(new Set(steps.map(s => s.toolName))).join(', ') || '(nenhuma etapa)';
     return `Plano rejeitado antes da execução: o objetivo exige uma resposta em texto ao usuário, mas nenhuma etapa do plano produz essa resposta — ` +
         `todas são ferramentas (${tools}) cuja saída não chega ao usuário. Inclua uma etapa SEM toolName (executada pelo agente) que use os dados ` +
-        `coletados para responder ao usuário. memory_write/memory_search não respondem ao usuário.`;
+        `coletados para responder ao usuário.`;
 }
 
 /**

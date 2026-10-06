@@ -16,6 +16,9 @@
 import { findResponseContractGap } from '../../loop/planning/ensureDeliverySuccessCriteria';
 import { GoalExecutionLoop } from '../../loop/GoalExecutionLoop';
 import type { PlanStep, SuccessCriterion } from '../../loop/GoalTypes';
+import { DIRECT_DELIVERABLE_TOOLS, producesUserReadableText } from '../../core/ToolRegistry';
+import * as fs from 'fs';
+import * as path from 'path';
 
 let passed = 0;
 let failed = 0;
@@ -66,6 +69,16 @@ console.log('\n=== S338-4 — admissão no loop: blocker com o fato, plano vazio
     calls.blocker.length = 0; calls.update.length = 0;
     assert(loop.rejectPlanWithoutAnswerStep(goal, [step('read'), step(undefined)], contract) === false && calls.update.length === 0, 'plano com resposta: não toca o goal');
     assert(loop.rejectPlanWithoutAnswerStep({ ...goal, isConstruction: true }, [step('exec_command')], contract) === false && calls.update.length === 0, 'goal de construção: fora (marco intermediário)');
+}
+
+console.log('\n=== S338-5 — fonte única: admitir e entregar usam a mesma regra (producesUserReadableText) ===');
+for (const t of [undefined, 'agentloop', ...DIRECT_DELIVERABLE_TOOLS, 'read', 'exec_command', 'memory_write', 'web_search']) {
+    const admitted = findResponseContractGap([step(t)], contract) === null;
+    assert(admitted === producesUserReadableText(t), `${t ?? '(sem toolName)'}: admissão (${admitted}) = entrega (${producesUserReadableText(t)})`);
+}
+{
+    const src = fs.readFileSync(path.join(process.cwd(), 'src', 'loop', 'planning', 'ensureDeliverySuccessCriteria.ts'), 'utf-8');
+    assert(!/DIRECT_DELIVERABLE_TOOLS\.includes/.test(src) && /producesUserReadableText\(/.test(src), 'findResponseContractGap não tem cópia local da regra');
 }
 
 console.log(`\n${'─'.repeat(60)}`);

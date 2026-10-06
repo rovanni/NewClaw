@@ -40,6 +40,17 @@ export const TERMINAL_DELIVERY_TOOLS: readonly string[] = ['send_audio', 'send_d
  */
 export const DIRECT_DELIVERABLE_TOOLS: readonly string[] = ['weather', 'crypto_analysis'];
 
+/**
+ * Fonte única (issue 059) de "esta etapa/tentativa produz texto que o usuário pode ler como resposta?": a etapa do
+ * próprio agente (sem toolName no plano; `'agentloop'` no attempt) ou uma tool de `DIRECT_DELIVERABLE_TOOLS`.
+ * Consumidores: `pickBestAvailableContent` (o que entregar) e `findResponseContractGap` (o plano consegue responder?)
+ * — as duas perguntas precisam da MESMA resposta, senão o plano é admitido com uma etapa cuja saída nunca é entregue.
+ * Pertinência de conjunto: pergunta estrutural.
+ */
+export function producesUserReadableText(toolName: string | undefined): boolean {
+    return toolName === undefined || toolName === 'agentloop' || DIRECT_DELIVERABLE_TOOLS.includes(toolName);
+}
+
 /** Forma mínima e já convencionada de `tool.parameters` (JSON-Schema-like) — cada tool declara a
  *  sua (ex: `memory_write.ts`), nunca tipada em `ToolExecutor` porque cada tool tem seu próprio
  *  formato de `properties`. Só o suficiente pra validação estrutural abaixo. */
