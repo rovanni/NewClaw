@@ -165,8 +165,8 @@ export class GoalStore {
                 requires_auth, authorization_scope, pending_txn_id,
                 created_at, updated_at, expires_at, completed_at,
                 is_construction, roadmap, current_milestone_index, allow_roadmap_adjustment,
-                success_criteria, plan_generation
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                success_criteria, plan_generation, sent_artifacts, delivery_tools_ever_promised
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         `).run(
             goal.id,
             goal.sessionKey,
@@ -204,6 +204,11 @@ export class GoalStore {
             goal.allowRoadmapAdjustment !== false ? 1 : 0,
             JSON.stringify(goal.successCriteria ?? []),
             goal.planGeneration ?? 0,
+            // Issue 035 (H1): estas duas colunas ficavam fora do INSERT — um Goal criado já com sentArtifacts ou
+            // deliveryToolsEverPromised perdia o valor em silêncio (o objeto em memória tinha, a leitura seguinte
+            // não). Achado pela auditoria "campos aceitos × campos gravados" que a issue pediu.
+            JSON.stringify(goal.sentArtifacts ?? []),
+            JSON.stringify(goal.deliveryToolsEverPromised ?? []),
         );
 
         log.info(`[GoalStore] created goal=${goal.id} session=${goal.sessionKey}`);
