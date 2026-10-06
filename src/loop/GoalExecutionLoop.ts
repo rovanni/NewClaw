@@ -4479,12 +4479,13 @@ OU
                 requiredTools: ['list_workspace', 'read', 'read_document', 'exec_command', 'organize_workspace'],
                 requireNonEmptyOutput: true,
             },
-            {
-                // "foi enviado / foi entregue"
-                pattern: /foi\s+(enviado|entregue|transmitid[ao])\b/i,
-                label: 'envio de artefato',
-                requiredTools: ['send_document', 'send_audio'],
-            },
+            // Issue 061 (06/10/2026): a regra "foi enviado/entregue" → exige send_document/send_audio foi REMOVIDA.
+            // Regex sobre a prosa do validador não distingue "a resposta foi entregue" (texto) de "o arquivo foi
+            // enviado" (artefato) — pergunta semântica (RESPONSABILIDADE_ANTES_DO_MECANISMO). Produção: 5 overrides
+            // de goals que NÃO pediam arquivo (4tvad, q7r69 expirou, yifr9 gerou e enviou um .md não pedido, 3nasb,
+            // a0mxc falhou), 0 verdadeiros; ao vivo: p5ood e o2k8y. Toda entrega PREVISTA pelo plano já é cobrada
+            // por critério estrutural (tool_succeeded(send_*) + isExpectedDeliverableFile, delivery_not_silently_
+            // abandoned, pending_send_verified_on_disk), e o validador recebe a lista do que foi entregue.
             {
                 // "foi exportado / foi convertido"
                 pattern: /foi\s+(exportad[ao]|convertid[ao])\b/i,
