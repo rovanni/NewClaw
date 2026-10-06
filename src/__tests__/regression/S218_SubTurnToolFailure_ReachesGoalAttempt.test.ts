@@ -81,7 +81,8 @@ console.log('\n=== S218-3 — o campo chega ao GoalAttempt (a ponta que o tsc n�
         'GoalAttempt declara subToolFailures');
     assert(/agentloopSubToolFailures\?: Array<\{ tool: string; error\?: string \}>/.test(goalLoopSrc),
         'o tipo de retorno do dispatch de agentloop declara o campo');
-    assert(/return \{ earlyReturn: false,[^}]*agentloopSubToolFailures \}/.test(goalLoopSrc),
+    // Atualizado DE PROPÓSITO na issue 057 (G3): o retorno ganhou agentloopSubToolWrites depois deste campo.
+    assert(/return \{ earlyReturn: false,[^}]*agentloopSubToolFailures[,\s][^}]*\}/.test(goalLoopSrc),
         'o dispatch RETORNA o campo');
     assert(/agentloopSubToolFailures: agentloopResult\.agentloopSubToolFailures/.test(goalLoopSrc),
         'o call-site PROPAGA o campo para finalizeStepAttempt');

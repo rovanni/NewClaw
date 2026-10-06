@@ -158,6 +158,28 @@ type StepExecutionPhaseResult =
     | { action: 'earlyReturn'; result: GoalResult }
     | { action: 'proceedToSwitch'; goal: Goal; cycleResult: CycleResult };
 
+/**
+ * Issue 057 (G3) — caminhos gravados com SUCESSO (write/edit) num trace de sub-turno. Pareia cada tool_result com a
+ * tool_call imediatamente anterior, e só se for da mesma ferramenta (pareamento estrito de
+ * AgentLoop.evidencesFromTrace — reaproveitar args de uma chamada não adjacente descreveria outro fato).
+ */
+export function writesFromTrace(steps: Array<{ type: string; data?: Record<string, any> }>): string[] {
+    const out: string[] = [];
+    for (let i = 0; i < steps.length; i++) {
+        const r = steps[i];
+        if (r.type !== 'tool_result' || r.data?.success !== true) continue;
+        const tool = String(r.data?.tool ?? '');
+        if (tool !== 'write' && tool !== 'edit') continue;
+        let call: { type: string; data?: Record<string, any> } | undefined;
+        for (let j = i - 1; j >= 0; j--) { if (steps[j].type === 'tool_call') { call = steps[j]; break; } }
+        if (!call || call.data?.tool !== tool) continue;
+        const input = (call.data?.input ?? {}) as Record<string, unknown>;
+        const p = input.path ?? input.file_path;
+        if (typeof p === 'string' && p.trim()) out.push(p.trim());
+    }
+    return out;
+}
+
 export class GoalExecutionLoop {
     private readonly evaluator: GoalEvaluator;
     private readonly riskAnalyzer: RiskAnalyzer;
@@ -1793,7 +1815,7 @@ export class GoalExecutionLoop {
                 toolsCalled: lastAttempt.subToolCalls ?? (lastAttempt.toolName && lastAttempt.toolName !== 'agentloop' ? [lastAttempt.toolName] : []),
                 toolsFailed: (lastAttempt.subToolFailures ?? []).map(f => f.tool),
                 // Sem registro de arquivos (ex.: step agentloop) é "não registrado", não "nenhum" (Nunca Adivinhar).
-                artifacts: lastAttempt.producedArtifactPaths,
+                artifacts: lastAttempt.producedArtifactPaths ?? lastAttempt.subToolWrites,
             } : undefined;
             const semanticValidation = await this.semanticValidator.validate(
                 pendingStep,
@@ -2226,6 +2248,7 @@ export class GoalExecutionLoop {
                 agentloopTraceId: agentloopResult.agentloopTraceId,
                 agentloopSubToolCalls: agentloopResult.agentloopSubToolCalls,
                 agentloopSubToolFailures: agentloopResult.agentloopSubToolFailures,
+                agentloopSubToolWrites: agentloopResult.agentloopSubToolWrites,
                 deferredSendArgs,
             });
 
@@ -2508,6 +2531,7 @@ export class GoalExecutionLoop {
             agentloopTraceId?: string;
             agentloopSubToolCalls?: string[];
             agentloopSubToolFailures?: Array<{ tool: string; error?: string }>;
+            agentloopSubToolWrites?: string[];
         }
     > {
         // Sem tool específica → chama AgentLoop com prompt focado no step
@@ -2678,6 +2702,7 @@ export class GoalExecutionLoop {
         let agentloopTraceId: string | undefined;
         let agentloopSubToolCalls: string[] | undefined;
         let agentloopSubToolFailures: Array<{ tool: string; error?: string }> | undefined;
+        let agentloopSubToolWrites: string[] | undefined;
         if (relatedTrace) {
             agentloopTraceId = relatedTrace.id;
             agentloopSubToolCalls = relatedTrace.steps
@@ -2701,6 +2726,11 @@ export class GoalExecutionLoop {
                     return { tool, error };
                 })
                 .filter(f => f.tool);
+            // Issue 057 (G3): caminhos gravados com SUCESSO pelo sub-turno (write/edit), pareando cada tool_result
+            // com a tool_call imediatamente anterior da mesma ferramenta (mesmo pareamento estrito de
+            // AgentLoop.evidencesFromTrace). Fato para o StepSemanticValidator — NÃO alimenta
+            // producedArtifactPaths, que decide qual arquivo enviar (um script auxiliar competiria com a entrega).
+            agentloopSubToolWrites = writesFromTrace(relatedTrace.steps);
         }
 
         // Guarda de saída: step-name usado como path de arquivo (CR#5)
@@ -2731,7 +2761,7 @@ export class GoalExecutionLoop {
         const stepEvalForAttempt = { confidence: stepEval.confidence, reason: stepEval.reason };
         const toolResult = { success: stepEval.success, output: text };
 
-        return { earlyReturn: false, toolResult, stepEvalForAttempt, stepSuccessConfident, agentloopTraceId, agentloopSubToolCalls, agentloopSubToolFailures };
+        return { earlyReturn: false, toolResult, stepEvalForAttempt, stepSuccessConfident, agentloopTraceId, agentloopSubToolCalls, agentloopSubToolFailures, agentloopSubToolWrites };
     }
 
     /**
@@ -2756,10 +2786,11 @@ export class GoalExecutionLoop {
             agentloopTraceId?: string;
             agentloopSubToolCalls?: string[];
             agentloopSubToolFailures?: Array<{ tool: string; error?: string }>;
+            agentloopSubToolWrites?: string[];
             deferredSendArgs: Array<Record<string, unknown>>;
         },
     ): CycleResult {
-        const { stepMutations, stepEvalForAttempt, stepSuccessConfident, agentloopTraceId, agentloopSubToolCalls, agentloopSubToolFailures, deferredSendArgs } = opts;
+        const { stepMutations, stepEvalForAttempt, stepSuccessConfident, agentloopTraceId, agentloopSubToolCalls, agentloopSubToolFailures, agentloopSubToolWrites, deferredSendArgs } = opts;
 
         // Registrar attempt com auditoria completa (cycle, mutations, evaluation)
         const attempt: GoalAttempt = {
@@ -2784,6 +2815,7 @@ export class GoalExecutionLoop {
             traceId: agentloopTraceId,
             subToolCalls: agentloopSubToolCalls,
             subToolFailures: agentloopSubToolFailures,
+            subToolWrites: agentloopSubToolWrites,
             producedArtifactPaths: toolResult.artifactPaths,
             planGeneration: goal.planGeneration ?? 0,
         };

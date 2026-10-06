@@ -259,6 +259,13 @@ export interface GoalAttempt {
      */
     subToolFailures?: Array<{ tool: string; error?: string }>;
     /**
+     * Issue 057 (G3) — caminhos que o sub-turno agentloop GRAVOU com sucesso (`write`/`edit`, lidos do trace).
+     * Mesma semântica de ausência de `subToolFailures`: `undefined` = não houve observação; `[]` = observado,
+     * nenhuma escrita registrada. Só evidência para o StepSemanticValidator — deliberadamente separado de
+     * `producedArtifactPaths`, que decide qual arquivo ENVIAR (um script auxiliar gravado competiria com a entrega).
+     */
+    subToolWrites?: string[];
+    /**
      * Sprint R1-R7 (docs/sprints-r1-r7-2026-07-13/REVISAO_ARQUITETURAL_SPRINT_R7_2026-07-13.md): artefatos que este
      * attempt declarou ter produzido — populado por `write` (o próprio `file_path`) e por
      * `exec_command` (linhas `ARTIFACT: <path>` no stdout, verificadas contra o disco antes
