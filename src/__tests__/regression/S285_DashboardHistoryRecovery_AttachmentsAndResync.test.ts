@@ -143,6 +143,9 @@ function buildSyncHarness(
     apiConversationsResponse: { success: boolean; conversations: Array<{ id: string; sessionId?: string; user_id?: string; created_at: string; updated_at: string }> },
     initialLocalConversations: Array<{ id: string; serverId?: string; title: string; messages: unknown[]; createdAt: number; updatedAt: number }>,
     messagesForFetch: Record<string, { success: boolean; messages: Array<{ role: string; content: string; created_at: string; attachments?: unknown[] }> }>,
+    // Issue 063: syncFromServer passou a ler uma marca de migração no localStorage. Padrão = já migrado (regime
+    // normal, o que estes casos sempre testaram); o caso S285.8 parte sem a marca.
+    storage: Map<string, string> = new Map([['newclaw_v1_ts_utc_resynced', '1']]),
 ): SyncHarness {
     const body = extractSyncFromServerBody();
     const conversations = initialLocalConversations;
@@ -163,12 +166,14 @@ function buildSyncHarness(
     const save = () => { harness.saveCalled = true; };
     const renderSidebar = () => { harness.renderSidebarCalled = true; };
     const consoleFake = { warn: () => {} };
+    const localStorageFake = { getItem: (k: string) => storage.get(k) ?? null, setItem: (k: string, v: string) => { storage.set(k, v); } };
 
     const fn = new AsyncFunction(
         'newclawFetch', 'fetch', 'conversations', 'mapServerMessage', 'save', 'renderSidebar', 'console',
+        'localStorage', 'SKEY', 'SKEY_VERSION',
         body,
     );
-    harness.call = () => fn(newclawFetch, fetchFake, conversations, mapServerMessage, save, renderSidebar, consoleFake) as Promise<void>;
+    harness.call = () => fn(newclawFetch, fetchFake, conversations, mapServerMessage, save, renderSidebar, consoleFake, localStorageFake, 'newclaw_', 'v1_') as Promise<void>;
     return harness;
 }
 
@@ -248,6 +253,29 @@ console.log('\n=== S285.7 — anexo entregue via goal sobrevive à ressincroniza
     const botMsg = harness.conversations[0].messages[1] as { attachments?: Array<{ fileName: string }> };
     assert(!!botMsg.attachments && botMsg.attachments.length === 1, 'a mensagem ressincronizada carrega o anexo (ANTES da issue 040 nunca existia no banco; ANTES da 041 nunca era buscado de novo)', botMsg);
     assert(botMsg.attachments?.[0]?.fileName === 'redes_computadores.pptx', 'fileName do anexo preservado na volta completa', botMsg.attachments);
+}
+
+console.log('\n=== S285.8 — issue 063: cache do navegador com horário ADIANTADO pelo bug de fuso → ressincroniza UMA vez pelo servidor ===');
+{
+    // Antes da correção a API devolvia "2026-10-06 17:33:34" (UTC sem fuso) e o painel guardava como hora local:
+    // em Brasília, 3 h no futuro. A API corrigida devolve ISO com Z — mais antigo que o valor guardado.
+    const serverIso = '2026-10-06T17:33:34.000Z';
+    const wrongLocal = new Date('2026-10-06T17:33:34').getTime() + 3 * 3600_000; // garante "futuro" em qualquer fuso
+    const localConv = { id: 'verify-060-2', serverId: 'web:verify-060-2', title: 'verify-060-2', messages: [{ role: 'user', content: 'antiga' }], createdAt: wrongLocal, updatedAt: wrongLocal };
+    const storage = new Map<string, string>();
+    const harness = buildSyncHarness(
+        { success: true, conversations: [{ id: 'web:verify-060-2', sessionId: 'verify-060-2', created_at: serverIso, updated_at: serverIso }] },
+        [localConv],
+        { 'web:verify-060-2': { success: true, messages: [{ role: 'user', content: 'pergunta', created_at: serverIso }, { role: 'assistant', content: '3', created_at: serverIso }] } },
+        storage,
+    );
+    await harness.call();
+    assert(harness.fetchedMessageUrls.length === 1, 'primeira sincronização após a correção ressincroniza mesmo com o servidor "mais antigo"', harness.fetchedMessageUrls);
+    assert(harness.conversations[0].updatedAt === Date.parse(serverIso), 'updatedAt passa a ser o do servidor (hora certa)', harness.conversations[0].updatedAt);
+    assert(harness.conversations[0].messages.length === 2, 'mensagens vêm do servidor (fonte de verdade)');
+    assert(storage.get('newclaw_v1_ts_utc_resynced') === '1', 'marca gravada — não repete');
+    await harness.call();
+    assert(harness.fetchedMessageUrls.length === 1, 'segunda sincronização sem novidade NÃO refaz o fetch', harness.fetchedMessageUrls);
 }
 
 console.log(`\n${'─'.repeat(60)}`);

@@ -61,6 +61,11 @@ console.log("\n=== S342-3 — painel: nenhuma data/hora ou voz com 'pt-BR' fixo 
     const index = fs.readFileSync(path.join(pub, 'index.html'), 'utf-8');
     assert(/recognition\.lang = newclawGetLang\(\)/.test(index), 'ditado usa o idioma do painel');
     assert(/u\.lang = lang;/.test(index) && /const lang = newclawGetLang\(\);/.test(index), 'leitura em voz alta usa o idioma do painel');
+    // Cache do navegador com horário adiantado pelo bug: sem ressincronização única, a hora certa (mais antiga)
+    // nunca substituiria a errada — e mensagens novas do servidor deixariam de ser puxadas por horas.
+    assert(/forceUtcResync \|\| serverUpdatedAt > \(local\.updatedAt \|\| 0\)/.test(index)
+        && /if \(forceUtcResync\) localStorage\.setItem\(UTC_FIX_KEY, '1'\)/.test(index),
+        'ressincronização única pelo servidor corrige o cache antigo do navegador');
 }
 
 console.log(`\n${'─'.repeat(60)}`);

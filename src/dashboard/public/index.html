@@ -608,6 +608,13 @@
         const res = await newclawFetch('/api/conversations');
         const data = await res.json();
         if (!data.success) return;
+        // Issue 063: até a correção, a API devolvia datas UTC sem fuso e o painel as lia como hora local — em fuso
+        // negativo (ex.: Brasília) o updatedAt guardado aqui ficou ADIANTADO. Como o ramo abaixo só ressincroniza
+        // quando o servidor é mais novo, a hora certa nunca substituiria a errada (e mensagens novas do servidor
+        // deixariam de ser puxadas por horas). Uma única vez, as conversas que existem no servidor são
+        // ressincronizadas por ele — fonte de verdade, mesmo ramo de sempre.
+        const UTC_FIX_KEY = SKEY + SKEY_VERSION + 'ts_utc_resynced';
+        const forceUtcResync = localStorage.getItem(UTC_FIX_KEY) !== '1';
         // Merge server convs into local (keep local if newer).
         //
         // `sc.id` é a CHAVE DE SESSÃO composta (`canal:usuário`); `sc.sessionId` é o que o
@@ -627,7 +634,7 @@
               messages: (msgData.messages || []).map(mapServerMessage),
               createdAt: new Date(sc.created_at).getTime(), updatedAt: serverUpdatedAt
             });
-          } else if (serverUpdatedAt > (local.updatedAt || 0)) {
+          } else if (forceUtcResync || serverUpdatedAt > (local.updatedAt || 0)) {
             // Achado real (campanha "sistema não utilizável", 22/09/2026): uma resposta pode
             // demorar minutos (goal complexo) — se a aba recarrega, troca de navegador, ou perde
             // o turnId em memória antes do outbox ser consumido (ver fetchAndRenderOutbox), a
@@ -647,6 +654,7 @@
             } catch (e) { console.warn('[SYNC] Falha ao ressincronizar conversa existente:', localId, e); }
           }
         }
+        if (forceUtcResync) localStorage.setItem(UTC_FIX_KEY, '1');
         save(); renderSidebar();
       } catch (e) { console.warn('[SYNC] Failed:', e); }
     }
