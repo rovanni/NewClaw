@@ -381,11 +381,17 @@ export class GoalStore {
     //     replan é concedido, o código grava 'replanning' e, na sequência, addBlocker() força
     //     'blocked' — um encadeamento real e intencional (registrar o blocker do replan que
     //     falhou), não um bug de sequenciamento.
+    //   - replanning→completed (issue 065c, 06/10/2026): um plano rejeitado na admissão (issue 059; e o caminho
+    //     antigo CR#3 do Q2) deixa o goal em 'replanning' com plano vazio, e o loop segue para a validação — que
+    //     pode concluir que o objetivo JÁ foi atingido pelas etapas anteriores. Recusar a transição deixava o goal
+    //     preso em 'replanning' para sempre: produção, goal_1791338195216_r6ppm (ENADE) concluído às 23:12, mas o
+    //     painel (que pergunta "há goal ativo?" a cada 1,5 s) mostrou "Ajustando o plano..." indefinidamente e
+    //     nunca buscou a resposta já pronta. Mesmo critério da Sprint 0.10: par legítimo observado no runtime real.
     private static readonly ALLOWED_TRANSITIONS: Record<string, GoalStatus[]> = {
         active:      ['executing', 'replanning', 'abandoned'],
         executing:   ['blocked', 'replanning', 'completed', 'failed', 'abandoned'],
         blocked:     ['executing', 'replanning', 'failed', 'abandoned'],
-        replanning:  ['executing', 'blocked', 'failed', 'abandoned'],
+        replanning:  ['executing', 'blocked', 'completed', 'failed', 'abandoned'],
         completed:   [],  // terminal — sem saída
         failed:      [],  // terminal — sem saída
         abandoned:   [],  // terminal — sem saída
