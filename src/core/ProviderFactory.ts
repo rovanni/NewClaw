@@ -325,6 +325,9 @@ export class ProviderFactory {
         let substituicao: LLMResult['substitution'];
 
         const attemptLog: AttemptInfo[] = [];
+        // Issue 064b: alguma tentativa terminou porque o PRAZO de quem chamou acabou — então não há refação sem
+        // streaming com o mesmo modelo e o mesmo prazo (ela também não caberia).
+        let prazoEsgotado = false;
         const MAX_RETRIES = 1;
         const RETRY_BACKOFF_MS = 10000 + Math.floor(Math.random() * 3000);
         const requestId = `req-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
@@ -395,6 +398,7 @@ export class ProviderFactory {
 
                 const currentAbort = new AbortController();
                 activeAbortController = currentAbort;
+                let prazoDaTentativaEsgotado = false;
 
                 // Link external signal so a cancel() from AgentLoop propagates into the provider HTTP call
                 let onExternalAbort: (() => void) | null = null;
@@ -461,7 +465,7 @@ export class ProviderFactory {
                         : timeoutMs;
 
                     if (effectiveTimeoutMs) {
-                        const attemptTimeout = setTimeout(() => currentAbort.abort(), effectiveTimeoutMs);
+                        const attemptTimeout = setTimeout(() => { prazoDaTentativaEsgotado = true; currentAbort.abort(); }, effectiveTimeoutMs);
                         // Safety timeout is 15s longer than the abort: gives _consumeStream time to
                         // recover thinking-as-content after the abort fires (both are async operations
                         // and the Promise.race reject would otherwise beat the recovery resolution).
@@ -559,14 +563,21 @@ export class ProviderFactory {
                     // Reproduzido ao vivo (auditoria 09/07): dezenas de "EMPTY after 1 chunks" em
                     // <3s cada — glitch transitório do provider, não erro permanente — cascateando
                     // em replans desnecessários (prompt cresce a cada replan) até esgotar o goal.
-                    const isRetryable = isTimeout ||
+                    // Issue 064b: prazo de quem chamou esgotado (o provider marca `deadlineExceeded`; o timer de tentativa
+                    // daqui marca `prazoDaTentativaEsgotado`) NÃO é falha transitória — retentar com o mesmo prazo só
+                    // repete a espera. Produção, 07/10: RiskAnalyzer pediu 60 s e gastou 192 s (2 tentativas por streaming
+                    // + refação sem streaming, todas no prazo). Conexão/atividade travada, rede e resposta vazia seguem
+                    // retentáveis como antes.
+                    const prazoDestaTentativa = prazoDaTentativaEsgotado || (error as { deadlineExceeded?: boolean })?.deadlineExceeded === true;
+                    if (prazoDestaTentativa) prazoEsgotado = true;
+                    const isRetryable = !prazoDestaTentativa && (isTimeout ||
                         errorMessage(error)?.includes('abort') ||
                         errorMessage(error)?.includes('ECONNRESET') ||
                         errorMessage(error)?.includes('fetch failed') ||
                         errorMessage(error)?.includes('network') ||
-                        errorMessage(error)?.includes('Empty response from stream');
+                        errorMessage(error)?.includes('Empty response from stream'));
 
-                    log.warn(`[${attemptId}] FAILED ${errorMessage(error)} duration=${duration}ms retryable=${isRetryable && attempt < MAX_RETRIES}`);
+                    log.warn(`[${attemptId}] FAILED ${errorMessage(error)} duration=${duration}ms retryable=${isRetryable && attempt < MAX_RETRIES}${prazoDestaTentativa ? ' reason=caller_deadline' : ''}`);
                     attemptLog.push({
                         provider: providerName,
                         model: modelUsed,
@@ -595,7 +606,10 @@ export class ProviderFactory {
         // outro transporte, e `estrita` não tem o que proibir.
         const naoStreamingSubstituiria = preferredProvider !== 'ollama';
         const podeTentarNaoStreaming = !semSubstituicao || !naoStreamingSubstituiria;
-        if (podeTentarNaoStreaming && attemptLog.every(a => a.status === 'timeout' || a.status === 'error')) {
+        if (prazoEsgotado) {
+            log.info(`[${requestId}] Prazo de quem chamou esgotado — sem refação sem streaming (mesmo modelo, mesmo prazo)`);
+        }
+        if (!prazoEsgotado && podeTentarNaoStreaming && attemptLog.every(a => a.status === 'timeout' || a.status === 'error')) {
             const sharedOllama = this.providers.get('ollama');
             // O fallback sem streaming respeita o MODELO que o chamador pediu, como o streaming já respeita
             // (linha do `getProviderWithModel` acima). Antes ele usava a instância compartilhada, com o modelo

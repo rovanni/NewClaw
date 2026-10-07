@@ -238,8 +238,13 @@ export class OllamaProvider implements ILLMProvider {
             }
         }, CONNECTION_TIMEOUT);
 
+        // Issue 064b: o prazo TOTAL é o de quem chamou — quando ele acaba, a chamada terminou (não é falha
+        // transitória). O erro sai marcado `deadlineExceeded` para o ProviderFactory não retentar nem refazer sem
+        // streaming com o mesmo prazo (RiskAnalyzer, 07/10: 60 s pedidos → 192 s gastos em 3 tentativas).
+        let deadlineReached = false;
         maxTimer = setTimeout(() => {
             log.warn(`[${streamId}] [STREAM] MAX TIMEOUT reached after ${MAX_TIMEOUT}ms`);
+            deadlineReached = true;
             controller.abort();
         }, MAX_TIMEOUT);
 
@@ -392,6 +397,9 @@ export class OllamaProvider implements ILLMProvider {
                 log.warn(`[${streamId}] [STREAM] ABORTED: ${errorMessage(streamErr)}. stats=${JSON.stringify(stats)}`);
             } else {
                 log.error(`[${streamId}] [STREAM] ERROR: ${errorMessage(streamErr)}. stats=${JSON.stringify(stats)}`);
+            }
+            if (deadlineReached) {
+                throw Object.assign(new Error(`Prazo da chamada esgotado (${MAX_TIMEOUT}ms) — This operation was aborted`), { deadlineExceeded: true });
             }
             throw streamErr;
         } finally {
