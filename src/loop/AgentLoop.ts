@@ -3230,6 +3230,12 @@ export class AgentLoop {
         );
         if (execResult.action === 'earlyReturn') return execResult;
         if (execResult.action !== 'proceed') {
+            // Issue 066 (07/10/2026): toda chamada que entrou em EXECUTING_TOOL precisa voltar a THINKING, inclusive
+            // quando uma proteção a bloqueia (aqui: continueFor/breakFor). Produção, goal ENADE: o modelo devolveu 9
+            // tool calls num lote; a 5ª foi barrada pelo [EDIT-LOOP] ("Blocked edit #5") e saiu sem TOOL_COMPLETED; a
+            // 6ª pediu EXECUTING_TOOL --TOOL_REQUESTED--> e a FSM abortou o turno — 9 min de trabalho jogados fora e o
+            // goal abandonado. Ponto único: vale para qualquer proteção que bloqueie, atual ou futura.
+            move('TOOL_COMPLETED', { step: stepCount, tool: toolName, success: false, blocked: true });
             return {
                 action: execResult.action, dedupAbort: execResult.dedupAbort, dedupAbortTool: execResult.dedupAbortTool,
                 maxSteps, totalToolCalls, consecutiveToolFailures, guardsTriggered, toolFailureCount,
