@@ -4787,7 +4787,11 @@ OU
         };
         const jaNoPlanoNovo = new Set(newPlan.filter(s => s.toolName === 'send_document').map(key).filter(Boolean));
         const entregues = new Set(sentArtifacts.map(p => resolvePath(p).resolved));
-        return previousPlan.filter(s => s.toolName === 'send_document' && s.status === 'pending'
+        // Só o envio ADIADO pelo agente (injetado com `originStepId` — a etapa que decidiu enviar). Um send_document
+        // que o PLANEJADOR pôs no plano é estratégia, e o planejador pode trocá-la: produção, 07/10 12:37 — o envio
+        // planejado de um arquivo de nome antigo (questoes_..._tc_so.md, de 06/10) foi mantido num replan enquanto o
+        // agente gravava o arquivo do dia com outro nome — risco de enviar o arquivo de ontem (issue 065f, ajuste).
+        return previousPlan.filter(s => s.toolName === 'send_document' && s.status === 'pending' && !!s.originStepId
             && key(s) !== '' && !jaNoPlanoNovo.has(key(s)) && !entregues.has(key(s)));
     }
 

@@ -24,13 +24,15 @@ let failed = 0;
 function assert(c: boolean, m: string, d?: unknown): void {
     if (c) { console.log(`  ✅ ${m}`); passed++; } else { console.error(`  ❌ FALHOU: ${m}`, d ?? ''); failed++; }
 }
-const st = (id: string, toolName: string, status = 'pending', file_path?: string) =>
-    ({ id, description: id, status, toolName, ...(file_path ? { toolArgs: { file_path } } : {}) } as any);
+const st = (id: string, toolName: string, status = 'pending', file_path?: string, originStepId?: string) =>
+    ({ id, description: id, status, toolName, ...(file_path ? { toolArgs: { file_path } } : {}), ...(originStepId ? { originStepId } : {}) } as any);
+/** Envio ADIADO pelo agente: injetado no plano com a etapa de origem. */
+const adiado = (id: string, file_path: string, status = 'pending') => st(id, 'send_document', status, file_path, 's3');
 const ARQ = 'questoes_enade_compiladores_teoria_so.md';
 
 console.log('\n=== S348-1 — caso do ENADE: replan sem o envio → o envio adiado segue no plano novo ===');
 {
-    const anterior = [st('s1', 'memory_search', 'completed'), st('s3', 'agentloop', 'completed'), st('s5', 'memory_write', 'failed'), st('send_x', 'send_document', 'pending', ARQ)];
+    const anterior = [st('s1', 'memory_search', 'completed'), st('s3', 'agentloop', 'completed'), st('s5', 'memory_write', 'failed'), adiado('send_x', ARQ)];
     const novo = [st('n1', 'memory_search'), st('n2', 'memory_write')];
     const mantidos = GoalExecutionLoop.pendingDeferredSends(anterior, novo, []);
     assert(mantidos.length === 1 && mantidos[0].toolArgs?.file_path === ARQ && mantidos[0].status === 'pending', 'o send_document pendente é mantido', mantidos);
@@ -40,12 +42,16 @@ console.log('\n=== S348-1 — caso do ENADE: replan sem o envio → o envio adia
 
 console.log('\n=== S348-2 — sem duplicar nem reenviar ===');
 {
-    const anterior = [st('send_x', 'send_document', 'pending', ARQ)];
+    const anterior = [adiado('send_x', ARQ)];
     assert(GoalExecutionLoop.pendingDeferredSends(anterior, [st('n1', 'send_document', 'pending', ARQ)], []).length === 0, 'plano novo já envia o mesmo arquivo → não duplica');
     assert(GoalExecutionLoop.pendingDeferredSends(anterior, [st('n1', 'send_document', 'pending', './' + ARQ)], []).length === 0, 'mesmo arquivo com caminho escrito de outro jeito → não duplica');
     assert(GoalExecutionLoop.pendingDeferredSends(anterior, [], [ARQ]).length === 0, 'arquivo já entregue → não reenvia');
-    assert(GoalExecutionLoop.pendingDeferredSends([st('send_x', 'send_document', 'completed', ARQ)], [], []).length === 0, 'envio já executado → não é pendente');
+    assert(GoalExecutionLoop.pendingDeferredSends([adiado('send_x', ARQ, 'completed')], [], []).length === 0, 'envio já executado → não é pendente');
     assert(GoalExecutionLoop.pendingDeferredSends([st('w', 'write', 'pending', ARQ)], [], []).length === 0, 'só send_document conta');
+    // Produção, 07/10 12:37: o PLANEJADOR tinha posto send_document de um arquivo de nome antigo (de 06/10) no plano;
+    // o replan o tirou — e não pode ser mantido: é estratégia do planejador, não decisão do agente de enviar.
+    assert(GoalExecutionLoop.pendingDeferredSends([st('p4', 'send_document', 'pending', 'questoes_enade_compiladores_tc_so.md')], [], []).length === 0,
+        'envio PLANEJADO (sem originStepId) não é mantido — evita enviar o arquivo de ontem');
 }
 
 console.log('\n=== S348-3 — os três pontos que trocam/zeram o plano usam a regra ===');
