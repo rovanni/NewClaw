@@ -171,9 +171,11 @@ console.log('\n=== S244-6 — Fix presente estruturalmente: GoalStore.ts (schema
 console.log('\n=== S244-7 — Fix presente estruturalmente: GoalExecutionLoop.ts (wiring nos 2 pontos que recalculam successCriteria) ===');
 {
     const source = fs.readFileSync(path.join(process.cwd(), 'src', 'loop', 'GoalExecutionLoop.ts'), 'utf-8');
+    // Issue 065d (06/10/2026): terceiro ponto legítimo — a injeção do envio adiado no plano também é uma promessa de
+    // entrega (goal ENADE: o .md adiado sumiu num replan e a proteção não disparou porque a promessa nunca foi registrada).
     assert(
-        (source.match(/trackPromisedDeliveryTools\(/g) ?? []).length === 2,
-        'trackPromisedDeliveryTools chamado exatamente nos 2 pontos que recalculam successCriteria (plano inicial + replan)',
+        (source.match(/trackPromisedDeliveryTools\(/g) ?? []).length === 3,
+        'trackPromisedDeliveryTools chamado nos 3 pontos que mudam o plano (plano inicial + replan + injeção do envio adiado)',
     );
     assert(
         (source.match(/ensureDeliveryNotAbandonedCriterion\(/g) ?? []).length === 2,
