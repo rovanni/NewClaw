@@ -82,7 +82,8 @@ console.log('\n=== S293.3 — auditoria estrutural: o código real usa o valor e
     assert(idx1 > 0, 'attemptTimeout/safetyTimeoutMs: effectiveTimeoutMs é calculado', idx1);
     const trecho1 = src.slice(idx1, idx1 + 900);
     assert(/Math\.max\(timeoutMs, REASONING_INTENSIVE_TIMEOUT_FLOOR_MS\)/.test(trecho1), 'usa Math.max com o piso compartilhado, não um número novo', trecho1);
-    assert(/setTimeout\(\(\) => currentAbort\.abort\(\), effectiveTimeoutMs\)/.test(trecho1), 'attemptTimeout usa effectiveTimeoutMs, não o timeoutMs bruto', trecho1);
+    // 064b: o corpo do timer também marca o prazo esgotado — o que importa aqui é o prazo ser effectiveTimeoutMs.
+    assert(/const attemptTimeout = setTimeout\(\(\) => \{?[^}]*currentAbort\.abort\(\);? ?\}?, effectiveTimeoutMs\)/.test(trecho1), 'attemptTimeout usa effectiveTimeoutMs, não o timeoutMs bruto', trecho1);
     assert(/const safetyTimeoutMs = effectiveTimeoutMs \+ 15000/.test(trecho1), 'safetyTimeoutMs deriva de effectiveTimeoutMs, não do timeoutMs bruto', trecho1);
 
     const idx2 = src.indexOf('const effectiveNonStreamingTimeoutMs = (opts?.reasoningIntensive && timeoutMs)');
