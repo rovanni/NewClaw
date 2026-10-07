@@ -332,6 +332,16 @@ Avalie se a ação executada está correta e se a resposta atende plenamente à 
 Responda APENAS em JSON:
 {"approved": true/false, "reason": "explicação curta", "confidence": 0.0-1.0, "suggested_fix": "ação sugerida caso não aprovado", "failure_type": "incomplete_response | read_only | future_action | tool_error | other | none"}`;
 
+/**
+ * Issue 067: trecho de um dado de CONTEXTO (pedido, resultado de ferramenta) com o corte declarado —
+ * sem o aviso, o juiz não distingue "o dado acaba aqui" de "o prompt cortou aqui".
+ */
+function trechoRotulado(texto: string, limite: number): string {
+    if (texto.length <= limite) return texto;
+    return `${texto.slice(0, limite)}
+[… trecho: primeiros ${limite} de ${texto.length} caracteres — o corte é do validador, não do dado]`;
+}
+
 // ── Deterministic pre-checks ─────────────────────────────────────────────────
 // Short-circuits LLM validation for obvious cases (~80% of tool calls).
 // Ordered from most-specific to least-specific.
@@ -446,11 +456,13 @@ export class ObserverValidator {
         }
 
         const prompt = OBSERVER_PROMPT
-            .replace('{userMessage}', userMessage.slice(0, 500))
-            .replace('{intent}', intent)
-            .replace('{toolUsed}', toolUsed)
-            .replace('{toolResult}', toolResult.slice(0, 1000))
-            .replace('{finalResponse}', finalResponse.slice(0, 500));
+            .replace('{userMessage}', () => trechoRotulado(userMessage, 500))
+            .replace('{intent}', () => intent)
+            .replace('{toolUsed}', () => toolUsed)
+            .replace('{toolResult}', () => trechoRotulado(toolResult, 1000))
+            // Issue 067: a resposta é o objeto julgado — vai inteira (mesma regra do juiz de grounding).
+            // Cortada em 500 chars, o juiz reprovava como "truncada" uma resposta completa de 1914 chars.
+            .replace('{finalResponse}', () => finalResponse);
 
         const messages: LLMMessage[] = [
             { role: 'system', content: 'Você é um validador de qualidade. Responda APENAS com JSON válido.' },
