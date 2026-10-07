@@ -165,7 +165,10 @@ console.log('\n=== S248 — presença estrutural do fix no source ===');
 
     assert(/priorStepEvidence\?: EvidenceItem\[\];/.test(typesSource), 'ChannelContext declara priorStepEvidence (agentLoopTypes.ts)');
     assert(
-        /a\.result === 'success'\s*\n\s*&& \(a\.planGeneration \?\? 0\) === currentGeneration\s*\n\s*&& a\.planStepId !== step\.id/.test(loopSource),
+        // Issue 065e: o filtro foi dividido — priorAttempts (mesma geração, sem o step atual) alimenta tanto as saídas
+        // dos attempts (só result=success) quanto o conteúdo dos arquivos produzidos. Mesma intenção.
+        /const priorAttempts = goal\.attempts\.filter\(a => \(a\.planGeneration \?\? 0\) === currentGeneration && a\.planStepId !== step\.id\);/.test(loopSource)
+            && /priorAttempts\s*\n\s*\.filter\(a => a\.result === 'success' && a\.output\)/.test(loopSource),
         'GoalExecutionLoop filtra por result=success + mesma planGeneration + exclui o step atual',
     );
     assert(

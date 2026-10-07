@@ -2627,17 +2627,23 @@ export class GoalExecutionLoop {
         // 17/08/2026). Só entra aqui o que já é fato persistido (result==='success'), nunca uma
         // alegação — mesma fonte de verdade que resolveArtifactPathFromEvidence() já usa.
         const currentGeneration = goal.planGeneration ?? 0;
-        const priorStepEvidence: EvidenceItem[] = goal.attempts
-            .filter(a => a.result === 'success'
-                && (a.planGeneration ?? 0) === currentGeneration
-                && a.planStepId !== step.id
-                && a.output)
-            .map((a, i) => ({
-                id: `G${i + 1}`,
-                tool: a.toolName,
-                input: (() => { try { return JSON.stringify(a.args ?? {}); } catch { return undefined; } })(),
-                output: a.output ?? '',
-            }));
+        const priorAttempts = goal.attempts.filter(a => (a.planGeneration ?? 0) === currentGeneration && a.planStepId !== step.id);
+        const priorStepEvidence: EvidenceItem[] = [
+            ...priorAttempts
+                .filter(a => a.result === 'success' && a.output)
+                .map(a => ({
+                    id: '',
+                    tool: a.toolName,
+                    input: (() => { try { return JSON.stringify(a.args ?? {}); } catch { return undefined; } })(),
+                    output: a.output ?? '',
+                })),
+            // Issue 065e: o CONTEÚDO ATUAL dos arquivos que etapas anteriores produziram. A saída de um attempt é
+            // guardada cortada, e um arquivo gravado dentro de uma etapa do agente só deixa o caminho
+            // (subToolWrites) — a resposta seguinte descrevia o arquivo e o juiz não o via. Goal ENADE (06/10):
+            // "o banco contempla Máquina de Turing" REJEITADO, com 8 menções a Turing no .md de 38 KB que o juiz
+            // não recebeu. O arquivo em disco é o fato; o orçamento do juiz (evidenceCapForBudget) cuida do tamanho.
+            ...GoalExecutionLoop.artifactContentEvidence(GoalExecutionLoop.producedArtifactPaths(priorAttempts)),
+        ].map((e, i) => ({ ...e, id: `G${i + 1}` }));
         // FIX C + P3-DEDUP: captura sends diferidos com deduplicação por file_path.
         // deferSendDocument só aceita um artefato por caminho único nesta execução.
         const goalChannelContext: ChannelContext = {
@@ -4193,12 +4199,7 @@ Se a intenção original pedia uma explicação condicional (ex: "se não conseg
             : `OBJETIVO: ${goal.objective}`;
 
         // FIX D: lê o conteúdo real dos artefatos produzidos para injetar no prompt do validador
-        const writtenPaths = [...new Set(
-            goal.attempts
-                .filter(a => a.result === 'success' && ['write', 'edit'].includes(a.toolName))
-                .map(a => String(a.args['path'] ?? a.args['file_path'] ?? ''))
-                .filter(Boolean)
-        )];
+        const writtenPaths = GoalExecutionLoop.producedArtifactPaths(goal.attempts);
         const artifactLines: string[] = [];
         const existingArtifactPaths: string[] = [];
         for (const rawPath of writtenPaths) {
@@ -4754,6 +4755,42 @@ OU
         const hasGenericSummary = fallbackText === GENERIC_CRITERIA_SUMMARY;
         return (lastSuccessIsSafeToDeliverRaw ? (lastSuccess?.output || undefined) : undefined)
             ?? (!hasGenericSummary ? fallbackText : undefined);
+    }
+
+    /**
+     * Fonte única (issue 065e) de "quais arquivos estas tentativas produziram": `write`/`edit` diretos com sucesso E os
+     * gravados por sub-tools dentro de uma etapa do agente (`subToolWrites`, issue 057 G3). Consumidores: o validador
+     * de conclusão (FIX D) e a evidência do juiz de grounding (priorStepEvidence) — antes o FIX D só via os diretos.
+     * Caminhos brutos, como o agente os passou (mesma convenção de toolArgs.file_path/sentArtifacts).
+     */
+    static producedArtifactPaths(attempts: GoalAttempt[]): string[] {
+        const paths: string[] = [];
+        for (const a of attempts) {
+            if (a.result !== 'success') continue;
+            if (['write', 'edit'].includes(a.toolName)) paths.push(String(a.args?.['path'] ?? a.args?.['file_path'] ?? ''));
+            if (a.toolName === 'agentloop') paths.push(...(a.subToolWrites ?? []));
+        }
+        return [...new Set(paths.filter(Boolean))];
+    }
+
+    /**
+     * Issue 065e — evidência com o conteúdo ATUAL de cada arquivo em disco (o fato, não a alegação). Binário (contém
+     * byte 0 — checagem de formato, não de conteúdo) entra como fato de existência e tamanho; ilegível ou ausente fica de
+     * fora (nunca inventar conteúdo). Nunca lança.
+     */
+    static artifactContentEvidence(rawPaths: string[]): EvidenceItem[] {
+        const out: EvidenceItem[] = [];
+        for (const rawPath of rawPaths) {
+            try {
+                const { resolved } = resolvePath(rawPath);
+                const buf = fs.readFileSync(resolved);
+                const output = buf.includes(0)
+                    ? `[arquivo binário, ${buf.length} bytes — conteúdo não textual]`
+                    : buf.toString('utf-8');
+                out.push({ id: '', tool: 'arquivo_gerado', input: JSON.stringify({ path: rawPath }), output });
+            } catch { /* ausente ou ilegível: sem evidência, nunca conteúdo inventado */ }
+        }
+        return out;
     }
 
     /**
