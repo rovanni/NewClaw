@@ -667,7 +667,13 @@ export class GoalExecutionLoop {
             ensureDeliverySuccessCriteria(finalPlan, mergedCriteria),
         );
         this.tracePlan(goal, 'replan', finalPlan, replanCriteria, planResult.successCriteria ?? [], undefined);
-        if (this.rejectPlanWithoutAnswerStep(goal, finalPlan, replanCriteria)) return this.goalStore.getById(goal.id)!;
+        if (this.rejectPlanWithoutAnswerStep(goal, finalPlan, replanCriteria)) {
+            // Issue 065d: mesmo rejeitado, os critérios desta geração valem — em especial
+            // `delivery_not_silently_abandoned`, o fato que avisa o validador de uma entrega prometida que sumiu
+            // do plano. Retornar sem gravá-los escondia o envio perdido (goal ENADE, 06/10).
+            this.goalStore.update(goal.id, { successCriteria: replanCriteria, deliveryToolsEverPromised: promisedDeliveryTools });
+            return this.goalStore.getById(goal.id)!;
+        }
 
         this.goalStore.update(goal.id, {
             currentPlan: finalPlan,
@@ -877,7 +883,14 @@ export class GoalExecutionLoop {
                     );
                 }
                 const updatedPlan = [...planWithoutSuperseded, ...newSendSteps];
-                this.goalStore.update(goal.id, { currentPlan: updatedPlan });
+                // Issue 065d: o envio adiado injetado no plano é uma PROMESSA de entrega — registrá-la em
+                // deliveryToolsEverPromised como faz o planejamento. Sem isto, um replan que derrubasse a etapa de
+                // envio não acionava `delivery_not_silently_abandoned`: produção, goal ENADE (06/10) — o .md foi
+                // registrado para envio, o replan final trocou o plano e o goal concluiu sem enviar o arquivo.
+                this.goalStore.update(goal.id, {
+                    currentPlan: updatedPlan,
+                    deliveryToolsEverPromised: trackPromisedDeliveryTools(updatedPlan, goal.deliveryToolsEverPromised ?? []),
+                });
                 goal = this.goalStore.getById(goal.id)!;
                 log.info(
                     `[AGENTLOOP-SEND] goal=${goal.id} step=${step.id}` +
