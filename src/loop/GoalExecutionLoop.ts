@@ -592,9 +592,10 @@ export class GoalExecutionLoop {
                     ],
                     detectedAt: Date.now(),
                 });
-                // Devolve plano vazio para forçar novo ciclo de replanning no runLoop
+                // Devolve plano vazio para forçar novo ciclo de replanning no runLoop — mantendo os envios adiados
+                // ainda pendentes (issue 065f).
                 this.goalStore.update(goal.id, {
-                    currentPlan: [],
+                    currentPlan: GoalExecutionLoop.pendingDeferredSends(goal.currentPlan, [], goal.sentArtifacts ?? []),
                     status: 'replanning',
                     replanBudget: Math.max(0, goal.replanBudget - 1),
                 });
@@ -645,6 +646,14 @@ export class GoalExecutionLoop {
         // partir do plano FINAL deste ciclo. Isso garante que um replan legítimo que abandona
         // send_audio/send_document não deixe um critério de entrega "preso" exigindo uma tool que
         // a estratégia atual nem usa mais — sem apagar critérios semânticos legítimos do Goal.
+        // Issue 065f: envios adiados do plano anterior que o plano novo não envia (e ainda não entregues) seguem no
+        // plano — ANTES dos critérios, para a promessa de entrega não ser contada como abandonada.
+        const enviosMantidos = GoalExecutionLoop.pendingDeferredSends(goal.currentPlan, finalPlan, goal.sentArtifacts ?? []);
+        if (enviosMantidos.length > 0) {
+            finalPlan = [...finalPlan, ...enviosMantidos];
+            log.info(`[DELIVERY-CARRY] goal=${goal.id} carried="${enviosMantidos.map(s => String(s.toolArgs?.file_path ?? s.toolArgs?.path ?? '')).join(',')}" reason=pending_deferred_send_kept_across_replan`);
+        }
+
         const preservedCriteria = (goal.successCriteria ?? []).filter(c =>
             c.id !== AUTO_DELIVERY_CRITERION_IDS.send_document &&
             c.id !== AUTO_DELIVERY_CRITERION_IDS.send_audio &&
@@ -733,7 +742,7 @@ export class GoalExecutionLoop {
             suggestedActions: ['Incluir uma etapa final sem toolName que responda ao usuário com os dados coletados'],
             detectedAt: Date.now(),
         });
-        this.goalStore.update(goal.id, { currentPlan: [], status: 'replanning' });
+        this.goalStore.update(goal.id, { currentPlan: GoalExecutionLoop.pendingDeferredSends(goal.currentPlan, [], goal.sentArtifacts ?? []), status: 'replanning' });
         return true;
     }
 
@@ -4763,6 +4772,25 @@ OU
      * de conclusão (FIX D) e a evidência do juiz de grounding (priorStepEvidence) — antes o FIX D só via os diretos.
      * Caminhos brutos, como o agente os passou (mesma convenção de toolArgs.file_path/sentArtifacts).
      */
+    /**
+     * Issue 065f — envios adiados que ainda devem acontecer quando o plano é trocado. No goal, `send_document` é ADIADO
+     * e vira etapa pendente do plano (é o próprio agente que decidiu enviar; só a ORDEM foi adiada). Um replan, ou um
+     * plano rejeitado, trocava o plano inteiro e a etapa sumia: produção, goal ENADE 06/10 e 07/10 — o .md pronto
+     * nunca foi enviado. O aviso ao validador (`delivery_not_silently_abandoned`, 065d) chegou a ele em 07/10 e ele
+     * aprovou mesmo assim. Aqui é fato estrutural, sem interpretação: etapa `send_document` PENDENTE no plano anterior,
+     * cujo arquivo o plano novo não envia e que ainda não foi entregue → segue no plano novo.
+     */
+    static pendingDeferredSends(previousPlan: PlanStep[], newPlan: PlanStep[], sentArtifacts: readonly string[]): PlanStep[] {
+        const key = (s: PlanStep) => {
+            const raw = String(s.toolArgs?.file_path ?? s.toolArgs?.path ?? '');
+            return raw ? resolvePath(raw).resolved : '';
+        };
+        const jaNoPlanoNovo = new Set(newPlan.filter(s => s.toolName === 'send_document').map(key).filter(Boolean));
+        const entregues = new Set(sentArtifacts.map(p => resolvePath(p).resolved));
+        return previousPlan.filter(s => s.toolName === 'send_document' && s.status === 'pending'
+            && key(s) !== '' && !jaNoPlanoNovo.has(key(s)) && !entregues.has(key(s)));
+    }
+
     static producedArtifactPaths(attempts: GoalAttempt[]): string[] {
         const paths: string[] = [];
         for (const a of attempts) {

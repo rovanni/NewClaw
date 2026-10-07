@@ -57,7 +57,8 @@ console.log('\n=== S338-4 — admissão no loop: blocker com o fato, plano vazio
         addStrategyTried: (_id: string, s: unknown) => calls.strategy.push(s),
         update: (_id: string, u: unknown) => calls.update.push(u),
     };
-    const goal = { id: 'g1', isConstruction: false, replanBudget: 3 } as any;
+    // Issue 065f: a rejeição mantém os envios adiados pendentes do plano atual — o goal falso precisa dos campos reais.
+    const goal = { id: 'g1', isConstruction: false, replanBudget: 3, currentPlan: [], sentArtifacts: [] } as any;
     const rejected = loop.rejectPlanWithoutAnswerStep(goal, [step('read'), step('exec_command')], contract);
     const b = calls.blocker[0] as { kind: string; description: string } | undefined;
     const u = calls.update[0] as Record<string, unknown> | undefined;
