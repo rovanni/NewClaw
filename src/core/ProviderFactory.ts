@@ -13,7 +13,7 @@ import { DeepSeekProvider } from './DeepSeekProvider';
 import { GroqProvider } from './GroqProvider';
 import { getBudgetAuxiliar, PerfilAuxiliar, OrcamentoAuxiliar } from '../shared/auxTimeout';
 import { OpenAIProvider, OpenRouterProvider } from './OpenAIProvider';
-import { OllamaProvider } from './OllamaProvider';
+import { OllamaProvider, NO_MODEL_CONFIGURED_MESSAGE } from './OllamaProvider';
 import { AnthropicProvider } from './AnthropicProvider';
 
 // Nomes reservados pelos providers nativos — um customProvider com label colidente seria
@@ -146,7 +146,7 @@ export class ProviderFactory {
 
         this.providers.set('ollama', new OllamaProvider(
             config.ollamaUrl || 'http://localhost:11434',
-            config.ollamaModel || 'glm-5.2:cloud',
+            config.ollamaModel || '',   // issue 068: sem modelo embutido
             config.ollamaApiKey || ''
         ));
 
@@ -715,7 +715,8 @@ export class ProviderFactory {
             // (ex.: `fetch failed` em 4 ms, provider fora do ar) recebia o mesmo texto e mandava o
             // usuário esperar por algo que nunca ia responder. Sem inferir a causa (DNS, recusa,
             // TLS): o fato observado é que o provider não respondeu.
-            fallbackMessage: isTimeoutError
+            // Issue 068: sem modelo escolhido, a mensagem diz isso — não "verifique se o serviço está em execução".
+            fallbackMessage: lastError === NO_MODEL_CONFIGURED_MESSAGE ? NO_MODEL_CONFIGURED_MESSAGE : isTimeoutError
                 ? 'O modelo demorou mais que o esperado. Tente novamente em alguns instantes.'
                 : `Não foi possível obter resposta do provedor "${attemptLog[attemptLog.length - 1]?.provider ?? 'desconhecido'}". Verifique se o serviço está em execução e acessível e tente novamente.`,
             attempts: attemptLog

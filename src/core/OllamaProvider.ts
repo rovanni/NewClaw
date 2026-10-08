@@ -80,6 +80,14 @@ export const AbortReason = {
 } as const;
 export type AbortReason = typeof AbortReason[keyof typeof AbortReason];
 
+/**
+ * Issue 068: o código não escolhe modelo. Sem modelo padrão escolhido (painel ou OLLAMA_MODEL) e sem modelo do perfil,
+ * a chamada não sai — um pedido sem modelo ao Ollama falharia com um erro técnico, e preencher um nome "plausível" seria
+ * escolher pelo operador. A mesma frase volta ao usuário (ProviderFactory) e não é retentada (não é falha transitória).
+ */
+export const NO_MODEL_CONFIGURED_MESSAGE =
+    'Nenhum modelo foi escolhido. Escolha o "Modelo padrão" no painel (Config → Modelos) ou defina OLLAMA_MODEL no .env.';
+
 export class OllamaProvider implements ILLMProvider {
     name = 'ollama';
     private baseUrl: string;
@@ -87,7 +95,7 @@ export class OllamaProvider implements ILLMProvider {
     private apiKey: string;
     private readonly numCtx: number;
 
-    constructor(baseUrl: string = 'http://localhost:11434', model: string = 'glm-5.2:cloud', apiKey: string = '') {
+    constructor(baseUrl: string = 'http://localhost:11434', model: string = '', apiKey: string = '') {
         this.baseUrl = baseUrl;
         this.model = model;
         this.apiKey = apiKey;
@@ -172,6 +180,7 @@ export class OllamaProvider implements ILLMProvider {
      * Handles partial buffers (lines broken between chunks).
      */
     async *streamChat(messages: LLMMessage[], tools?: ToolDefinition[], customTimeoutMs?: number, externalSignal?: AbortSignal, reasoningIntensive?: boolean): AsyncGenerator<StreamChunk> {
+        if (!this.model) throw new Error(NO_MODEL_CONFIGURED_MESSAGE);
         const streamId = `str-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 5)}`;
         const headers: Record<string, string> = { 'Content-Type': 'application/json' };
         if (this.apiKey) headers['Authorization'] = `Bearer ${this.apiKey}`;
@@ -530,6 +539,7 @@ export class OllamaProvider implements ILLMProvider {
      * Only safe to call as last resort from chatWithFallback.
      */
     public async fallbackNonStreaming(messages: LLMMessage[], tools?: ToolDefinition[], customTimeoutMs?: number, externalSignal?: AbortSignal): Promise<LLMResponse> {
+        if (!this.model) throw new Error(NO_MODEL_CONFIGURED_MESSAGE);
         const numCtx = this.numCtx;
         const headers: Record<string, string> = { 'Content-Type': 'application/json' };
         if (this.apiKey) headers['Authorization'] = `Bearer ${this.apiKey}`;

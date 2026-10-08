@@ -312,7 +312,7 @@ export class AgentController {
 
         this.auditor = new AuditorService({
             ollamaUrl: config.ollamaUrl || 'http://localhost:11434',
-            model: config.ollamaModel || 'glm-5.2:cloud',
+            model: config.ollamaModel || '',   // issue 068: sem modelo embutido
             dbPath: './data/newclaw.db',
             srcPath: './src',
             logsPath: './logs',

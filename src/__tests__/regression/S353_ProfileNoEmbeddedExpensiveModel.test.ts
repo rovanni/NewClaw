@@ -88,6 +88,50 @@ console.log('\n=== S353-7 — nenhum nome de modelo nos padrões do código ==='
     assert(modelos.length === 6 && modelos.every(m => m === ''), `DEFAULT_CONFIG.profiles: os 6 perfis sem modelo (${JSON.stringify(modelos)})`);
 }
 
-console.log(`\n${'─'.repeat(60)}`);
-console.log(`S353 RESULTADO: ✅ ${passed} passou | ❌ ${failed} falhou`);
-if (failed > 0) process.exitCode = 1;
+async function modeloPadrao(): Promise<void> {
+    console.log('\n=== S353-8 — sem "Modelo padrão" escolhido: a chamada não sai, e a mensagem diz o que fazer ===');
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { ProviderFactory } = require('../../core/ProviderFactory');
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { NO_MODEL_CONFIGURED_MESSAGE } = require('../../core/OllamaProvider');
+    const original = global.fetch;
+    const modelosPedidos: string[] = [];
+    global.fetch = (async (_u: string, init?: { body?: string }) => {
+        modelosPedidos.push(JSON.parse(String(init?.body ?? '{}')).model);
+        const body = new ReadableStream<Uint8Array>({ start(c) { c.enqueue(new TextEncoder().encode(JSON.stringify({ message: { content: 'ok' }, done: true, done_reason: 'stop' }) + '\n')); c.close(); } });
+        return { ok: true, status: 200, body } as unknown as Response;
+    }) as unknown as typeof fetch;
+    try {
+        const pf = new ProviderFactory({ defaultProvider: 'ollama', ollamaUrl: 'http://fake-ollama.invalid', ollamaModel: '' } as any);
+        const r: any = await quietAsync(() => pf.chatWithFallback([{ role: 'user', content: 'oi' }], undefined, 'ollama', 2000));
+        assert(r.status === 'error' && r.fallbackMessage === NO_MODEL_CONFIGURED_MESSAGE, `mensagem ao usuário: "${r.fallbackMessage}"`);
+        assert(modelosPedidos.length === 0, `nenhum pedido sem modelo saiu para o Ollama (saíram ${modelosPedidos.length})`);
+        assert(!(r.attempts || []).some((a: { errorMessage?: string }) => /abort|Timeout/.test(a.errorMessage ?? '')), 'não tratado como falha transitória');
+
+        console.log('\n=== S353-9 — modelo do perfil escolhido no painel funciona mesmo sem "Modelo padrão" ===');
+        const r2: any = await quietAsync(() => pf.chatWithFallback([{ role: 'user', content: 'oi' }], undefined, 'ollama', 2000, undefined, 'glm-5.3:cloud'));
+        assert(r2.status === 'success' && modelosPedidos[0] === 'glm-5.3:cloud', `pedido saiu com o modelo do perfil (${modelosPedidos[0]})`);
+    } finally { global.fetch = original; }
+
+    console.log('\n=== S353-10 — nenhum "Modelo padrão" embutido no código ===');
+    const ler = (...p: string[]) => fs.readFileSync(path.join(process.cwd(), 'src', ...p), 'utf-8');
+    const fontes: Array<[string, string]> = [
+        ['index.ts', ler('index.ts')], ['ProviderFactory.ts', ler('core', 'ProviderFactory.ts')], ['AgentController.ts', ler('core', 'AgentController.ts')],
+        ['routes/config.ts', ler('dashboard', 'routes', 'config.ts')], ['OllamaProvider.ts', ler('core', 'OllamaProvider.ts')],
+    ];
+    for (const [nome, src] of fontes) {
+        const achados = src.match(/(ollamaModel|OLLAMA_MODEL|model: string =)[^\n]*['"][\w.\-]+:cloud['"]/g) ?? [];
+        assert(achados.length === 0, `${nome}: sem nome de modelo como padrão`, achados);
+    }
+}
+const quietAsync = async <T>(fn: () => Promise<T>): Promise<T> => {
+    const orig = process.stdout.write.bind(process.stdout);
+    (process.stdout.write as unknown) = (): boolean => true;
+    try { return await fn(); } finally { process.stdout.write = orig; }
+};
+
+modeloPadrao().then(() => {
+    console.log(`\n${'─'.repeat(60)}`);
+    console.log(`S353 RESULTADO: ✅ ${passed} passou | ❌ ${failed} falhou`);
+    if (failed > 0) process.exitCode = 1;
+}).catch((err) => { console.error('S353 erro inesperado:', err); process.exitCode = 1; });

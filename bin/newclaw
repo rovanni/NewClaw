@@ -769,7 +769,8 @@ const commands = {
     console.log('');
     console.log(`🟢 NewClaw online  (PID ${pid}, uptime ${uptime})`);
     console.log(`   Canais:     ${activeChannels.length > 0 ? activeChannels.join(', ') : 'nenhum configurado'}`);
-    console.log(`   Modelo:     ${env.OLLAMA_MODEL || env.MODEL_CHAT || 'glm-5.1:cloud'}`);
+    // Issue 068: mostra o que está configurado — nunca um nome que ninguém escolheu.
+    console.log(`   Modelo:     ${env.OLLAMA_MODEL || env.MODEL_CHAT || 'nenhum escolhido — escolha no painel (Config → Modelos)'}`);
     if (memMB) console.log(`   Memória:    ${memMB} MB RSS`);
     console.log(`   Dashboard:  http://localhost:${env.DASHBOARD_PORT || 3090}`);
     console.log(`   Lang:       ${env.APP_LANG || 'pt-BR'}`);
@@ -1146,9 +1147,11 @@ const commands = {
         readline.question('URL do Ollama (default: http://localhost:11434): ', (url) => {
           env.OLLAMA_URL = url || 'http://localhost:11434';
           readline.question('Modelo do Ollama (ex: glm-5.1:cloud): ', (model) => {
-            env.OLLAMA_MODEL = model || 'glm-5.1:cloud';
+            // Issue 068: Enter vazio não grava um modelo que a pessoa não escolheu.
+            env.OLLAMA_MODEL = (model || '').trim();
             writeEnv(env);
             console.log('\n✅ Configuração do Ollama salva!');
+            if (!env.OLLAMA_MODEL) console.log('⚠️  Nenhum modelo escolhido — o NewClaw não responde até você escolher um no painel (Config → Modelos) ou em OLLAMA_MODEL.');
             readline.close();
           });
         });

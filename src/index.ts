@@ -75,7 +75,8 @@ const config = {
     openrouterApiKey: process.env.OPENROUTER_API_KEY,
     anthropicApiKey: process.env.ANTHROPIC_API_KEY,
     ollamaUrl: process.env.OLLAMA_URL || 'http://localhost:11434',
-    ollamaModel: process.env.OLLAMA_MODEL || 'glm-5.2:cloud',
+    // Issue 068: sem modelo embutido — o modelo padrão é escolha do operador (painel ou OLLAMA_MODEL).
+    ollamaModel: process.env.OLLAMA_MODEL || '',
     ollamaApiKey: process.env.OLLAMA_API_KEY || '',
     // Gravado por persistConfigToEnv() (routes/config.ts); sem esta leitura o prompt customizado
     // sumia silenciosamente no próximo boot (docs/issues/025).

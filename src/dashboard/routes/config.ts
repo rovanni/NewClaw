@@ -127,7 +127,7 @@ export function createConfigRouter(ctx: DashboardContext): Router {
                 memoryWindowSize: ctx.config.memoryWindowSize,
                 whisperPath: ctx.config.whisperPath,
                 ollamaUrl: ctx.config.ollamaUrl,
-                ollamaModel: ctx.config.ollamaModel || ollama?.getModel() || 'glm-5.2:cloud',
+                ollamaModel: ctx.config.ollamaModel || ollama?.getModel() || '',   // issue 068: vazio = não escolhido
                 ollamaApiKey: ctx.config.ollamaApiKey ? '••••' : '',
                 systemPrompt: ctx.config.systemPrompt || '',
                 telegramAllowedUserIds: ctx.config.telegramAllowedUserIds.join(','),
