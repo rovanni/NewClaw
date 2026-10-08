@@ -674,7 +674,7 @@ export class RiskAnalyzer {
                 versaoPrompt: versaoDoPrompt(prompt.slice(Math.max(0, prompt.indexOf('Verifique:')))),
                 promptChars: prompt.length, orcamentoMs: 60_000,
                 fatos: { passosRecebidos: plan.length, ferramentas: plan.map(p => p.toolName ?? 'agentloop') },
-                conteudo: { prompt, objetivo: goal.objective, plano: summarizeSteps(plan) },
+                conteudo: { prompt, objetivo: goal.objective, pedido: goal.userIntent, plano: summarizeSteps(plan) },
             },
             telemetria: reg.telemetria,
             depois: {
@@ -706,9 +706,12 @@ export class RiskAnalyzer {
         const tag = shadow ? '[RiskAnalyzer:shadow]' : '[RiskAnalyzer]';
         const createdBy = shadow ? 'risk_analyzer_shadow' : 'risk_analyzer';
 
+        // Informação Completa para Decidir (Sprint V1): o pedido íntegro ao lado do objetivo — "falta passo?" e "o
+        // resultado será entregue?" só se respondem sabendo o que foi pedido, não um resumo dele.
         const prompt = `Você é um analisador de riscos de execução. Revise este plano antes de executá-lo.
 
 OBJETIVO: ${goal.objective}
+PEDIDO ORIGINAL DO USUÁRIO: ${goal.userIntent}
 
 PLANO:
 ${stepsStr}

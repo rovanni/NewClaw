@@ -598,9 +598,12 @@ MARCO ATUAL A SER RESOLVIDO: ${activeMilestone}\n`
     // fundido no mesmo texto (ver docs/decisoes/RFC-001_APRENDIZADO_OPERACIONAL.md pergunta 8, matriz).
     const operationalSection = operationalHint ? `\nCONHECIMENTO OPERACIONAL APRENDIDO NESTA INSTÂNCIA:\n${operationalHint}\n` : '';
 
+    // Informação Completa para Decidir (Sprint V1): o replanejamento recebe o pedido ÍNTEGRO ao lado do objetivo — o
+    // objetivo é um resumo escrito por outro LLM, e replanejar é o momento em que mais importa saber o que foi pedido.
     return `Você é um planejador de tarefas. Um blocker foi detectado. Proponha uma NOVA estratégia.
 
 OBJETIVO GLOBAL: ${goal.objective}
+INTENÇÃO ORIGINAL: ${goal.userIntent}
 ${milestoneInstruction}
 BLOCKER ATUAL: ${blocker.description} (tipo: ${blocker.kind})
 AÇÕES SUGERIDAS PELO SISTEMA: ${blocker.suggestedActions.join('; ')}${retryHint}${ratioLimitHint}
@@ -1216,7 +1219,9 @@ export class GoalPlanner {
         // avisa disso ("use chamadas separadas por moeda"), mas esse prompt reduzido nunca incluía
         // essa seção. A tool caiu no fallback silencioso dela (type inválido → "sangrando") e
         // devolveu dados de moedas completamente diferentes das pedidas.
+        // Informação Completa para Decidir (Sprint V1): o pedido íntegro, não só o resumo.
         return `Objetivo: ${goal.objective}
+Pedido original do usuário: ${goal.userIntent}
 Ferramentas disponíveis: ${toolNames.join(', ')}
 ${buildToolContracts(toolNames)}
 
