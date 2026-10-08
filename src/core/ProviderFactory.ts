@@ -7,7 +7,7 @@ import { createLogger } from '../shared/AppLogger';
 import { errorMessage } from '../shared/errors';
 import { circuitRegistry } from './CircuitBreaker';
 import { getLocalRuntimeLifecycle } from './localRuntimeState';
-import { LLMMessage, LLMResponse, ToolDefinition, LLMResult, AttemptInfo, FallbackReason, ToolCall, ILLMProvider, ChatOptions, CustomProviderConfig, SubstitutionPolicy, DEFAULT_SUBSTITUTION_POLICY, isSubstitutionPolicy, ChatFallbackOptions, LlmCallDiag, REASONING_INTENSIVE_TIMEOUT_FLOOR_MS, AttemptTelemetry } from './providerTypes';
+import { LLMMessage, LLMResponse, ToolDefinition, LLMResult, AttemptInfo, FallbackReason, ToolCall, ILLMProvider, ChatOptions, CustomProviderConfig, SubstitutionPolicy, DEFAULT_SUBSTITUTION_POLICY, isSubstitutionPolicy, ChatFallbackOptions, LlmCallDiag, REASONING_INTENSIVE_TIMEOUT_FLOOR_MS, AttemptTelemetry, ehModeloDaNuvemDoOllama } from './providerTypes';
 import { GeminiProvider } from './GeminiProvider';
 import { DeepSeekProvider } from './DeepSeekProvider';
 import { GroqProvider } from './GroqProvider';
@@ -313,9 +313,26 @@ export class ProviderFactory {
             && !!preferredProvider
             && this.providers.has(preferredProvider);
 
-        const providerOrder = semSubstituicao
+        const ordemCompleta = semSubstituicao
             ? [preferredProvider as string]
             : this.getFallbackOrder(preferredProvider);
+
+        // Issue 071 (Soberania da Configuração): quem declarou um recurso que fica na própria máquina — explicitamente
+        // nesta chamada ou como provedor padrão (antes: "sem provider preferido" virava `livre` e a chamada caía na
+        // nuvem em silêncio) — não tem a reserva levada para fora da máquina sem autorização explícita
+        // (PERMITIR_NUVEM_COMO_RESERVA=true, opção do painel). "Fica na máquina" olha o provider E o modelo: o Ollama
+        // local com um modelo `:cloud` é nuvem. Produção, 08/10/2026: com tudo configurado local, roteador, domínio,
+        // agente e juiz em sombra chamaram glm-5.2/glm-5.3/gemma4 :cloud.
+        const declarado = preferredProvider || this.defaultProvider;
+        const modeloDe = (nome: string): string | undefined => (modelOverride && nome === declarado) ? modelOverride : this.modeloPadraoDe(nome);
+        const bloquearNuvem = process.env.PERMITIR_NUVEM_COMO_RESERVA !== 'true'
+            && this.providers.has(declarado) && this.tentativaFicaNaMaquina(declarado, modeloDe(declarado));
+        const providerOrder = bloquearNuvem
+            ? ordemCompleta.filter(nome => nome === declarado || this.tentativaFicaNaMaquina(nome, modeloDe(nome)))
+            : ordemCompleta;
+        if (providerOrder.length < ordemCompleta.length) {
+            log.info(`[SOBERANIA] '${declarado}' fica na máquina do usuário — reserva fora da máquina retirada: [${ordemCompleta.filter(n => !providerOrder.includes(n)).join(',')}] (PERMITIR_NUVEM_COMO_RESERVA não está ligado)`);
+        }
 
         // `anunciada` só produz aviso quando quem chamou disse que este resultado vai ao usuário.
         // Ver ChatFallbackOptions para por que o opt-in é explícito em vez de inferido.
@@ -633,7 +650,13 @@ export class ProviderFactory {
                 ? this.getProviderWithModel(modelOverride, 'ollama')
                 : undefined;
             const ollamaProvider = requestedForOllama instanceof OllamaProvider ? requestedForOllama : sharedOllama;
-            if (ollamaProvider instanceof OllamaProvider) {
+            // Issue 071: a refação sem streaming também não leva a chamada para fora da máquina sem autorização.
+            const refacaoSairiaDaMaquina = bloquearNuvem && ollamaProvider instanceof OllamaProvider
+                && declarado !== 'ollama' && !this.tentativaFicaNaMaquina('ollama', ollamaProvider.getModel());
+            if (refacaoSairiaDaMaquina) {
+                log.info(`[SOBERANIA] refação sem streaming no Ollama (${(ollamaProvider as OllamaProvider).getModel()}) sairia da máquina — não tentada`);
+            }
+            if (ollamaProvider instanceof OllamaProvider && !refacaoSairiaDaMaquina) {
                 log.info(`[${requestId}] All streaming attempts failed — trying non-streaming fallback (model=${ollamaProvider.getModel()})`);
                 // Mesmo tratamento do laço acima: este bloco também substitui o recurso declarado, e
                 // anunciar num caminho e calar no outro seria o defeito que a Sprint 021 encontrou
@@ -827,6 +850,33 @@ export class ProviderFactory {
      * um llamafile local caindo para um Ollama local seria anunciado como "saiu da sua máquina" —
      * um aviso falso, que é pior que aviso nenhum.
      */
+    /**
+     * Issue 071: esta tentativa (provider + modelo que ele usaria) fica na máquina do usuário? O endereço não basta —
+     * o Ollama local com um modelo `:cloud` processa na nuvem.
+     */
+    private tentativaFicaNaMaquina(providerName: string, modelo?: string): boolean {
+        if (!this.rodaNaMaquinaDoUsuario(providerName)) return false;
+        return !(providerName === 'ollama' && ehModeloDaNuvemDoOllama(modelo));
+    }
+
+    /**
+     * Issue 071: usar este modelo respeita a escolha do usuário de onde rodar? Falso quando o provedor padrão fica na
+     * máquina do usuário, a reserva na nuvem não foi autorizada (PERMITIR_NUVEM_COMO_RESERVA) e o modelo é de nuvem.
+     * Para quem escolhe um modelo por fora da cadeia normal — ex.: o juiz em sombra (GROUNDING_SHADOW_MODEL).
+     */
+    modeloPermitidoPelaSoberania(modelo: string): boolean {
+        if (process.env.PERMITIR_NUVEM_COMO_RESERVA === 'true') return true;
+        if (!this.providers.has(this.defaultProvider) || !this.tentativaFicaNaMaquina(this.defaultProvider, this.modeloPadraoDe(this.defaultProvider))) return true;
+        return !ehModeloDaNuvemDoOllama(modelo);
+    }
+
+    /** Modelo que o provider usa quando a chamada não pede um. */
+    private modeloPadraoDe(providerName: string): string | undefined {
+        const p = this.providers.get(providerName);
+        if (p instanceof OllamaProvider) return p.getModel();
+        return (p as { model?: string } | undefined)?.model;
+    }
+
     private rodaNaMaquinaDoUsuario(providerName: string): boolean {
         const baseUrl = providerName === 'ollama'
             ? this.creds.ollamaUrl

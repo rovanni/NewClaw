@@ -122,12 +122,13 @@ export async function doSave() {
     memoryWindowSize:       Number(c.memoryWindowSize),
     systemPrompt:           c.systemPrompt || '',
     ollamaUrl:              c.ollamaUrl    || 'http://localhost:11434',
-    ollamaModel:            c.ollamaModel  || 'glm-5.2:cloud',
+    ollamaModel:            c.ollamaModel  || '',   // issue 071/068: vazio = não escolhido (antes gravava glm-5.2:cloud a cada Salvar)
     telegramAllowedUserIds: c.telegramAllowedUserIds || '',
     modelRouter:            c.modelRouter  || {},
     // Sempre enviado (mesmo vazio): '' significa "não uso pasta local", uma escolha que precisa
     // chegar ao servidor para apagar um valor anterior — ver o !== undefined na rota.
     localModelsDir:         c.localModelsDir || '',
+    allowCloudFallback:         !!c.allowCloudFallback,   // issue 071
     localModelOptions:      c.localModelOptions || {},
   };
 
@@ -285,7 +286,7 @@ async function loadConfig() {
       memoryWindowSize:       c.memoryWindowSize,
       systemPrompt:           c.systemPrompt || '',
       ollamaUrl:              c.ollamaUrl    || 'http://localhost:11434',
-      ollamaModel:            c.ollamaModel  || 'glm-5.2:cloud',
+      ollamaModel:            c.ollamaModel  || '',   // issue 071/068: vazio = não escolhido (antes gravava glm-5.2:cloud a cada Salvar)
       telegramAllowedUserIds: c.telegramAllowedUserIds || '',
       hasGeminiKey:           c.hasGeminiKey      || false,
       hasDeepseekKey:         c.hasDeepseekKey    || false,
@@ -297,6 +298,7 @@ async function loadConfig() {
       modelRouter:            c.modelRouter   || {},
       customProviders:        c.customProviders || [],
       localModelsDir:         c.localModelsDir || '',
+      allowCloudFallback:         !!c.allowCloudFallback,   // issue 071
       localModelOptions:      c.localModelOptions || {},
       directoryPicker:        c.directoryPicker || { policyAllowed: false, preference: 'native' },
     });

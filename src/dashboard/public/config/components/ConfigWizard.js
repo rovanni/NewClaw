@@ -214,7 +214,7 @@ function esc(s) {
   return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-export function mountConfigWizard(container, { cloudProviders, provLabels, localProviderLabel, customPresets, computeSystemReady, applyDefaultProviderChange, ensureLocalProvider }) {
+export function mountConfigWizard(container, { cloudProviders, provLabels, localProviderLabel, customPresets, computeSystemReady, applyDefaultProviderChange, ensureLocalProvider, aplicarModeloATudo }) {
   if (!container) return () => {};
 
   let destroyed = false;
@@ -525,9 +525,8 @@ export function mountConfigWizard(container, { cloudProviders, provLabels, local
         // no C2 (nome de arquivo tratado como tag Ollama). Setar defaultProvider na mão, como este
         // código fazia antes, contornava essa proteção já existente.
         applyDefaultProviderChange('ollama');
-        const router = { ...(configStore.get('modelRouter') || {}) };
-        router.chat = session.selectedModel.id;
-        configStore.set('modelRouter', router);
+        // Issue 071: a escolha vale para todos os perfis e componentes internos, não só para a conversa.
+        aplicarModeloATudo(session.selectedModel.id);
         await doSave();
         if (destroyed) return;
         // Achado ao vivo pelo /qa leigo (C4.5, 2026-08-23): sem isto, a Visão Geral (barra de
@@ -704,11 +703,8 @@ export function mountConfigWizard(container, { cloudProviders, provLabels, local
       // confirmOllamaModelSelection): realinha modelRouter contra o catálogo real em vez de deixar
       // nomes de outro provider presos em categorias que agora apontam pra este.
       applyDefaultProviderChange(session.customLabel);
-      if (session.selectedModel) {
-        const router = { ...(configStore.get('modelRouter') || {}) };
-        router.chat = session.selectedModel.id;
-        configStore.set('modelRouter', router);
-      }
+      // Issue 071: a escolha vale para tudo; sem modelo escolhido, tudo herda o modelo padrão do provedor.
+      aplicarModeloATudo(session.selectedModel?.id || '');
       await doSave();
       if (destroyed) return;
       await loadProviders(true);
@@ -1078,6 +1074,8 @@ export function mountConfigWizard(container, { cloudProviders, provLabels, local
         // testada antes deste ponto. Setar defaultProvider antes da confirmação deixaria o sistema
         // apontado pra um provider quebrado até o usuário perceber e corrigir.
         applyDefaultProviderChange(session.provider);
+        // Issue 071: provedor nativo usa o próprio modelo padrão — limpa os nomes antigos de todos os perfis.
+        aplicarModeloATudo('');
         await doSave();
         if (destroyed) return;
         // Achado da investigação de C5: computeSystemReady() exige `cs.salvo('currentModel')` não

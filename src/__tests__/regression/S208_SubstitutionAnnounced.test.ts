@@ -96,6 +96,11 @@ const PERGUNTA: LLMMessage[] = [{ role: 'user', content: 'qual é a capital da F
 async function main(): Promise<void> {
     const envOriginal = process.env.SUBSTITUTION_POLICY;
     delete process.env.SUBSTITUTION_POLICY;
+    // Issue 071 (08/10/2026): atravessar do local para a nuvem passou a exigir autorização explícita
+    // (PERMITIR_NUVEM_COMO_RESERVA, opção do painel). Este teste cobre o ANÚNCIO de uma troca autorizada; o
+    // bloqueio sem autorização é coberto por S364.
+    const permitirOriginal = process.env.PERMITIR_NUVEM_COMO_RESERVA;
+    process.env.PERMITIR_NUVEM_COMO_RESERVA = 'true';
 
     try {
         console.log('\n=== S208-1 — local declarado → substituto remoto: o fato chega ao modelo ===');
@@ -250,6 +255,8 @@ async function main(): Promise<void> {
     } finally {
         if (envOriginal === undefined) delete process.env.SUBSTITUTION_POLICY;
         else process.env.SUBSTITUTION_POLICY = envOriginal;
+        if (permitirOriginal === undefined) delete process.env.PERMITIR_NUVEM_COMO_RESERVA;
+        else process.env.PERMITIR_NUVEM_COMO_RESERVA = permitirOriginal;
     }
 
     if (failed > 0) process.exit(1);

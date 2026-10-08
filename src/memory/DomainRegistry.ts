@@ -182,7 +182,12 @@ Responda APENAS com JSON válido, sem markdown:
  */
 export function createDomainClassifierLLM(
     providerFactory: ProviderFactory,
-    model?: string,
+    /**
+     * Issue 071: aceita uma FUNÇÃO que lê o modelo na hora de cada chamada. Com o valor fixo, o classificador guardava o
+     * modelo do boot — trocar o modelo no painel não chegava aqui, e ele seguiu chamando `glm-5.3:cloud` depois de o
+     * usuário configurar tudo local (produção, 08/10/2026).
+     */
+    model?: string | (() => string | undefined),
 ): DomainClassifierLLM {
     return async (text: string): Promise<DomainClassification | null> => {
         if (!text || text.trim().length === 0) return null;
@@ -200,7 +205,7 @@ export function createDomainClassifierLLM(
                 undefined,
                 orcamento.timeoutMs,
                 undefined,
-                model,
+                (typeof model === 'function' ? model() : model) || undefined,
                 { diag: { component: 'DomainRegistry', role: 'classifier' } },
             );
 

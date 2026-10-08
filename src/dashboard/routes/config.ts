@@ -47,6 +47,7 @@ export function persistConfigToEnv(ctx: DashboardContext): string[] | null {
             'CLASSIFIER_SERVER': ctx.config.modelRouter?.classifierServer || '',
             'CUSTOM_MODELS':      (ctx.config.customModels || []).join(','),
             'LOCAL_MODELS_DIR':   ctx.config.localModelsDir || '',
+            'PERMITIR_NUVEM_COMO_RESERVA': ctx.config.allowCloudFallback ? 'true' : 'false',   // issue 071
             'DIRECTORY_PICKER_PREFERENCE': ctx.config.directoryPickerPreference || 'native',
             'LOCAL_MODEL_OPTIONS': JSON.stringify(ctx.config.localModelOptions || {}),
             'CUSTOM_PROVIDERS':   JSON.stringify(ctx.config.customProviders || []),
@@ -139,6 +140,7 @@ export function createConfigRouter(ctx: DashboardContext): Router {
                 hasOllamaApiKey: !!ctx.config.ollamaApiKey,
                 modelRouter: ctx.config.modelRouter || {},
                 localModelsDir: ctx.config.localModelsDir || '',
+                allowCloudFallback: !!ctx.config.allowCloudFallback,
                 localModelOptions: ctx.config.localModelOptions || {},
                 customProviders: (ctx.config.customProviders || []).map(p => ({ label: p.label, baseUrl: p.baseUrl, hasKey: !!p.apiKey, model: p.model, thinking: p.thinking })),
                 // Política (ENV, nunca guardada em config — lida ao vivo) + preferência (persistida).
@@ -155,7 +157,7 @@ export function createConfigRouter(ctx: DashboardContext): Router {
 
     router.post('/', (req: Request, res: Response) => {
         const { language, defaultProvider, maxIterations, memoryWindowSize, systemPrompt, ollamaModel, ollamaApiKey, ollamaUrl, telegramAllowedUserIds, modelRouter,
-                localModelsDir, localModelOptions, geminiKey, deepseekKey, groqKey, openrouterKey, anthropicKey, directoryPickerPreference } = req.body;
+                localModelsDir, localModelOptions, geminiKey, deepseekKey, groqKey, openrouterKey, anthropicKey, directoryPickerPreference, allowCloudFallback } = req.body;
 
         log.info(`POST /api/config — ollamaModel="${ollamaModel}" provider="${defaultProvider}"`);
 
@@ -163,6 +165,11 @@ export function createConfigRouter(ctx: DashboardContext): Router {
         // !== undefined e não truthy: string vazia significa "limpar a pasta configurada", uma
         // escolha legítima do usuário, e um `if (localModelsDir)` a descartaria calado.
         if (localModelsDir !== undefined) ctx.config.localModelsDir = String(localModelsDir).trim();
+        // Issue 071: vale na hora — o ProviderFactory lê a variável a cada chamada.
+        if (typeof allowCloudFallback === 'boolean') {
+            ctx.config.allowCloudFallback = allowCloudFallback;
+            process.env.PERMITIR_NUVEM_COMO_RESERVA = allowCloudFallback ? 'true' : 'false';
+        }
         // Objeto inteiro substitui o anterior: a UI sempre manda o mapa completo, e um merge aqui
         // impediria APAGAR as opções de um modelo (a chave removida simplesmente não chegaria).
         if (localModelOptions && typeof localModelOptions === 'object') ctx.config.localModelOptions = localModelOptions;

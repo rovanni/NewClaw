@@ -274,7 +274,7 @@ export class AgentController {
         // chamado 36x em 12 arquivos) continuam usando o regex diretamente (decisão consciente,
         // não um esquecimento).
         sessionContext.getContextBuilder().setDomainClassifierLLM(
-            createDomainClassifierLLM(this.providerFactory, this.agentLoop.getClassifierModel())
+            createDomainClassifierLLM(this.providerFactory, () => this.agentLoop.getClassifierModel())   // issue 071: lido a cada chamada
         );
 
         this.sessionLearner = new SessionLearner(this.sessionManager, this.memory);
@@ -669,7 +669,7 @@ export class AgentController {
         // Mesma classificação de domínio via LLM injetada no ContextBuilder acima — ver
         // project_session_bugs_jul2026_ai.md parte 6.
         memoryWriteTool.setDomainClassifierLLM(
-            createDomainClassifierLLM(this.providerFactory, this.agentLoop.getClassifierModel())
+            createDomainClassifierLLM(this.providerFactory, () => this.agentLoop.getClassifierModel())   // issue 071: lido a cada chamada
         );
         ToolRegistry.register(memoryWriteTool);
         ToolRegistry.register(new ReadDocumentTool(this.providerFactory, this.agentLoop.getProfileRegistry()));

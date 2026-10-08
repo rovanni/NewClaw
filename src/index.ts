@@ -93,6 +93,7 @@ const config = {
     customModels: (process.env.CUSTOM_MODELS || '').split(',').map(m => m.trim()).filter(m => m.length > 0),
     customProviders: parseCustomProviders(process.env.CUSTOM_PROVIDERS),
     localModelsDir: process.env.LOCAL_MODELS_DIR || '',
+    allowCloudFallback: process.env.PERMITIR_NUVEM_COMO_RESERVA === 'true',   // issue 071
     localModelOptions: parseLocalModelOptions(process.env.LOCAL_MODEL_OPTIONS),
     // Política (NEWCLAW_NATIVE_DIRECTORY_PICKER) é lida direto de process.env dentro de
     // DirectoryPickerService — nunca guardada aqui, propositalmente (ver docstring do módulo).

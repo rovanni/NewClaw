@@ -1022,6 +1022,12 @@ export class ObserverValidator {
         const model = (process.env.GROUNDING_SHADOW_MODEL ?? '').trim();
         if (!model) return;
         if (!traceCtx || traceCtx.phase === 'shadow-extended' || traceCtx.phase === 'shadow-model') return; // sem recursão
+        // Issue 071: o experimento obedece à mesma regra de onde rodar — modelo de nuvem com o padrão local e sem
+        // autorização não roda (produção, 08/10: gemma4:cloud chamado em todo julgamento, com tudo configurado local).
+        if (this.providerFactory.modeloPermitidoPelaSoberania?.(model) === false) {
+            log.info(`[GROUNDING-SHADOW-MODEL] '${model}' sairia da máquina do usuário (padrão local, nuvem não autorizada) — sombra não executada`);
+            return;
+        }
         void this.runLightModelShadow(response, evidences, traceCtx, real, model).catch(() => { /* nunca afeta o real */ });
     }
 

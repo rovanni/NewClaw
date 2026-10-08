@@ -341,6 +341,16 @@ export const REASONING_INTENSIVE_TIMEOUT_FLOOR_MS = 240_000;
  */
 export const DECISION_PROMPT_MAX_CHARS = 60_000;
 
+/**
+ * O modelo pedido ao Ollama é processado na NUVEM? Convenção de nomes do próprio Ollama: modelos de nuvem terminam em
+ * `:cloud` (ex.: `glm-5.2:cloud`) ou têm a tag `-cloud` (ex.: `gemma4:31b-cloud`). Fato estrutural do nome, não
+ * interpretação. Issue 071: o Ollama no endereço local com um modelo `:cloud` NÃO fica na máquina do usuário — antes o
+ * NewClaw o tratava como local só pelo endereço. (O painel tem a mesma regra em `ModelosView.js`, que não importa TS.)
+ */
+export function ehModeloDaNuvemDoOllama(modelo?: string): boolean {
+    return !!modelo && /(:|-)cloud$/i.test(modelo.trim());
+}
+
 export interface CustomProviderConfig {
     label: string;
     baseUrl: string;

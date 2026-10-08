@@ -487,6 +487,13 @@ export function render(container) {
                 <option value="anthropic">🧠 Anthropic (Claude)</option>
               </select>
             </div>
+            <!-- Issue 071: quem escolheu offline continua offline — a reserva na nuvem só com esta opção marcada. -->
+            <div class="form-group">
+              <label class="form-label" style="display:flex;gap:8px;align-items:center;cursor:pointer;">
+                <input type="checkbox" id="ml-allowCloudFallback"> ${t('ml_allow_cloud_fallback_label')}
+              </label>
+              <div class="form-hint">${t('ml_allow_cloud_fallback_hint')}</div>
+            </div>
             <div class="form-group">
               <label class="form-label">${t('vision_server_label')}</label>
               <input type="text" class="form-input" id="ml-visionServer" placeholder="http://localhost:11434" style="max-width:320px;">
@@ -582,6 +589,7 @@ export function render(container) {
   // customProvider salvo como defaultProvider (ex.: llamafile local) não existiria ainda como
   // <option> e o browser ignoraria silenciosamente a atribuição, voltando pro primeiro item.
   el('ml-defaultProvider').value  = s.defaultProvider || 'ollama';
+  if (el('ml-allowCloudFallback')) el('ml-allowCloudFallback').checked = !!s.allowCloudFallback;
   el('ollamaModel').value         = s.ollamaModel || '';
   el('mr-localDir')  && (el('mr-localDir').value = s.localModelsDir || '');
   el('ml-classifierServer').value = r.classifierServer || '';
@@ -595,6 +603,8 @@ export function render(container) {
   updateProviderHints(s.defaultProvider);
   updateModelStatus(providersStore.get('models') || [], r);
   checkInternalModels();
+
+  el('ml-allowCloudFallback')?.addEventListener('change', e => { cs.set('allowCloudFallback', !!e.target.checked); });
 
   // Provider select
   el('ml-defaultProvider').addEventListener('change', e => {
@@ -697,6 +707,7 @@ export function render(container) {
     computeSystemReady,
     applyDefaultProviderChange,
     ensureLocalProvider,
+    aplicarModeloATudo,
   });
 
   // Subscribe to providersStore
@@ -2250,6 +2261,34 @@ function wireCategoryPicker(container) {
  * provider padrão. Reusa addCustomProvider/editCustomProvider (as mesmas rotas do cadastro manual)
  * em vez de um caminho paralelo — um único mecanismo de provider, dois pontos de entrada na UI.
  */
+/**
+ * Issue 071 — a escolha feita no assistente vale para TUDO (decisão do operador, 08/10/2026: "selecionei tudo via
+ * assistente; ele deveria deixar tudo como o modelo que eu selecionei"). Antes cada caminho do assistente aplicava de um
+ * jeito: o modelo local aplicava a todos os perfis e componentes internos; Ollama e OpenAI-compatível só ao perfil de
+ * conversa; provedores nativos a nenhum — e os nomes antigos (ex.: glm-5.3:cloud) ficavam escondidos nos demais.
+ *
+ * Fonte única, usada pelos quatro caminhos: todos os perfis de texto e os quatro componentes internos recebem o modelo
+ * escolhido (vazio = o modelo padrão do provedor), e os provedores por perfil são limpos. Visão: `mesmo_modelo` só no
+ * caminho do modelo local (o projetor de imagem é opção do servidor que o operador configurou); nos demais, só se o
+ * catálogo disser que o modelo lê imagem — senão fica "não configurada" (Nunca Adivinhar).
+ */
+export function aplicarModeloATudo(modelo, { visao = 'se_o_catalogo_disser' } = {}) {
+  const cs = configStore;
+  const valor = modelo || '';
+  const mr = { ...(cs.get('modelRouter') || {}) };
+  ['chat', 'code', 'light', 'analysis', 'execution'].forEach(cat => { mr[cat] = valor; mr[`provider_${cat}`] = ''; });
+  const doCatalogo = (providersStore.get('catalog') || []).find(m => m.id === valor);
+  const leImagem = visao === 'mesmo_modelo' || !!(doCatalogo?.capabilities || []).includes('vision');
+  mr.vision = valor && leImagem ? valor : '';
+  mr.provider_vision = '';
+  ['classifierModel', 'plannerModel', 'riskModel', 'observerModel'].forEach(k => { mr[k] = valor; });
+  cs.set('modelRouter', mr);
+  ['chat', 'code', 'vision', 'light', 'analysis', 'execution'].forEach(cat => {
+    const sel = document.getElementById(`ml-prov-${cat}`);
+    if (sel) sel.value = '';
+  });
+}
+
 export async function ensureLocalProvider(url, file) {
   const cs = configStore;
   // Apontar TAMBÉM as categorias do Model Router para o modelo carregado. Sem isto o roteador
@@ -2258,18 +2297,8 @@ export async function ensureLocalProvider(url, file) {
   // de modelo único ignoram o campo e funcionam por acidente; LM Studio/vLLM responderiam "modelo
   // não encontrado". Como o servidor local serve UM modelo, todas as categorias vão para ele de
   // qualquer forma — deixar nomes de outro provider ali seria só uma mentira na tela.
-  if (file) {
-    const mr = { ...(cs.get('modelRouter') || {}) };
-    ['chat', 'code', 'vision', 'light', 'analysis', 'execution'].forEach(cat => { mr[cat] = file; });
-    // Componentes internos (GoalPlanner/RiskAnalyzer/ObserverValidator) e o classificador também:
-    // eles pedem modelo pelo nome como qualquer outro, e ficavam com nomes de modelo do Ollama
-    // depois de trocar para um provider local — observado ao vivo, 02/08.
-    mr.classifierModel = file;
-    mr.plannerModel = file;
-    mr.riskModel = file;
-    mr.observerModel = file;
-    cs.set('modelRouter', mr);
-  }
+  // Componentes internos e o classificador também (observado ao vivo, 02/08) — agora pela fonte única (issue 071).
+  if (file) aplicarModeloATudo(file, { visao: 'mesmo_modelo' });
   const existing = (cs.get('customProviders') || []).find(p => p.label === LOCAL_PROVIDER_LABEL);
   if (existing) {
     await editCustomProvider(LOCAL_PROVIDER_LABEL, { baseUrl: url });
