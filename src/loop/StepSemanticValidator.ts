@@ -18,6 +18,7 @@
 import { createLogger } from '../shared/AppLogger';
 import { ProviderFactory, LLMMessage } from '../core/ProviderFactory';
 import { PlanStep } from './GoalTypes';
+import { DECISION_PROMPT_MAX_CHARS } from '../core/providerTypes';
 
 const log = createLogger('StepSemanticValidator');
 
@@ -174,33 +175,6 @@ export class StepSemanticValidator {
         return [...new Set([...tokens, ...argTokens])].slice(0, 20);
     }
 
-    /**
-     * Recorta o output para caber no prompt do LLM sem descartar a parte relevante.
-     * Um slice(0, N) ingênuo perde o conteúdo quando ele aparece depois do corte —
-     * ex: list_workspace lista diretórios (recursivos) antes de arquivos da raiz, então
-     * um arquivo específico buscado pelo step pode só aparecer bem depois do byte 600.
-     * Isso fez o validador LLM ver um trecho sem o arquivo e reportar 'mismatch' mesmo
-     * com o arquivo presente no output completo (falso positivo de downgrade).
-     */
-    private extractRelevantSnippet(output: string, keyTerms: string[], maxLen: number): string {
-        if (output.length <= maxLen) return output;
-
-        const head = output.slice(0, maxLen);
-        const headLower = head.toLowerCase();
-        const outputLower = output.toLowerCase();
-
-        // Termos genéricos (ex: "workspace") tendem a aparecer logo no cabeçalho do output
-        // mesmo quando o termo que realmente importa (ex: "sanitize_memory") só aparece
-        // depois do corte. Por isso não basta pegar o match mais cedo entre todos os termos —
-        // o que importa é achar um termo que exista no texto completo mas NÃO no corte padrão.
-        const missingTerm = keyTerms.find(t => outputLower.includes(t) && !headLower.includes(t));
-        if (!missingTerm) return head;
-
-        const idx = outputLower.indexOf(missingTerm);
-        const start = Math.max(0, idx - Math.floor(maxLen / 3));
-        return output.slice(start, start + maxLen);
-    }
-
     private fastPathCheck(step: PlanStep, output: string): Omit<StepSemanticValidation, 'shouldDowngradeToPartial' | 'shouldPromoteToConfidentSuccess'> {
         const outputLower = output.toLowerCase();
         const allKeyTerms = this.extractKeyTerms(step);
@@ -239,18 +213,21 @@ export class StepSemanticValidator {
         goalIntent?: string,
         facts?: StepExecutionFacts,
     ): Promise<Omit<StepSemanticValidation, 'shouldDowngradeToPartial' | 'shouldPromoteToConfidentSuccess'>> {
-        const truncatedOutput = this.extractRelevantSnippet(toolOutput, this.extractKeyTerms(step), 600);
+        // Informação Completa para Decidir (Sprint V5): o resultado do passo é o OBJETO da decisão — vai inteiro, e o
+        // pedido também. Antes: 600 chars escolhidos por coincidência de palavras-chave (uma heurística decidindo o que
+        // o LLM podia ver) e 200 chars do pedido. Sem orçamento para o resultado inteiro, "unverifiable" (não avaliável),
+        // que não rebaixa nem promove o passo — nunca um veredito sobre um trecho.
         const lines = [
             'Você é um validador de relevância de resultado de ferramentas.',
             '',
             `Intenção do step: "${step.description}"`,
-            goalIntent ? `Objetivo do usuário: "${goalIntent.slice(0, 200)}"` : '',
+            goalIntent ? `Pedido do usuário (íntegro): "${goalIntent}"` : '',
             `Ferramenta executada: ${step.toolName ?? 'agentloop'}`,
             ...(facts ? describeFacts(facts) : []),
             '',
-            'Output da ferramenta (truncado a 600 chars):',
+            'Output da ferramenta (íntegro):',
             '"""',
-            truncatedOutput,
+            toolOutput,
             '"""',
             '',
             facts ? 'O output acima, junto com os fatos da execução, ENDEREÇA a intenção do step?' : 'O output acima ENDEREÇA a intenção do step?',
@@ -258,7 +235,12 @@ export class StepSemanticValidator {
             'Exemplo de mismatch: step pede cotações de BTC/ZEC mas output lista dados de ETH/ENA; step pede criar arquivo mas output é erro genérico.',
         ].filter(Boolean);
 
-        const messages: LLMMessage[] = [{ role: 'user', content: lines.join('\n') }];
+        const prompt = lines.join('\n');
+        if (prompt.length > DECISION_PROMPT_MAX_CHARS) {
+            log.info(`[StepSemanticValidator] step=${step.id} prompt de ${prompt.length} chars excede ${DECISION_PROMPT_MAX_CHARS} — não avaliável, sem chamar o LLM`);
+            return { result: 'unverifiable', confidence: 0.5, reason: `resultado grande demais para avaliar inteiro (${toolOutput.length} chars)`, usedFastPath: false };
+        }
+        const messages: LLMMessage[] = [{ role: 'user', content: prompt }];
 
         // Reusa chatWithFallback em vez de getProviderWithModel() direto (D-08,
         // docs/ARCHITECTURE/INVENTARIO_DUPLICACAO_2026-08-24.md) — mesmo mecanismo que

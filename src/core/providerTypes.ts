@@ -320,6 +320,19 @@ export const TELEMETRY_SAMPLE_MS = 15_000;
  */
 export const REASONING_INTENSIVE_TIMEOUT_FLOOR_MS = 240_000;
 
+/**
+ * Teto de caracteres do prompt de uma DECISÃO do LLM (juiz, validadores). Não é limite de estilo nem economia de
+ * tokens: é a fronteira a partir da qual deixa de ser possível afirmar que o LLM recebeu o objeto da decisão inteiro.
+ * Acima dele, a decisão é "não avaliável" — nunca um veredito sobre um pedaço (princípio "Informação Completa para
+ * Decidir", §4.5).
+ *
+ * Derivação: o menor contexto que o projeto assume em runtime é o padrão de `OLLAMA_NUM_CTX` (32768 tokens —
+ * `OllamaProvider`), e num_ctx cobre entrada + saída. A ~3 chars/token em pt-BR são ~98k chars no total; reservando a
+ * saída e margem para a instrução, o teto de ENTRADA fica em 60k. Fonte única: antes vivia só no juiz de grounding
+ * (`GROUNDING_MAX_PROMPT_CHARS`); o validador do passo passou a precisar do mesmo número (Sprint V5).
+ */
+export const DECISION_PROMPT_MAX_CHARS = 60_000;
+
 export interface CustomProviderConfig {
     label: string;
     baseUrl: string;
