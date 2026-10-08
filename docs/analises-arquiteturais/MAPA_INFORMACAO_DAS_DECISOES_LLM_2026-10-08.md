@@ -1,5 +1,9 @@
 # Mapa da informação das decisões do LLM — 08/10/2026
 
+> **Registro vigente** do princípio `docs/ARCHITECTURE/INFORMACAO_COMPLETA_PARA_DECIDIR.md`: a tabela §1 deve
+> listar todo ponto do código em que o LLM decide, com a pergunta e o que recebe. O teste `S356` falha quando uma
+> chamada nova ao LLM entra no código sem entrar aqui. Ao corrigir uma violação, atualize a linha (situação ✅).
+
 > **Pergunta do operador:** *"um LLM pensa como um ser humano — que dados a gente precisa ter para tomar uma
 > decisão? Mapear todo lugar onde o LLM decide e ver se ele tem as informações necessárias, porque por isso ele
 > fica travado em algumas etapas."*

@@ -21,6 +21,7 @@ instantâneo datado; as normas são vivas.
 | `SOBERANIA_DA_CONFIGURACAO.md` | *Quem* decide qual recurso usar, e o que o usuário fica sabendo |
 | `LOCALIDADE_DA_RECUPERACAO.md` | *Em que camada* uma política de recuperação deve viver |
 | `RESPONSABILIDADE_ANTES_DO_MECANISMO.md` | *Quem* deve tomar uma decisão de avaliação, *com qual evidência*, e só então *por qual mecanismo* (estrutura → determinismo; significado → LLM) |
+| `INFORMACAO_COMPLETA_PARA_DECIDIR.md` | O que toda decisão do LLM precisa receber (o que um humano precisaria para decidir) e como isso é cobrado — registro obrigatório de cada ponto de decisão (teste `S356`) e o campo `faltou` dos avaliadores |
 | `QUANDO_EXTRAIR_DUPLICACAO.md` | Diante de código duplicado, extrair ou manter duplicado — dois testes, não reflexo (Single Authoritative Knowledge; confirmado padrão recorrente, 6+ casos reais) |
 | `INVENTARIO_DUPLICACAO_2026-08-24.md` | Inventário completo, caso a caso, de todas as duplicidades de conhecimento já encontradas no repositório, classificadas com os testes de `QUANDO_EXTRAIR_DUPLICACAO.md` (EXTRAIR / MANTER INTENCIONALMENTE / INVESTIGAR / FORA DO ESCOPO) — não é norma nova, é a aplicação registrada da norma anterior |
 

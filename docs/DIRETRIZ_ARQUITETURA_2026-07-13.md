@@ -241,6 +241,15 @@ está em `docs/ARCHITECTURE/README.md`:
   testada, que nunca executava porque o `import` era estático e a falha acontecia em tempo de
   compilação. Vale também para o **diagnóstico** — quem não alcança o sinal que classifica a causa
   deve reportar indeterminação, nunca escolher a mais provável.
+- **Informação Completa para Decidir** (`docs/ARCHITECTURE/INFORMACAO_COMPLETA_PARA_DECIDIR.md`) — toda
+  chamada em que o LLM decide recebe o que um humano competente precisaria para tomar a mesma decisão: a pergunta
+  explícita, o objeto julgado inteiro, a fonte de verdade inteira, o pedido do usuário íntegro quando a pergunta
+  depende dele e o contexto que muda a resposta. Proíbe cortar o objeto julgado, cortar contexto sem declarar,
+  resumo no lugar do original e heurística escolhendo o que o LLM vê; sem orçamento para o necessário, o resultado
+  é "não avaliável". Cobrado por recenseamento (`S356`: todo ponto de decisão do LLM consta no registro com o que
+  recebe) e medido no uso real pelo campo `faltou` dos avaliadores. Nasceu do mapeamento de 08/10/2026: juiz sem o
+  pedido, replanejamento e revisão de risco sobre um resumo de 300 caracteres, validador lendo 600 caracteres
+  escolhidos por palavra-chave.
 - **Quando Extrair Duplicação / Single Authoritative Knowledge**
   (`docs/ARCHITECTURE/QUANDO_EXTRAIR_DUPLICACAO.md`) — diante de código duplicado, extrair só
   quando os dois testes passam: (1) existe pelo menos um sinal de conhecimento compartilhado que
