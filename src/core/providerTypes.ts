@@ -257,7 +257,45 @@ export interface ChatFallbackOptions {
      * (`PERFIS.validacao.fator`) — não um número novo inventado para este achado.
      */
     reasoningIntensive?: boolean;
+    /**
+     * Gravador de voo (ADR-013): o chamador passa um objeto vazio e o ProviderFactory/provider o preenchem com o
+     * que ACONTECEU em cada tentativa. Só observabilidade — nenhuma decisão do ProviderFactory o consulta.
+     */
+    telemetry?: CallTelemetry;
 }
+
+/** Gravador de voo (ADR-013): o que aconteceu numa chamada ao LLM, tentativa por tentativa. */
+export interface CallTelemetry {
+    attempts: AttemptTelemetry[];
+}
+
+export interface AttemptTelemetry {
+    provider: string;
+    model: string;
+    startedAt: string;
+    status?: 'success' | 'timeout' | 'error' | 'empty' | 'cancelled';
+    errorMessage?: string;
+    durationMs?: number;
+    /** Preenchidos por quem consome o streaming (hoje: OllamaProvider). Ausentes = não observado. */
+    chunks?: number;
+    firstChunkMs?: number;
+    firstChunkType?: string;
+    firstContentMs?: number;
+    thinkingChars?: number;
+    contentChars?: number;
+    toolCalls?: number;
+    doneReason?: string;
+    promptTokens?: number;
+    evalTokens?: number;
+    /** Amostras a cada TELEMETRY_SAMPLE_MS: quanto já tinha de raciocínio e de conteúdo. */
+    timeline?: Array<{ ms: number; thinkingChars: number; contentChars: number }>;
+    /** Texto bruto — inclusive o raciocínio de uma geração abortada. Quem grava decide se persiste (TRACE_CONTENT). */
+    thinkingText?: string;
+    contentText?: string;
+}
+
+/** Intervalo das amostras da linha do tempo do streaming (gravador de voo). */
+export const TELEMETRY_SAMPLE_MS = 15_000;
 
 /**
  * Piso de timeout (ms) para chamadas `reasoningIntensive` — usado em MAIS de uma camada que
@@ -307,4 +345,6 @@ export interface ChatOptions {
     /** Ver `ChatFallbackOptions.reasoningIntensive` (issue 038) — repassado pelo ProviderFactory
      *  até o provider real (hoje só OllamaProvider consulta isto). */
     reasoningIntensive?: boolean;
+    /** Ver `ChatFallbackOptions.telemetry` — a tentativa corrente, preenchida pelo provider. */
+    telemetry?: AttemptTelemetry;
 }

@@ -88,7 +88,8 @@ console.log('\n=== S293.3 — auditoria estrutural: o código real usa o valor e
 
     const idx2 = src.indexOf('const effectiveNonStreamingTimeoutMs = (opts?.reasoningIntensive && timeoutMs)');
     assert(idx2 > 0, 'chamada a fallbackNonStreaming: effectiveNonStreamingTimeoutMs é calculado', idx2);
-    const trecho2 = src.slice(idx2, idx2 + 500);
+    // ADR-013: o registro da tentativa sem streaming (gravador de voo) fica entre o cálculo e a chamada.
+    const trecho2 = src.slice(idx2, idx2 + 1400);
     assert(/fallbackNonStreaming\(mensagensNaoStreaming, tools, effectiveNonStreamingTimeoutMs\)/.test(trecho2), 'fallbackNonStreaming() recebe o valor efetivo, não o timeoutMs bruto', trecho2);
 }
 

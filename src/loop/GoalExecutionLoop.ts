@@ -20,6 +20,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import { createLogger } from '../shared/AppLogger';
+import { gravarEfeito } from '../shared/evaluatorFlightRecorder';
 import { buildHostAppContextBlock, hostContextMode, appendHostBlock } from '../shared/hostAppContext';
 import { AgentLoop } from './AgentLoop';
 import { traceManager } from '../core/ExecutionTrace';
@@ -2408,7 +2409,14 @@ export class GoalExecutionLoop {
             detectedAt: Date.now(),
         };
 
-        if (goal.retryBudget > 0 && !alreadyHinted) {
+        // Gravador de voo (ADR-013): o que o goal fez com o bloqueio do juiz. Ligação com o julgamento por goal/step.
+        const repete = goal.retryBudget > 0 && !alreadyHinted;
+        gravarEfeito({
+            avaliador: 'juiz_grounding', contexto: { goalId: goal.id, stepId: step.id },
+            efeito: repete ? 'goal_repete_step_com_aviso' : 'goal_bloqueado_vai_replanejar',
+            detalhe: { estado: block.state, naoConfirmadas: block.unconfirmedClaims.length, retryBudget: goal.retryBudget, replanBudget: goal.replanBudget, msAteExpirar: goal.expiresAt - Date.now() },
+        });
+        if (repete) {
             const enrichedPlan = goal.currentPlan.map(s =>
                 s.id === step.id ? { ...s, description: `${cleanDesc}${MARKER} ${fact}.]`.slice(0, 1200) } : s
             );

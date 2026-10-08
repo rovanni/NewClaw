@@ -1,6 +1,6 @@
 import { createLogger } from '../shared/AppLogger';
 import { errorMessage } from '../shared/errors';
-import { ILLMProvider, LLMMessage, LLMResponse, ToolDefinition, ChatOptions, StreamChunk, OpenAIChatResponse, RawApiChunk, RawToolCall, ModelInfo, REASONING_INTENSIVE_TIMEOUT_FLOOR_MS } from './providerTypes';
+import { ILLMProvider, LLMMessage, LLMResponse, ToolDefinition, ChatOptions, StreamChunk, OpenAIChatResponse, RawApiChunk, RawToolCall, ModelInfo, REASONING_INTENSIVE_TIMEOUT_FLOOR_MS, AttemptTelemetry, TELEMETRY_SAMPLE_MS } from './providerTypes';
 import { guessCapabilities, mapOllamaCapabilities } from './modelCapabilityHeuristics';
 import { taskQueue, TaskPriority } from './providerQueue';
 import { assertNotSsrfTarget } from './ssrfGuard';
@@ -147,7 +147,7 @@ export class OllamaProvider implements ILLMProvider {
                 if (queueWaitMs > 500) {
                     log.info(`[STREAM] Queue wait: ${queueWaitMs}ms — remaining budget: ${remainingMs ?? 'default'}ms`);
                 }
-                return this._consumeStream(messages, tools, remainingMs, options?.signal, options?.reasoningIntensive);
+                return this._consumeStream(messages, tools, remainingMs, options?.signal, options?.reasoningIntensive, options?.telemetry);
             },
             { priority }
         );
@@ -415,7 +415,7 @@ export class OllamaProvider implements ILLMProvider {
      * Consume the streaming generator and collect full response.
      * On stream failure, throws — caller handles retries and fallback.
      */
-    private async _consumeStream(messages: LLMMessage[], tools?: ToolDefinition[], customTimeoutMs?: number, externalSignal?: AbortSignal, reasoningIntensive?: boolean): Promise<LLMResponse> {
+    private async _consumeStream(messages: LLMMessage[], tools?: ToolDefinition[], customTimeoutMs?: number, externalSignal?: AbortSignal, reasoningIntensive?: boolean, telemetry?: AttemptTelemetry): Promise<LLMResponse> {
         let content = '';
         let thinking = '';
         const toolCalls: RawToolCall[] = [];
@@ -430,9 +430,32 @@ export class OllamaProvider implements ILLMProvider {
 
         log.info(`[${consumeId}] [STREAM-CONSUME] START timeout=${customTimeoutMs || 'default'}ms`);
 
+        // Gravador de voo (ADR-013): observa o que o modelo FEZ — inclusive o raciocínio que, num abort, é descartado
+        // como resposta. Só preenche o objeto do chamador; nenhuma decisão abaixo depende dele.
+        const tele = telemetry;
+        let proximaAmostra = TELEMETRY_SAMPLE_MS;
+        const registrarTelemetria = (): void => {
+            if (!tele) return;
+            Object.assign(tele, {
+                chunks: chunkCount, thinkingChars: thinking.length, contentChars: content.length, toolCalls: toolCalls.length,
+                doneReason, promptTokens: usage?.prompt_tokens, evalTokens: usage?.completion_tokens,
+                thinkingText: thinking, contentText: content,
+            });
+        };
+        if (tele) tele.timeline = [];
+
         try {
             for await (const chunk of this.streamChat(messages, tools, customTimeoutMs, externalSignal, reasoningIntensive)) {
                 chunkCount++;
+                if (tele) {
+                    const ms = Date.now() - startTime;
+                    if (tele.firstChunkMs === undefined) { tele.firstChunkMs = ms; tele.firstChunkType = chunk.type; }
+                    if (chunk.type === 'content' && tele.firstContentMs === undefined) tele.firstContentMs = ms;
+                    while (ms >= proximaAmostra) {
+                        tele.timeline!.push({ ms: proximaAmostra, thinkingChars: thinking.length, contentChars: content.length });
+                        proximaAmostra += TELEMETRY_SAMPLE_MS;
+                    }
+                }
                 switch (chunk.type) {
                     case 'content': content += chunk.value; break;
                     case 'thinking': thinking += chunk.value; break;
@@ -442,6 +465,7 @@ export class OllamaProvider implements ILLMProvider {
             }
         } catch (streamErr) {
             streamFailed = true;
+            registrarTelemetria();
             const elapsed = Date.now() - startTime;
             // Stream abortado (prazo, erro de provedor): raciocínio acumulado é TRUNCADO por definição e nunca vira
             // resposta (lição do S72: 8000 chars de CoT incompleto entregues no Telegram). Conteúdo real já recebido
@@ -457,6 +481,7 @@ export class OllamaProvider implements ILLMProvider {
 
         const elapsed = Date.now() - startTime;
         const interrupted = streamFailed || !sawDone || doneReason === 'length';
+        registrarTelemetria();
 
         // Some models (e.g. deepseek-v4-flash:cloud via Ollama) return their full response
         // in message.thinking instead of message.content. When content is empty but thinking

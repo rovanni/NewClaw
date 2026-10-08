@@ -9,6 +9,8 @@ import { createLogger } from '../shared/AppLogger';
 import { errorMessage } from '../shared/errors';
 import { createHash } from 'crypto';
 import { ANALYSIS_INTENT_PATTERN } from '../shared/analysisIntentPattern';
+import { gravarAvaliacao, novaAvaliacaoId, versaoDoPrompt } from '../shared/evaluatorFlightRecorder';
+import type { CallTelemetry } from '../core/providerTypes';
 const log = createLogger('Observervalidator');
 
 /**
@@ -68,6 +70,17 @@ export interface ValidationResult {
     suggestedFix?: string;
     validationSkipped?: boolean;
     failureType?: FailureType;
+    /** Gravador de voo (ADR-013): id do registro deste julgamento, quando houve julgamento. */
+    avaliacaoId?: string;
+}
+
+/** Gravador de voo (ADR-013): o que o validador de qualidade observou, preenchido durante o julgamento. */
+interface RegistroQualidade {
+    telemetria: CallTelemetry;
+    prompt: string;
+    /** undefined = não houve julgamento (pulado) — nada a gravar. */
+    desfecho?: string;
+    saidaBruta?: string;
 }
 
 /**
@@ -216,6 +229,8 @@ export interface GroundingVerdict {
     /** de onde veio o orçamento de tempo (shared/auxTimeout.ts) */
     budgetMs: number;
     budgetOrigin: 'medido' | 'padrao';
+    /** Gravador de voo (ADR-013): id do registro deste julgamento, para o consumidor gravar o efeito. */
+    avaliacaoId?: string;
 }
 
 const CLAIM_VERDICTS: ReadonlySet<string> = new Set<ClaimVerdict>(['SUPPORTED', 'NOT_SUPPORTED', 'NOT_EVALUABLE']);
@@ -436,6 +451,37 @@ export class ObserverValidator {
         finalResponse: string,
         signal?: AbortSignal,
     ): Promise<ValidationResult> {
+        const t0 = Date.now();
+        const reg: RegistroQualidade = { telemetria: { attempts: [] }, prompt: '' };
+        const result = await this.julgarQualidade(userMessage, intent, toolUsed, toolResult, finalResponse, signal, reg);
+        if (reg.desfecho === undefined) return result;
+        const avaliacaoId = novaAvaliacaoId();
+        gravarAvaliacao({
+            id: avaliacaoId, avaliador: 'validador_qualidade',
+            antes: {
+                modelo: this.effectiveModel, versaoPrompt: versaoDoPrompt(OBSERVER_PROMPT), promptChars: reg.prompt.length,
+                fatos: { ferramenta: toolUsed, pedidoChars: userMessage.length, resultadoChars: toolResult.length, respostaChars: finalResponse.length },
+                conteudo: { prompt: reg.prompt, pedido: userMessage, resultadoFerramenta: toolResult, resposta: finalResponse },
+            },
+            telemetria: reg.telemetria,
+            depois: {
+                desfecho: reg.desfecho, estado: result.validationSkipped ? 'pulado' : result.approved ? 'aprovado' : 'reprovado', duracaoMs: Date.now() - t0,
+                fatos: { confianca: result.confidence, failureType: result.failureType },
+                conteudo: { motivo: result.reason, sugestao: result.suggestedFix, saidaBruta: reg.saidaBruta },
+            },
+        });
+        return { ...result, avaliacaoId };
+    }
+
+    private async julgarQualidade(
+        userMessage: string,
+        intent: string,
+        toolUsed: string,
+        toolResult: string,
+        finalResponse: string,
+        signal: AbortSignal | undefined,
+        reg: RegistroQualidade,
+    ): Promise<ValidationResult> {
         // Try deterministic check first — avoids LLM entirely for obvious cases
         const deterministic = this.deterministicCheck(toolUsed, toolResult, finalResponse);
         if (deterministic) {
@@ -447,6 +493,7 @@ export class ObserverValidator {
                     ` approved=${deterministic.approved} confidence=${deterministic.confidence}` +
                     ` evidence_rule="${deterministic.reason}"`
                 );
+                reg.desfecho = 'deterministico';
             }
             return deterministic;
         }
@@ -468,6 +515,7 @@ export class ObserverValidator {
             { role: 'system', content: 'Você é um validador de qualidade. Responda APENAS com JSON válido.' },
             { role: 'user', content: prompt }
         ];
+        reg.prompt = prompt;
 
         try {
             const startTime = Date.now();
@@ -483,7 +531,7 @@ export class ObserverValidator {
             // Issue 038: mesmo perfil 'validacao' já usado pro timeout externo — reasoningIntensive
             // aplica o mesmo fator (4×) ao orçamento interno de "thinking" do provider, evitando
             // que o juiz de grounding seja abortado por raciocínio legítimo (ver ChatFallbackOptions).
-            const fallbackResult = await this.providerFactory.chatWithFallback(messages, undefined, undefined, orcamento.timeoutMs, signal, this.effectiveModel, { reasoningIntensive: true, diag: { component: 'ObserverValidator', role: 'observer', phase: 'quality' } });
+            const fallbackResult = await this.providerFactory.chatWithFallback(messages, undefined, undefined, orcamento.timeoutMs, signal, this.effectiveModel, { reasoningIntensive: true, diag: { component: 'ObserverValidator', role: 'observer', phase: 'quality' }, telemetry: reg.telemetria });
             const elapsed = Date.now() - startTime;
 
             // If the signal aborted while the LLM was running, discard the result silently.
@@ -491,16 +539,19 @@ export class ObserverValidator {
             // already fired and the turn has ended — confusing but actionless.
             if (signal?.aborted) {
                 log.info(`[OBSERVER] Result discarded — signal aborted after ${elapsed}ms (post-turn advisory window closed)`);
+                reg.desfecho = 'abortado_pelo_chamador';
                 return { approved: true, reason: 'Validation result discarded after abort', confidence: 0, validationSkipped: true };
             }
 
             if (fallbackResult.status !== 'success') {
                 const lastAttempt = fallbackResult.attempts[fallbackResult.attempts.length - 1];
                 log.warn(`Validation error: ${lastAttempt?.errorMessage ?? fallbackResult.status}, skipping`);
+                reg.desfecho = `llm_${fallbackResult.status}`;
                 return { approved: false, reason: `Observer error: ${lastAttempt?.errorMessage ?? fallbackResult.status}`, confidence: 0, validationSkipped: true, failureType: 'other' };
             }
 
             const content = (fallbackResult.content || '').trim();
+            reg.saidaBruta = content;
 
             // Extrai o primeiro objeto JSON válido que contenha "approved" no conteúdo.
             // O regex simples [^}]* quebrava com objetos aninhados ou reason com aspas.
@@ -508,9 +559,11 @@ export class ObserverValidator {
             const result = extractApprovedJson(content);
             if (!result) {
                 log.warn(`No JSON found in response, skipping validation. Elapsed: ${elapsed}ms`);
+                reg.desfecho = 'saida_sem_json';
                 return { approved: false, reason: 'Observer returned non-JSON', confidence: 0, validationSkipped: true };
             }
             const conf = Number(result['confidence']) || 0.5;
+            reg.desfecho = 'veredito';
             const llmPath = conf >= 0.7 ? 'llm_high_confidence' : 'llm_low_confidence';
             log.info(`${result['approved'] ? '✅' : '❌'} approved=${result['approved']} confidence=${conf} reason="${result['reason']}" elapsed=${elapsed}ms`);
             log.info('GOAL_VALIDATION_PATH',
@@ -527,8 +580,10 @@ export class ObserverValidator {
             };
         } catch (error) {
             if (signal?.aborted) {
+                reg.desfecho = 'abortado_pelo_chamador';
                 return { approved: true, reason: 'Validation aborted', confidence: 0, validationSkipped: true, failureType: 'none' };
             }
+            reg.desfecho = 'erro';
             log.warn(`Validation error: ${errorMessage(error)}, skipping`);
             return { approved: false, reason: `Observer error: ${errorMessage(error)}`, confidence: 0, validationSkipped: true, failureType: 'other' };
         }
@@ -673,7 +728,11 @@ export class ObserverValidator {
         const argsCharsLimit = limits?.argsChars ?? budgetCap;
         const t0 = Date.now();
         const orcamento = this.providerFactory.getBudgetAuxiliar('validacao');
-        const base = { budgetMs: orcamento.timeoutMs, budgetOrigin: orcamento.origem };
+        const avaliacaoId = novaAvaliacaoId();
+        const base = { budgetMs: orcamento.timeoutMs, budgetOrigin: orcamento.origem, avaliacaoId };
+        // Gravador de voo (ADR-013): o que o modelo fez em cada tentativa, e o prompt exato enviado.
+        const telemetria: CallTelemetry = { attempts: [] };
+        let promptEnviado = '';
 
         // Fatos do julgamento para o log. Preenchido à medida que a função avança e emitido em
         // TODOS os caminhos de saída — inclusive os que não chegam a um veredito.
@@ -685,13 +744,30 @@ export class ObserverValidator {
             sentChars: Math.min(e.output.length, evidenceCharsLimit),
             truncated: e.output.length > evidenceCharsLimit,
         }));
-        const emit = (outcome: string, extra: Partial<GroundingTraceRecord> = {}): void =>
+        const emit = (outcome: string, extra: Partial<GroundingTraceRecord> = {}): void => {
             ObserverValidator.traceGrounding({
                 v: 1, phase: traceCtx?.phase ?? 'initial', traceId: traceCtx?.traceId, conversationId: traceCtx?.conversationId,
                 goalId: traceCtx?.goalId, stepId: traceCtx?.stepId, stepDescription: traceCtx?.stepDescription, planGeneration: traceCtx?.planGeneration,
                 outcome, elapsedMs: Date.now() - t0, budgetMs: orcamento.timeoutMs,
                 responseChars: response.length, evidences: evidenceFacts, ...extra,
             }, response, evidences);
+            gravarAvaliacao({
+                id: avaliacaoId, avaliador: 'juiz_grounding',
+                contexto: { traceId: traceCtx?.traceId, conversationId: traceCtx?.conversationId, goalId: traceCtx?.goalId, stepId: traceCtx?.stepId, phase: traceCtx?.phase ?? 'initial' },
+                antes: {
+                    modelo: limits?.model ?? this.effectiveModel, versaoPrompt: versaoDoPrompt(GROUNDING_PROMPT), promptChars: promptEnviado.length,
+                    orcamentoMs: orcamento.timeoutMs,
+                    fatos: { responseChars: response.length, evidencias: evidenceFacts, stepDescription: traceCtx?.stepDescription?.split('\n')[0] },
+                    conteudo: { prompt: promptEnviado, resposta: response, evidencias: evidences },
+                },
+                telemetria,
+                depois: {
+                    desfecho: outcome, estado: extra.state, duracaoMs: Date.now() - t0,
+                    fatos: { claimCounts: extra.claimCounts, judgeStatus: extra.judgeStatus, judgeError: extra.judgeError, judgeOutputChars: extra.judgeOutputChars },
+                    conteudo: { saidaBruta: extra.judgeRaw, afirmacoes: extra.claims },
+                },
+            });
+        };
 
         // Sem evidência não há afirmação derivada de ferramenta a verificar. Não é aprovação:
         // é o domínio de C1 não se aplicar (ADR-010 §10).
@@ -729,6 +805,7 @@ export class ObserverValidator {
         const prompt = GROUNDING_PROMPT
             .replace('{evidences}', () => blocoEvidencias)
             .replace('{response}', () => response);
+        promptEnviado = prompt;
 
         // Não cabe → não foi avaliado → UNVALIDATED. Nunca truncar para caber, nunca deixar o
         // provedor cortar em silêncio e devolver veredito sobre um prefixo.
@@ -762,7 +839,7 @@ export class ObserverValidator {
             // evita que o juiz seja abortado pelo teto de "thinking" pensado para chat curto.
             const fallbackResult = await this.providerFactory.chatWithFallback(
                 [{ role: 'user', content: prompt }], undefined, undefined, orcamento.timeoutMs, signal, limits?.model ?? this.effectiveModel,
-                { reasoningIntensive: true, diag: { component: 'ObserverValidator', role: 'observer', phase: 'grounding' } },
+                { reasoningIntensive: true, diag: { component: 'ObserverValidator', role: 'observer', phase: 'grounding' }, telemetry: telemetria },
             );
 
             if (fallbackResult.status !== 'success') {

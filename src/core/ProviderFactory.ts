@@ -7,7 +7,7 @@ import { createLogger } from '../shared/AppLogger';
 import { errorMessage } from '../shared/errors';
 import { circuitRegistry } from './CircuitBreaker';
 import { getLocalRuntimeLifecycle } from './localRuntimeState';
-import { LLMMessage, LLMResponse, ToolDefinition, LLMResult, AttemptInfo, FallbackReason, ToolCall, ILLMProvider, ChatOptions, CustomProviderConfig, SubstitutionPolicy, DEFAULT_SUBSTITUTION_POLICY, isSubstitutionPolicy, ChatFallbackOptions, LlmCallDiag, REASONING_INTENSIVE_TIMEOUT_FLOOR_MS } from './providerTypes';
+import { LLMMessage, LLMResponse, ToolDefinition, LLMResult, AttemptInfo, FallbackReason, ToolCall, ILLMProvider, ChatOptions, CustomProviderConfig, SubstitutionPolicy, DEFAULT_SUBSTITUTION_POLICY, isSubstitutionPolicy, ChatFallbackOptions, LlmCallDiag, REASONING_INTENSIVE_TIMEOUT_FLOOR_MS, AttemptTelemetry } from './providerTypes';
 import { GeminiProvider } from './GeminiProvider';
 import { DeepSeekProvider } from './DeepSeekProvider';
 import { GroqProvider } from './GroqProvider';
@@ -410,6 +410,7 @@ export class ProviderFactory {
                 // Modelo da instância DESTA requisição, para o registro de tentativas — o `catch` abaixo não
                 // enxerga as constantes do `try`.
                 let attemptModel: string | undefined;
+                let tentativaTele: AttemptTelemetry | undefined;
                 try {
                     const sharedProvider = this.providers.get(providerName);
                     if (!sharedProvider) break;
@@ -449,7 +450,12 @@ export class ProviderFactory {
                         ? this.mensagensComFatoDaSubstituicao(messages, preferredProvider as string, providerName)
                         : messages;
 
-                    const chatOptions: ChatOptions = { signal: currentAbort.signal, timeoutMs, reasoningIntensive: opts?.reasoningIntensive };
+                    // Gravador de voo (ADR-013): uma entrada por tentativa; o provider preenche o que observou no streaming.
+                    if (opts?.telemetry) {
+                        tentativaTele = { provider: providerName, model: modelUsed, startedAt: new Date().toISOString() };
+                        opts.telemetry.attempts.push(tentativaTele);
+                    }
+                    const chatOptions: ChatOptions = { signal: currentAbort.signal, timeoutMs, reasoningIntensive: opts?.reasoningIntensive, telemetry: tentativaTele };
                     const chatPromise = provider.chat(mensagensDoProvider, tools, chatOptions);
                     let result: LLMResponse;
 
@@ -495,6 +501,7 @@ export class ProviderFactory {
                     if (currentAbort.signal.aborted && !hasContent) {
                         log.warn(`[${attemptId}] ABORTED with no content — moving to next attempt`);
                         attemptLog.push({ provider: providerName, model: modelUsed, duration: Date.now() - attemptStart, status: 'error', errorMessage: 'Aborted — no content' });
+                        if (tentativaTele) Object.assign(tentativaTele, { status: 'error', errorMessage: 'Aborted — no content', durationMs: Date.now() - attemptStart });
                         activeAbortController = null;
                         continue;
                     }
@@ -517,6 +524,7 @@ export class ProviderFactory {
 
                     if ((result.content && result.content.trim().length > 0) || (result.toolCalls && result.toolCalls.length > 0)) {
                         attemptLog.push({ provider: providerName, model: modelUsed, duration, status: 'success' });
+                        if (tentativaTele) Object.assign(tentativaTele, { status: 'success', durationMs: duration });
                         // `duration` já era calculado aqui e só ia para o log. Passá-lo adiante
                         // alimenta a latência típica do provedor, de onde saem os orçamentos das
                         // chamadas auxiliares (ver getBudgetAuxiliar em shared/auxTimeout.ts).
@@ -536,6 +544,7 @@ export class ProviderFactory {
                     }
 
                     attemptLog.push({ provider: providerName, model: modelUsed, duration, status: 'empty' });
+                    if (tentativaTele) Object.assign(tentativaTele, { status: 'empty', durationMs: duration });
                     log.warn(`[${attemptId}] Empty response, moving to next`);
                     break;
                 } catch (error) {
@@ -547,6 +556,7 @@ export class ProviderFactory {
                     if (externalSignal?.aborted) {
                         log.info(`[${attemptId}] Cancelled by external signal`);
                         attemptLog.push({ provider: providerName, model: providerName, duration, status: 'cancelled', errorMessage: 'Cancelled' });
+                        if (tentativaTele) Object.assign(tentativaTele, { status: 'cancelled', durationMs: duration });
                         return { status: 'cancelled', content: '', fallbackReason: 'cancelled', fallbackMessage: 'Operação cancelada.', attempts: attemptLog };
                     }
 
@@ -586,6 +596,7 @@ export class ProviderFactory {
                         errorMessage: errorMessage(error)
                     });
 
+                    if (tentativaTele) Object.assign(tentativaTele, { status: (isTimeout || prazoDestaTentativa) ? 'timeout' : 'error', errorMessage: errorMessage(error), durationMs: duration });
                     this.registrarFalhaSeForAvaria(providerName, errorMessage(error));
 
                     if (isRetryable && attempt < MAX_RETRIES) continue;
@@ -645,7 +656,13 @@ export class ProviderFactory {
                     const effectiveNonStreamingTimeoutMs = (opts?.reasoningIntensive && timeoutMs)
                         ? Math.max(timeoutMs, REASONING_INTENSIVE_TIMEOUT_FLOOR_MS)
                         : timeoutMs;
-                    const result = await ollamaProvider.fallbackNonStreaming(mensagensNaoStreaming, tools, effectiveNonStreamingTimeoutMs);
+                    const teleNaoStreaming: AttemptTelemetry | undefined = opts?.telemetry
+                        ? { provider: 'ollama', model: `${ollamaProvider.getModel()} (sem streaming)`, startedAt: new Date().toISOString() } : undefined;
+                    if (teleNaoStreaming) opts!.telemetry!.attempts.push(teleNaoStreaming);
+                    const t0NaoStreaming = Date.now();
+                    const result = await ollamaProvider.fallbackNonStreaming(mensagensNaoStreaming, tools, effectiveNonStreamingTimeoutMs)
+                        .catch((e) => { if (teleNaoStreaming) Object.assign(teleNaoStreaming, { status: 'error', errorMessage: errorMessage(e), durationMs: Date.now() - t0NaoStreaming }); throw e; });
+                    if (teleNaoStreaming) Object.assign(teleNaoStreaming, { status: result.content?.trim() ? 'success' : 'empty', durationMs: Date.now() - t0NaoStreaming, contentChars: (result.content || '').length, contentText: result.content || '' });
                     if (result.content && result.content.trim()) {
                         attemptLog.push({ provider: 'ollama', model: 'non-streaming-fallback', duration: Date.now() - startTime, status: 'success' });
                         return {

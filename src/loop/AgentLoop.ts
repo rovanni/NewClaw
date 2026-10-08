@@ -26,6 +26,7 @@ import { extractText } from './ResponseAdapter';
 import { AuthorizationManager } from './AuthorizationManager';
 import { ProtocolParser } from './ProtocolParser';
 import { createLogger } from '../shared/AppLogger';
+import { gravarEfeito } from '../shared/evaluatorFlightRecorder';
 import { ANALYSIS_INTENT_PATTERN } from '../shared/analysisIntentPattern';
 import { ClassificationMemory } from '../memory/ClassificationMemory';
 import { DecisionMemory } from '../memory/DecisionMemory';
@@ -1103,6 +1104,12 @@ export class AgentLoop {
                 .map((e, i) => ({ ...e, id: `E${i + 1}` }));
             try {
                 const g = await this.observer.validateGrounding(response, evidences, signal, { traceId: trace.id, conversationId, phase: 'initial', userRequest: userText, ...channelContext?.goalTrace });
+                // Gravador de voo (ADR-013): o que o turno fez com o veredito.
+                const efeitoDoJuiz = (efeito: string, detalhe?: Record<string, unknown>): void => gravarEfeito({
+                    avaliacaoId: g.avaliacaoId, avaliador: 'juiz_grounding', efeito, detalhe,
+                    contexto: { traceId: trace.id, conversationId, goalId: channelContext?.goalTrace?.goalId, stepId: channelContext?.goalTrace?.stepId },
+                });
+                if (g.state === 'VALIDATED' || g.state === 'NOT_APPLICABLE') efeitoDoJuiz('resposta_liberada', { estado: g.state });
                 if (g.state !== 'VALIDATED' && g.state !== 'NOT_APPLICABLE') {
                     log.warn(`[${this.ts()}] [GROUNDING] estado=${g.state} — bloqueando entrega (${g.reason})`);
                     this.reflectionMemory.record({
@@ -1137,6 +1144,7 @@ export class AgentLoop {
                         const partial = await this.trySynthesizePartialResponse(userText, supportedClaims, evidences, signal);
                         if (partial) {
                             log.info(`[${this.ts()}] [GROUNDING] resposta parcial (${supportedClaims.length}/${g.claims.length} afirmações sustentadas) revalidada e entregue`);
+                            efeitoDoJuiz('resposta_parcial_entregue', { estado: g.state, sustentadas: supportedClaims.length, total: g.claims.length, parcialChars: partial.length });
                             log.info(`[GROUNDING-TRACE] ${JSON.stringify({ v: 1, phase: 'decision', traceId: trace.id, conversationId, ...channelContext?.goalTrace, state: g.state, claimsTotal: g.claims.length, supported: supportedClaims.length, path: 'partial_delivered', partialChars: partial.length, evidenceSources: { turn: evidences.length - (channelContext?.priorStepEvidence?.length ?? 0), priorSteps: channelContext?.priorStepEvidence?.length ?? 0 }, ...(process.env.TRACE_CONTENT === 'true' ? { deliveredText: partial.slice(0, 3000) } : {}) })}`);
                             this.reflectionMemory.record({
                                 traceId: trace.id,
@@ -1158,6 +1166,7 @@ export class AgentLoop {
                     }
 
                     log.info(`[GROUNDING-TRACE] ${JSON.stringify({ v: 1, phase: 'decision', traceId: trace.id, conversationId, ...channelContext?.goalTrace, state: g.state, claimsTotal: g.claims.length, supported: supportedClaims.length, path: supportedClaims.length > 0 ? 'blocked_partial_rejected' : 'blocked_no_supported_claims', evidenceSources: { turn: evidences.length - (channelContext?.priorStepEvidence?.length ?? 0), priorSteps: channelContext?.priorStepEvidence?.length ?? 0 } })}`);
+                    efeitoDoJuiz('resposta_bloqueada', { estado: g.state, sustentadas: supportedClaims.length, total: g.claims.length, tentouParcial: supportedClaims.length > 0 });
                     turnState.groundingBlock = {
                         state: g.state,
                         unconfirmedClaims: g.claims

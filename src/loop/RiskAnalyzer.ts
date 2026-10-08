@@ -28,6 +28,8 @@ import { resolveArtifactPathFromEvidence } from './planning/artifactContract';
 import { KNOWN_DEPS } from './GoalEvaluator';
 import { resolvePath } from '../utils/crossPlatform';
 import { createHash } from 'crypto';
+import { gravarAvaliacao, novaAvaliacaoId, versaoDoPrompt } from '../shared/evaluatorFlightRecorder';
+import type { CallTelemetry } from '../core/providerTypes';
 
 const log = createLogger('RiskAnalyzer');
 
@@ -135,8 +137,12 @@ export interface ShadowStepSummary {
     argsHash: string;
 }
 
-/** Fatos que `reviewPlanWithLLM` preenche quando recebe um `sink` (modo sombra); ignorado no modo real. */
+/** Fatos que `reviewPlanWithLLM` preenche durante a revisão (modo sombra e gravador de voo — ADR-013). Só observabilidade. */
 export interface ReviewTrace {
+    /** Gravador de voo: prompt enviado, saída bruta e o que o modelo fez em cada tentativa. */
+    prompt?: string;
+    saidaBruta?: string;
+    telemetria?: CallTelemetry;
     /** llm_failed | no_json | confirmed (plan:null) | rejected | proposed | error */
     outcome?: string;
     llmStatus?: string;
@@ -636,14 +642,53 @@ export class RiskAnalyzer {
      * mesmo timeoutMs de hoje delimitando cada tentativa. A política de erro continua sendo
      * decidida aqui (timeout vs. error), não dentro do ProviderFactory.
      */
-    private async callRiskLLM(messages: LLMMessage[], timeoutMs: number, goalId?: string, phase?: string): Promise<{ status: string; content: string }> {
-        const result = await this.providerFactory.chatWithFallback(messages, undefined, undefined, timeoutMs, undefined, this.model, { diag: { component: 'RiskAnalyzer', role: 'risk', goalId, phase } });
+    private async callRiskLLM(messages: LLMMessage[], timeoutMs: number, goalId?: string, phase?: string, telemetry?: CallTelemetry): Promise<{ status: string; content: string }> {
+        const result = await this.providerFactory.chatWithFallback(messages, undefined, undefined, timeoutMs, undefined, this.model, { diag: { component: 'RiskAnalyzer', role: 'risk', goalId, phase }, telemetry });
         if (result.status === 'success') return { status: 'success', content: result.content };
         if (result.status === 'timeout') return { status: 'timeout', content: '' };
         return { status: 'error', content: '' };
     }
 
+    /**
+     * Gravador de voo (ADR-013): toda revisão — real ou sombra — vira um registro com o plano recebido, o prompt, o que o
+     * modelo fez em cada tentativa e o desfecho (plano mantido, ajustado ou rejeitado). Só observabilidade.
+     */
     private async reviewPlanWithLLM(goal: Goal, plan: PlanStep[], mode: 'real' | 'shadow' = 'real', sink?: ReviewTrace): Promise<{
+        risks: string[];
+        adjustedPlan: PlanStep[];
+        planAdjusted: boolean;
+        planRejected?: boolean;
+        rejectionReason?: string;
+    }> {
+        const t0 = Date.now();
+        const reg: ReviewTrace = sink ?? {};
+        reg.telemetria = { attempts: [] };
+        const r = await this.revisarPlanoComLLM(goal, plan, mode, reg);
+        const prompt = reg.prompt ?? '';
+        gravarAvaliacao({
+            id: novaAvaliacaoId(), avaliador: 'analise_risco',
+            contexto: { goalId: goal.id, phase: mode === 'shadow' ? 'sombra' : 'real' },
+            antes: {
+                modelo: this.model || '(padrão do provedor)',
+                // O prompt é montado inline: a versão é o hash da parte fixa (instruções e schemas), a partir de "Verifique:".
+                versaoPrompt: versaoDoPrompt(prompt.slice(Math.max(0, prompt.indexOf('Verifique:')))),
+                promptChars: prompt.length, orcamentoMs: 60_000,
+                fatos: { passosRecebidos: plan.length, ferramentas: plan.map(p => p.toolName ?? 'agentloop') },
+                conteudo: { prompt, objetivo: goal.objective, plano: summarizeSteps(plan) },
+            },
+            telemetria: reg.telemetria,
+            depois: {
+                desfecho: reg.outcome ?? 'desconhecido',
+                estado: r.planRejected ? 'plano_rejeitado' : r.planAdjusted ? 'plano_ajustado' : 'plano_mantido',
+                duracaoMs: Date.now() - t0,
+                fatos: { llmStatus: reg.llmStatus, riscos: r.risks.length, passosPropostos: reg.proposed?.length, mutacoesDoSanitizer: reg.sanitizerMutations?.length },
+                conteudo: { riscos: r.risks, motivoRejeicao: r.rejectionReason, saidaBruta: reg.saidaBruta, propostaCrua: reg.rawProposal, proposta: reg.proposed },
+            },
+        });
+        return r;
+    }
+
+    private async revisarPlanoComLLM(goal: Goal, plan: PlanStep[], mode: 'real' | 'shadow', sink: ReviewTrace): Promise<{
         risks: string[];
         adjustedPlan: PlanStep[];
         planAdjusted: boolean;
@@ -697,12 +742,15 @@ OU
         try {
             // gemma4:31b-cloud: gera JSON rápido sem extended thinking (60s é sobra).
             // chatWithFallback usava kimi-k2.6 que travava em 150s de thinking sem output.
+            sink.prompt = prompt;
             const result = await this.callRiskLLM(
                 [{ role: 'user', content: prompt }] as LLMMessage[],
                 60_000,
                 goal.id,
                 shadow ? 'shadow-review' : undefined,
+                sink.telemetria,
             );
+            sink.saidaBruta = result.content;
             if (sink) sink.llmStatus = result.status;
 
             if (result.status !== 'success') {
