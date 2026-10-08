@@ -77,6 +77,17 @@ function hasDefaultModel(providerId) {
 /** Ordem oficial da Tela 1 — decidida explicitamente, não alterar sem justificar tecnicamente. */
 const PROVIDER_ORDER = ['local', 'ollama', 'gemini', 'deepseek', 'groq', 'openrouter', 'anthropic', 'custom'];
 
+/**
+ * Sprint D (08/10/2026, pedido do operador): a primeira pergunta é ONDE os modelos rodam — no computador (offline) ou na
+ * internet (online) — e a lista de provedores mostra só os daquele tipo. Ollama aparece nos dois (roda local e na nuvem):
+ * a resposta desta etapa já decide o modo dele, e a etapa `ollamaMode` sai do caminho. "Outro / OpenAI-compatible"
+ * também nos dois: tanto um servidor local (llama-server, LM Studio) quanto um endpoint na internet.
+ */
+const PROVIDERS_BY_WHERE = {
+  offline: ['local', 'ollama', 'custom'],
+  online:  ['ollama', 'gemini', 'deepseek', 'groq', 'openrouter', 'anthropic', 'custom'],
+};
+
 /** Resolve ícone+label de exibição sem duplicar as constantes já existentes em ModelosView.js. */
 function getProviderDisplay(providerId, { cloudProviders, provLabels, localProviderLabel }) {
   if (providerId === 'local') return { icon: LOCAL_ICON, label: localProviderLabel };
@@ -128,7 +139,8 @@ function createWizardSession() {
     customLabel: undefined,
     evidence: {},
     selectedModel: undefined,
-    currentStep: 'choose',
+    where: undefined,          // 'offline' | 'online' — Sprint D
+    currentStep: 'where',
     // Achado ao vivo (QA final, 2026-08-23): entrada transitória do usuário — o que está
     // ATUALMENTE digitado num campo, ainda não testado nem salvo — nunca tinha um lugar próprio
     // pra viver. `evidence` guarda o que já foi CONFIRMADO por um teste bem-sucedido; `configStore`
@@ -144,12 +156,17 @@ function createWizardSession() {
 }
 
 function stepsFor(session) {
-  return session.family ? FAMILY_STEPS[session.family] : ['choose'];
+  // Sprint D: 'where' (offline/online) antes de tudo. FAMILY_STEPS continua descrevendo só as etapas da família.
+  if (!session.family) return ['where', 'choose'];
+  const familia = FAMILY_STEPS[session.family];
+  // Ollama: a pergunta local/nuvem já foi respondida em 'where' — a etapa ollamaMode sai do caminho.
+  return ['where', ...(session.family === 'ollama' && session.where ? familia.filter(s => s !== 'ollamaMode') : familia)];
 }
 
 /** Condição objetiva por etapa — nunca "campo não vazio", sempre um fato já verificado. */
 function canAdvance(session) {
   switch (session.currentStep) {
+    case 'where':             return !!session.where;
     case 'choose':            return !!session.provider;
     case 'ollamaMode':        return !!session.ollamaMode;
     case 'ollamaConfig':      return session.evidence.configOk === true;
@@ -179,8 +196,11 @@ function back(session) {
   if (idx <= 0) return session;
   // Voltar pra "choose" precisa zerar o que foi acumulado — trocar de provider não pode deixar
   // evidence/selectedModel de um provider antigo vazando pro próximo (risco mapeado na Fase A).
+  if (steps[idx - 1] === 'where') {
+    return { ...createWizardSession(), where: session.where };
+  }
   if (steps[idx - 1] === 'choose') {
-    return { provider: null, family: null, ollamaMode: undefined, evidence: {}, selectedModel: undefined, currentStep: 'choose', draft: {} };
+    return { provider: null, family: null, ollamaMode: undefined, where: session.where, evidence: {}, selectedModel: undefined, currentStep: 'choose', draft: {} };
   }
   // Sair de ollamaConfig pra ollamaMode invalida a config testada — trocar Local↔Cloud exige
   // testar de novo (a URL pode continuar valendo, mas a key só faz sentido em Cloud).
@@ -225,7 +245,7 @@ export function mountConfigWizard(container, { cloudProviders, provLabels, local
         <div style="display:flex;justify-content:space-between;margin-top:14px;">
           <button type="button" class="btn btn-ghost btn-sm" id="ml-cw-cancel" ${busy ? 'disabled' : ''}>${t('ml_cw_btn_cancel')}</button>
           <div style="display:flex;gap:8px;">
-            <button type="button" class="btn btn-ghost btn-sm" id="ml-cw-back" ${session.currentStep === 'choose' || busy ? 'disabled' : ''}>${t('ml_cw_btn_back')}</button>
+            <button type="button" class="btn btn-ghost btn-sm" id="ml-cw-back" ${session.currentStep === 'where' || busy ? 'disabled' : ''}>${t('ml_cw_btn_back')}</button>
             ${session.currentStep === 'conclusion' ? '' : `<button type="button" class="btn btn-primary btn-sm" id="ml-cw-next" ${canAdvance(session) && !busy ? '' : 'disabled'}>${t('ml_cw_btn_next')}</button>`}
           </div>
         </div>`}
@@ -233,7 +253,8 @@ export function mountConfigWizard(container, { cloudProviders, provLabels, local
 
     renderProgress(steps);
     const stepEl = document.getElementById('ml-cw-step');
-    if (session.currentStep === 'choose') renderChooseProvider(stepEl);
+    if (session.currentStep === 'where') renderWhere(stepEl);
+    else if (session.currentStep === 'choose') renderChooseProvider(stepEl);
     else if (session.family === 'ollama' && session.currentStep === 'ollamaMode') renderOllamaMode(stepEl);
     else if (session.family === 'ollama' && session.currentStep === 'ollamaConfig') renderOllamaConfig(stepEl);
     else if (session.family === 'ollama' && session.currentStep === 'ollamaModelSelect') renderOllamaModelSelect(stepEl);
@@ -279,13 +300,25 @@ export function mountConfigWizard(container, { cloudProviders, provLabels, local
     el.textContent = steps.map((s, i) => (i < idx ? '✓' : i === idx ? '●' : '○')).join('  ━━━  ');
   }
 
+  function renderWhere(el) {
+    el.innerHTML = `
+      <div class="ml-test-title">${t('ml_cw_where_title')}</div>
+      <div class="form-hint" style="margin:6px 0 12px;">${t('ml_cw_where_hint')}</div>
+      <div style="display:flex;flex-direction:column;gap:6px;">
+        <button type="button" class="btn btn-sm ${session.where === 'offline' ? 'btn-primary' : 'btn-ghost'}" id="ml-cw-whereOffline" style="justify-content:flex-start;text-align:left;">💻 ${t('ml_cw_where_offline')}</button>
+        <button type="button" class="btn btn-sm ${session.where === 'online' ? 'btn-primary' : 'btn-ghost'}" id="ml-cw-whereOnline" style="justify-content:flex-start;text-align:left;">☁️ ${t('ml_cw_where_online')}</button>
+      </div>`;
+    document.getElementById('ml-cw-whereOffline')?.addEventListener('click', () => { session = { ...session, where: 'offline' }; render(); });
+    document.getElementById('ml-cw-whereOnline')?.addEventListener('click', () => { session = { ...session, where: 'online' }; render(); });
+  }
+
   function renderChooseProvider(el) {
     el.innerHTML = `
       <div class="ml-test-title">${t('ml_cw_choose_title')}</div>
       <div class="form-hint" style="margin:6px 0 12px;">${t('ml_cw_choose_hint')}</div>
       <div id="ml-cw-providerGrid" style="display:flex;flex-direction:column;gap:6px;"></div>`;
     const grid = document.getElementById('ml-cw-providerGrid');
-    PROVIDER_ORDER.forEach(id => {
+    PROVIDER_ORDER.filter(id => !session.where || PROVIDERS_BY_WHERE[session.where].includes(id)).forEach(id => {
       const display = getProviderDisplay(id, { cloudProviders, provLabels, localProviderLabel });
       const btn = document.createElement('button');
       btn.type = 'button';
@@ -293,7 +326,9 @@ export function mountConfigWizard(container, { cloudProviders, provLabels, local
       btn.style.cssText = 'justify-content:flex-start;text-align:left;';
       btn.textContent = `${display.icon} ${display.label}`;
       btn.addEventListener('click', () => {
-        session = { ...session, provider: id, family: PROVIDER_CAPABILITIES[id].family };
+        // Ollama: o modo (local/nuvem) vem da etapa 'where' — sem repetir a pergunta.
+        const ollamaMode = id === 'ollama' && session.where ? (session.where === 'offline' ? 'local' : 'cloud') : session.ollamaMode;
+        session = { ...session, provider: id, family: PROVIDER_CAPABILITIES[id].family, ollamaMode };
         render();
       });
       grid.appendChild(btn);
