@@ -23,12 +23,12 @@
 | # | Componente | Pergunta que decide | O que recebe (código) | Falta para decidir como um humano | Situação |
 |---|---|---|---|---|---|
 | 1 | `UnifiedIntentRouter` | conversa, tarefa ou ferramenta direta? | mensagem inteira + conversa recente + última resposta do assistente (500 chars) | — | ✅ |
-| 2 | `GoalExtractor` | vira goal? é ambíguo? é refinamento? qual o objetivo? | **mensagem cortada em 300 chars** (`GoalExtractor.ts:212`); contexto 300 chars por mensagem | o pedido inteiro | 🔴 |
+| 2 | `GoalExtractor` | vira goal? é ambíguo? é refinamento? qual o objetivo? | **mensagem inteira**; contexto recente em trechos de 300 chars, **corte declarado** | — (Sprint V2, `S358`) | ✅ |
 | 3 | `DomainRegistry` | de que assunto é? | texto 400 chars | — (assunto cabe em 400) | ✅ |
 | 4 | `ModelProfileRegistry.llmClassify` | que perfil de modelo usar? | mensagem 200 chars | — (categoria cabe em 200) | ✅ |
 | 5 | `GoalPlanner` (plano inicial) | qual o plano? | objetivo + **pedido íntegro** (`INTENÇÃO ORIGINAL`) + ferramentas, skills, casos | — | ✅ |
-| 6 | `GoalPlanner` (replanejamento) | qual a nova estratégia depois do bloqueio? | **só o objetivo resumido** (`GoalPlanner.ts:603`) + bloqueio + estratégias tentadas | o pedido íntegro | 🔴 |
-| 7 | `RiskAnalyzer` | o plano tem passo faltando, ordem errada, dependência solta? | **só o objetivo resumido** (`goal.objective`) + passos (descrição) + nomes de ferramentas | o pedido íntegro | 🔴 |
+| 6 | `GoalPlanner` (replanejamento e retry minimal) | qual a nova estratégia depois do bloqueio? | objetivo + **pedido íntegro** (`INTENÇÃO ORIGINAL`) + bloqueio + estratégias tentadas | — (Sprint V1, `S357`) | ✅ |
+| 7 | `RiskAnalyzer` | o plano tem passo faltando, ordem errada, dependência solta? | objetivo + **pedido íntegro** + passos (descrição) + nomes de ferramentas | — (Sprint V1, `S357`) | ✅ |
 | 8 | `contentStubClassifier` | o texto é conteúdo real ou molde que "descreve o processo em vez de responder ao pedido real"? | 800 chars do texto + nome da ferramenta — **sem o pedido** | o pedido | 🟡 |
 | 9 | `StepSemanticValidator` | o resultado do passo serve ao passo? | descrição do passo + objetivo 200 chars + **600 chars do resultado escolhidos por palavras-chave** + fatos da execução | o resultado sem seleção por palavra-chave; o pedido inteiro | 🟡 |
 | 10 | `ObserverValidator.validate` (qualidade) | a resposta atende o pedido? | pedido 500 chars (corte declarado) + **só a última ferramenta** 1000 chars (corte declarado) + resposta inteira (issue 067) | os resultados das outras ferramentas do turno | 🟡 |

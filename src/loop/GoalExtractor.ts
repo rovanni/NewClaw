@@ -195,8 +195,11 @@ export class GoalExtractor {
         _context: ChannelContext,
         recentMessages?: Array<{ role: string; content: string }>
     ): Promise<GoalClassification> {
+        // Informação Completa para Decidir (Sprint V2): a mensagem atual é o OBJETO da classificação — vai inteira
+        // (antes: 300 caracteres; o `objective` escrito daqui alimentava replanejamento e revisão de risco). O contexto
+        // recente pode ser trecho, mas o corte é declarado ao modelo.
         const conversationSnippet = recentMessages && recentMessages.length > 0
-            ? '\n\nContexto recente da conversa (últimas mensagens antes desta):\n' +
+            ? '\n\nContexto recente da conversa (últimas mensagens antes desta; cada uma em trecho de até 300 caracteres — o corte é do sistema):\n' +
               recentMessages
                   .map(m => `${m.role === 'assistant' ? 'Assistente' : 'Usuário'}: ${m.content.slice(0, 300)}`)
                   .join('\n') +
@@ -209,7 +212,7 @@ export class GoalExtractor {
 3. É um projeto de construção de software ou desenvolvimento de funcionalidade complexa (ex: criar um jogo, desenvolver um site, implementar um sistema, criar um módulo ou script complexo)?
 4. Existe evidência textual EXPLÍCITA do objetivo no texto do usuário, ou o objetivo foi inferido a partir dos dados fornecidos?
 5. É uma REFINAMENTO/CLARIFICAÇÃO de um goal recente do contexto (o usuário está complementando ou corrigindo o pedido anterior, sem criar um objetivo completamente novo)?
-${conversationSnippet}Mensagem atual do usuário: "${message.slice(0, 300)}"
+${conversationSnippet}Mensagem atual do usuário (íntegra): "${message}"
 
 Responda APENAS com JSON válido, sem markdown:
 {"is_goal": boolean, "confidence": 0.0-1.0, "objective": "descrição se for goal", "required_tools": ["tool1"], "reason": "motivo", "is_ambiguous": boolean, "clarification_question": "pergunta ao usuário se is_ambiguous=true", "is_construction": boolean, "has_explicit_evidence": boolean, "is_refinement": boolean}
@@ -327,7 +330,7 @@ Regras:
             result = {
                 isGoal: true,
                 confidence: GOAL_LIMITS.QUICK_CLASSIFY_THRESHOLD,
-                objective: message.slice(0, 300),
+                objective: message,   // Sprint V2: o pedido inteiro, não um corte de 300 caracteres
                 requiredTools: [],
                 reason: 'heuristic_positive',
                 isConstruction: this.isConstructionHeuristic(message),
@@ -343,7 +346,7 @@ Regras:
                 result = {
                     isGoal: true,
                     confidence: 0.90,
-                    objective: message.slice(0, 300),
+                    objective: message,   // Sprint V2: o pedido inteiro, não um corte de 300 caracteres
                     requiredTools: [],
                     reason: 'unambiguous_tool_available',
                     isAmbiguous: false,
