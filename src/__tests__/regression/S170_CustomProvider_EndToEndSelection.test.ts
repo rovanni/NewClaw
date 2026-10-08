@@ -143,7 +143,7 @@ console.log('\n=== S170 — defeito 2: retrocompatibilidade com DEFAULT_PROVIDER
 
 console.log('\n=== S170 — defeito 3: perfis default não fixam provider (herdam o padrão) ===');
 {
-    const registry = new ModelProfileRegistry();
+    const registry = new ModelProfileRegistry({ vision: 'modelo-visao-teste' } as never); // issue 068: visão só existe quando escolhida
     const categorias = ['chat', 'code', 'vision', 'light', 'analysis', 'execution'] as const;
     for (const cat of categorias) {
         const profile = registry.getProfileByCategory(cat);

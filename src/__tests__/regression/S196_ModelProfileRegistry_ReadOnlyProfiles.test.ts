@@ -49,7 +49,7 @@ console.log('S196 — Perfis do registry são imutáveis para quem lê\n');
 
 // ── 1. Reprodução literal do incidente ───────────────────────────────────────
 {
-    const registry = new ModelProfileRegistry();
+    const registry = new ModelProfileRegistry({ chat: 'modelo-chat-teste', vision: 'modelo-visao-teste', execution: 'modelo-exec-teste' } as never); // issue 068: sem modelo embutido, o teste declara os modelos como o painel faria
 
     const visionBefore = registry.getProfileByCategory('vision');
     check(visionBefore !== undefined, 'perfil de visão existe antes do override');
@@ -75,7 +75,7 @@ console.log('S196 — Perfis do registry são imutáveis para quem lê\n');
 
 // ── 2. getProfiles() e getProfile() também entregam cópia ────────────────────
 {
-    const registry = new ModelProfileRegistry();
+    const registry = new ModelProfileRegistry({ chat: 'modelo-chat-teste', vision: 'modelo-visao-teste', execution: 'modelo-exec-teste' } as never); // issue 068: sem modelo embutido, o teste declara os modelos como o painel faria
 
     const all = registry.getProfiles() as ModelProfile[];
     const firstId = all[0].id;
@@ -103,7 +103,7 @@ console.log('S196 — Perfis do registry são imutáveis para quem lê\n');
 
 // ── 3. setProfile() guarda cópia, não alça para o objeto do chamador ─────────
 {
-    const registry = new ModelProfileRegistry();
+    const registry = new ModelProfileRegistry({ chat: 'modelo-chat-teste', vision: 'modelo-visao-teste', execution: 'modelo-exec-teste' } as never); // issue 068: sem modelo embutido, o teste declara os modelos como o painel faria
     const novo: ModelProfile = {
         id: 'perfil-teste', model: 'modelo-a', server: 'http://localhost:11434',
         category: 'analysis', description: 'perfil de teste',

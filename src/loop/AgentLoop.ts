@@ -2221,8 +2221,9 @@ export class AgentLoop {
 
             move('LLM_REQUEST', { step: stepCount, phase: 'synthesis' });
             log.info(`[${this.ts()}] [SYNTHESIS] Trimmed context: ${loopMessages.length} → ${synthMessages.length} messages`);
-            // Usa 'execution' profile (kimi-k2.6) em vez de chatProfile (glm-5.1) para síntese:
-            // glm-5.1 com contexto grande produz apenas thinking sem content → chain-of-thought vaza para o usuário.
+            // Usa o perfil 'execution' (MODEL_EXECUTION; sem configuração, herda o modelo do chat — issue 068) em vez
+            // de chatProfile para síntese: permite um modelo próprio para contexto grande, onde um modelo de chat pode
+            // produzir só thinking sem content (chain-of-thought vazando para o usuário).
             const synthesisProfile = this.profileRegistry.getProfileByCategory('execution') ?? chatProfile;
             // Campanha "Ollama API error: 404" (Fase 3, S264): esta chamada não logava qual perfil
             // usava antes de tentar — a causa raiz real (par model/provider inconsistente vindo de

@@ -69,13 +69,21 @@ const DEFAULT_CONFIG: ProfileRegistryConfig = {
     // escolhido pelo usuário. Só um PROVIDER_<CATEGORIA> explícito (Provider por perfil, na UI)
     // preenche este campo agora — que é exatamente o que a opção "— herdar padrão —" promete.
     // Para quem usa DEFAULT_PROVIDER=ollama (o caso comum) a ordem final é idêntica à anterior.
+    // Issue 068: NENHUM modelo embutido. A escolha do modelo é do operador, no painel (Config → Modelos) ou no .env
+    // (MODEL_<CATEGORIA>); o que o código escolhia por conta própria não aparecia no painel — o operador conferia a
+    // configuração e não via que um perfil usava `kimi-k2.6:cloud` (um dos modelos mais caros da nuvem do Ollama; 209
+    // chamadas em silêncio numa instância de teste, 04–06/10/2026). Sem configuração (ver `sanitizeProfile`):
+    //   - `chat` usa o modelo padrão do provedor (o "Modelo padrão" do painel / OLLAMA_MODEL);
+    //   - os demais perfis de TEXTO herdam o modelo do `chat`;
+    //   - `vision` fica não configurado: herdar um modelo que talvez não leia imagem produziria uma descrição
+    //     inventada (Nunca Adivinhar). A ingestão já trata "visão não configurada" como fato.
     profiles: [
-        { id: 'chat-primary',      model: 'glm-5.2:cloud',   server: 'http://localhost:11434', category: 'chat',      description: 'Conversa geral e raciocínio' },
-        { id: 'code-primary',      model: 'gemma4:31b-cloud', server: 'http://localhost:11434', category: 'code',      description: 'Programação e criação de conteúdo' },
-        { id: 'light-chat',        model: 'glm-5.2:cloud',   server: 'http://localhost:11434', category: 'light',     description: 'Conversa leve e rápida' },
-        { id: 'vision-primary',    model: 'gemma4:31b-cloud', server: 'http://localhost:11434', category: 'vision',    description: 'Análise de imagens e OCR' },
-        { id: 'analysis-primary',  model: 'kimi-k2.6:cloud', server: 'http://localhost:11434', category: 'analysis',  description: 'Análise profunda e cripto' },
-        { id: 'execution-primary', model: 'kimi-k2.6:cloud', server: 'http://localhost:11434', category: 'execution', description: 'Execução de ferramentas e tarefas complexas' },
+        { id: 'chat-primary',      model: '', server: 'http://localhost:11434', category: 'chat',      description: 'Conversa geral e raciocínio' },
+        { id: 'code-primary',      model: '', server: 'http://localhost:11434', category: 'code',      description: 'Programação e criação de conteúdo' },
+        { id: 'light-chat',        model: '', server: 'http://localhost:11434', category: 'light',     description: 'Conversa leve e rápida' },
+        { id: 'vision-primary',    model: '', server: 'http://localhost:11434', category: 'vision',    description: 'Análise de imagens e OCR' },
+        { id: 'analysis-primary',  model: '', server: 'http://localhost:11434', category: 'analysis',  description: 'Análise profunda e cripto' },
+        { id: 'execution-primary', model: '', server: 'http://localhost:11434', category: 'execution', description: 'Execução de ferramentas e tarefas complexas' },
     ],
     fallbackRules: [
         {
@@ -423,7 +431,20 @@ Category:`;
      * NUNCA infere o provider correto (ex.: "termina em .gguf, então é 'llamafile'") — isso seria
      * a mesma adivinhação que este método existe para evitar, só que na direção oposta.
      */
-    private sanitizeProfile(profile: ModelProfile): Readonly<ModelProfile> | undefined {
+    private sanitizeProfile(declared: ModelProfile): Readonly<ModelProfile> | undefined {
+        // Issue 068: visão sem modelo escolhido = não configurada (ver DEFAULT_CONFIG). Perfil de texto sem modelo
+        // herda o do `chat` — o que o operador escolheu; se nem o `chat` tiver, fica vazio = modelo padrão do provedor.
+        // O provider explícito do próprio perfil vence; senão herda também o do `chat`.
+        if (!declared.model && declared.category === 'vision') return undefined;
+        let profile = declared;
+        let builtinId = declared.id;
+        if (!declared.model && declared.category !== 'chat') {
+            const chat = this.config.profiles.find(p => p.category === 'chat');
+            if (chat?.model) {
+                profile = { ...declared, model: chat.model, provider: declared.provider || chat.provider };
+                builtinId = chat.id;
+            }
+        }
         // Issue 054 (D2): o padrão embutido é um nome da nuvem do OLLAMA (glm-5.2:cloud, kimi-k2.6:cloud…).
         // Ele só vale quando o provedor efetivo do perfil é o Ollama. Para qualquer outro (endpoint
         // OpenAI-compatível local, Gemini, OpenRouter…), o perfil sai SEM modelo — "use o que este
@@ -431,7 +452,7 @@ Category:`;
         // tocado. Visto em 05/10/2026: com o Bonsai local como provedor, o perfil `execution` pedia
         // `kimi-k2.6:cloud` ao llama-server (que ignora o nome; num servidor de vários modelos, 404).
         const effectiveProvider = profile.provider || this.providerFactory?.getDefaultProvider();
-        if (this.builtinModelProfileIds.has(profile.id) && effectiveProvider && effectiveProvider !== 'ollama') {
+        if (this.builtinModelProfileIds.has(builtinId) && effectiveProvider && effectiveProvider !== 'ollama') {
             return { ...profile, model: '' };
         }
         if (profile.provider) return { ...profile };

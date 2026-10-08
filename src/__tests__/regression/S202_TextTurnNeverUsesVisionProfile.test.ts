@@ -59,7 +59,7 @@ const TEXTO_POS_INGESTAO = [
 async function main() {
     console.log('S202 — Turno de texto nunca usa o perfil de visão\n');
 
-    const registry = new ModelProfileRegistry();
+    const registry = new ModelProfileRegistry({ chat: 'modelo-chat-teste', vision: 'modelo-visao-teste', execution: 'modelo-exec-teste' } as never); // issue 068: modelos declarados como o painel faria
     const visionModel = registry.getProfileByCategory('vision')?.model;
     const chatModel = registry.getProfileByCategory('chat')?.model;
 

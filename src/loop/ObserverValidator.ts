@@ -387,16 +387,14 @@ export class ObserverValidator {
     }
 
     /**
-     * Issue 057 (G1) — mesmo padrão da issue 054 (D2) para os perfis: sem OBSERVER_MODEL configurado, o
-     * nome de nuvem 'qwen3.5:cloud' só vale quando o provedor padrão é o Ollama, para quem ele existe.
-     * Para outro provedor (endpoint local OpenAI-compatível, Gemini...), sem modelo = o do provedor
-     * (issue 019). Visto em 05/10/2026: o juiz de grounding pedia 'qwen3.5:cloud' ao llama-server local.
+     * Issue 068 (substitui a regra da issue 057): o código não escolhe modelo para o juiz. Sem OBSERVER_MODEL
+     * configurado (painel ou .env), a chamada sai sem modelo — o provedor usa o próprio modelo padrão (o "Modelo
+     * padrão" do painel), mesma regra da issue 019 para o classificador. Antes, com o Ollama, o código pedia
+     * 'qwen3.5:cloud' em silêncio: um modelo que o operador nunca escolheu e que o painel não mostrava.
      * Modelo configurado (OBSERVER_MODEL, setModel) nunca é tocado.
      */
     private get effectiveModel(): string {
-        if (this.observerModel) return this.observerModel;
-        const provider = typeof this.providerFactory?.getDefaultProvider === 'function' ? this.providerFactory.getDefaultProvider() : 'ollama';
-        return provider === 'ollama' ? 'qwen3.5:cloud' : '';
+        return this.observerModel;
     }
 
     setModel(model: string): void {

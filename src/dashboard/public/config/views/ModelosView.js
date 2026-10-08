@@ -2373,9 +2373,19 @@ function updateEffectiveConfig(_rIgnorado, _defaultProviderIgnorado) {
   const r = configStore.salvo('modelRouter') || {};
   const defaultProvider = configStore.salvo('defaultProvider');
   const s = v => v || '—';
+  // Issue 068: o código não escolhe modelo nenhum — esta tela mostra o que VALE de fato, não só o campo
+  // gravado. Mesma regra de ModelProfileRegistry.sanitizeProfile: conversa vazia → modelo padrão do provedor;
+  // demais perfis de texto vazios → herdam o da conversa; visão vazia → não configurada.
+  const padrao = defaultProvider === 'ollama' ? configStore.salvo('ollamaModel') : '';
+  const daConversa = r.chat || padrao;
   ['chat','code','vision','light','analysis','execution'].forEach(cat => {
     const e = document.getElementById(`ml-eff-${cat}`);
-    if (e) e.textContent = s(r[cat]);
+    if (!e) return;
+    if (r[cat]) { e.textContent = r[cat]; return; }
+    if (cat === 'vision') { e.textContent = t('ml_eff_vision_off'); return; }
+    if (cat === 'chat') { e.textContent = padrao ? t('ml_eff_default_model', { model: padrao }) : t('ml_eff_provider_default'); return; }
+    e.textContent = r.chat ? t('ml_eff_inherits_chat', { model: daConversa })
+      : padrao ? t('ml_eff_default_model', { model: padrao }) : t('ml_eff_provider_default');
   });
   const provEl = document.getElementById('ml-eff-provider');
   if (provEl) provEl.textContent = PROV_LABELS[defaultProvider] || defaultProvider || '—';

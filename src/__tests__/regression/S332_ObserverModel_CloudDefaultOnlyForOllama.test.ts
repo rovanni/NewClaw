@@ -5,7 +5,8 @@
  * Sem OBSERVER_MODEL, o ObserverValidator pedia 'qwen3.5:cloud' a qualquer provedor — visto em 05/10/2026: o
  * juiz de grounding pedia esse nome ao llama-server local (Bonsai). Mesma regra da issue 054 (D2): o padrão de
  * nuvem só vale com o Ollama como provedor padrão; para os demais, sem modelo = o do provedor (issue 019).
- * Modelo configurado nunca é tocado. Sem como saber o provedor: comportamento anterior.
+ * Issue 068 (07/10/2026) tornou a regra geral: o código não escolhe modelo para o juiz em provedor nenhum — sem
+ * OBSERVER_MODEL, sem modelo (o provedor usa o padrão do painel). Modelo configurado nunca é tocado.
  *
  * Execução: npx ts-node src/__tests__/regression/S332_ObserverModel_CloudDefaultOnlyForOllama.test.ts
  */
@@ -43,11 +44,11 @@ const ev = [{ id: 'E1', tool: 'read', output: 'x' }];
 async function main(): Promise<void> {
 delete process.env.OBSERVER_MODEL;
 
-console.log('\n=== S332-1 — provedor padrão Ollama, sem OBSERVER_MODEL: padrão de nuvem mantido ===');
+console.log('\n=== S332-1 — provedor padrão Ollama, sem OBSERVER_MODEL: nenhum modelo escolhido pelo código (issue 068) ===');
 {
     const models: Array<string | undefined> = [];
     await quiet(() => new ObserverValidator(factory('ollama', models)).validateGrounding('x', ev));
-    assert(models[0] === 'qwen3.5:cloud', 'pede qwen3.5:cloud ao Ollama', models);
+    assert(models[0] === '', "pede '' — o Ollama usa o modelo padrão do painel (antes: qwen3.5:cloud em silêncio)", models);
 }
 
 console.log('\n=== S332-2 — provedor padrão local (custom), sem OBSERVER_MODEL: modelo do provedor ===');
@@ -67,11 +68,11 @@ console.log('\n=== S332-3 — OBSERVER_MODEL / setModel configurados: nunca toca
     assert(models[0] === 'meu-juiz' && models[1] === 'juiz-do-painel', 'configurado vale em qualquer provedor', models);
 }
 
-console.log('\n=== S332-4 — sem como saber o provedor: comportamento anterior ===');
+console.log('\n=== S332-4 — sem como saber o provedor: mesmo contrato ===');
 {
     const models: Array<string | undefined> = [];
     await quiet(() => new ObserverValidator(factory(null, models)).validateGrounding('x', ev));
-    assert(models[0] === 'qwen3.5:cloud', 'sem getDefaultProvider → qwen3.5:cloud (como antes)', models);
+    assert(models[0] === '', "sem getDefaultProvider → '' (nada embutido)", models);
 }
 
 console.log(`\n${'─'.repeat(60)}`);
