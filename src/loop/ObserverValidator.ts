@@ -9,7 +9,7 @@ import { createLogger } from '../shared/AppLogger';
 import { errorMessage } from '../shared/errors';
 import { createHash } from 'crypto';
 import { ANALYSIS_INTENT_PATTERN } from '../shared/analysisIntentPattern';
-import { gravarAvaliacao, novaAvaliacaoId, versaoDoPrompt } from '../shared/evaluatorFlightRecorder';
+import { gravarAvaliacao, novaAvaliacaoId, versaoDoPrompt, INSTRUCAO_FALTOU, lerFaltou } from '../shared/evaluatorFlightRecorder';
 import type { CallTelemetry } from '../core/providerTypes';
 const log = createLogger('Observervalidator');
 
@@ -320,8 +320,10 @@ texto redigido — inclua-o.
 Se a resposta não contiver nenhuma afirmação apresentada como dado obtido das evidências, devolva a
 lista vazia.
 
+${INSTRUCAO_FALTOU}
+
 Responda APENAS com JSON:
-{"claims":[{"claim":"...","evidence":["E1"],"verdict":"SUPPORTED|NOT_SUPPORTED|NOT_EVALUABLE"}]}`;
+{"claims":[{"claim":"...","evidence":["E1"],"verdict":"SUPPORTED|NOT_SUPPORTED|NOT_EVALUABLE"}],"faltou":"(opcional)"}`;
 
 const OBSERVER_PROMPT = `Você é um agente observador responsável por validar a qualidade das ações de um assistente virtual.
 
@@ -344,8 +346,10 @@ Analise as informações abaixo:
 
 Avalie se a ação executada está correta e se a resposta atende plenamente à solicitação do usuário.
 
+${INSTRUCAO_FALTOU}
+
 Responda APENAS em JSON:
-{"approved": true/false, "reason": "explicação curta", "confidence": 0.0-1.0, "suggested_fix": "ação sugerida caso não aprovado", "failure_type": "incomplete_response | read_only | future_action | tool_error | other | none"}`;
+{"approved": true/false, "reason": "explicação curta", "confidence": 0.0-1.0, "suggested_fix": "ação sugerida caso não aprovado", "failure_type": "incomplete_response | read_only | future_action | tool_error | other | none", "faltou": "(opcional)"}`;
 
 /**
  * Issue 067: trecho de um dado de CONTEXTO (pedido, resultado de ferramenta) com o corte declarado —
@@ -464,8 +468,8 @@ export class ObserverValidator {
             telemetria: reg.telemetria,
             depois: {
                 desfecho: reg.desfecho, estado: result.validationSkipped ? 'pulado' : result.approved ? 'aprovado' : 'reprovado', duracaoMs: Date.now() - t0,
-                fatos: { confianca: result.confidence, failureType: result.failureType },
-                conteudo: { motivo: result.reason, sugestao: result.suggestedFix, saidaBruta: reg.saidaBruta },
+                fatos: { confianca: result.confidence, failureType: result.failureType, faltouInformado: !!lerFaltou(reg.saidaBruta) },
+                conteudo: { motivo: result.reason, sugestao: result.suggestedFix, saidaBruta: reg.saidaBruta, faltou: lerFaltou(reg.saidaBruta) },
             },
         });
         return { ...result, avaliacaoId };
@@ -761,8 +765,8 @@ export class ObserverValidator {
                 telemetria,
                 depois: {
                     desfecho: outcome, estado: extra.state, duracaoMs: Date.now() - t0,
-                    fatos: { claimCounts: extra.claimCounts, judgeStatus: extra.judgeStatus, judgeError: extra.judgeError, judgeOutputChars: extra.judgeOutputChars },
-                    conteudo: { saidaBruta: extra.judgeRaw, afirmacoes: extra.claims },
+                    fatos: { claimCounts: extra.claimCounts, judgeStatus: extra.judgeStatus, judgeError: extra.judgeError, judgeOutputChars: extra.judgeOutputChars, faltouInformado: !!lerFaltou(extra.judgeRaw) },
+                    conteudo: { saidaBruta: extra.judgeRaw, afirmacoes: extra.claims, faltou: lerFaltou(extra.judgeRaw) },
                 },
             });
         };

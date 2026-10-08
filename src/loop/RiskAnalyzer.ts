@@ -28,7 +28,7 @@ import { resolveArtifactPathFromEvidence } from './planning/artifactContract';
 import { KNOWN_DEPS } from './GoalEvaluator';
 import { resolvePath } from '../utils/crossPlatform';
 import { createHash } from 'crypto';
-import { gravarAvaliacao, novaAvaliacaoId, versaoDoPrompt } from '../shared/evaluatorFlightRecorder';
+import { gravarAvaliacao, novaAvaliacaoId, versaoDoPrompt, INSTRUCAO_FALTOU, lerFaltou } from '../shared/evaluatorFlightRecorder';
 import type { CallTelemetry } from '../core/providerTypes';
 
 const log = createLogger('RiskAnalyzer');
@@ -681,8 +681,8 @@ export class RiskAnalyzer {
                 desfecho: reg.outcome ?? 'desconhecido',
                 estado: r.planRejected ? 'plano_rejeitado' : r.planAdjusted ? 'plano_ajustado' : 'plano_mantido',
                 duracaoMs: Date.now() - t0,
-                fatos: { llmStatus: reg.llmStatus, riscos: r.risks.length, passosPropostos: reg.proposed?.length, mutacoesDoSanitizer: reg.sanitizerMutations?.length },
-                conteudo: { riscos: r.risks, motivoRejeicao: r.rejectionReason, saidaBruta: reg.saidaBruta, propostaCrua: reg.rawProposal, proposta: reg.proposed },
+                fatos: { llmStatus: reg.llmStatus, riscos: r.risks.length, passosPropostos: reg.proposed?.length, mutacoesDoSanitizer: reg.sanitizerMutations?.length, faltouInformado: !!lerFaltou(reg.saidaBruta) },
+                conteudo: { riscos: r.risks, motivoRejeicao: r.rejectionReason, saidaBruta: reg.saidaBruta, propostaCrua: reg.rawProposal, proposta: reg.proposed, faltou: lerFaltou(reg.saidaBruta) },
             },
         });
         return r;
@@ -734,8 +734,10 @@ Se precisar de ajuste → retorne o plano completo corrigido.
   send_audio:  {"text": "conteúdo completo para narrar em português"}
                — text é OBRIGATÓRIO. NÃO use "file_path" (send_audio gera o áudio a partir de texto, não lê arquivo).
 
+${INSTRUCAO_FALTOU}
+
 Responda APENAS com JSON válido (sem markdown, máximo 5 steps):
-{"risks": ["risco 1"], "plan": [{"id": "step_1", "description": "...", "toolName": "...", "toolArgs": {...}}, ...]}
+{"risks": ["risco 1"], "plan": [{"id": "step_1", "description": "...", "toolName": "...", "toolArgs": {...}}, ...], "faltou": "(opcional)"}
 OU
 {"risks": [], "plan": null}`;
 

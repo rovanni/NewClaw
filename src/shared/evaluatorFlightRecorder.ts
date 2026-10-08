@@ -68,6 +68,31 @@ export interface RegistroEfeito {
 /** Teto por campo de texto — só para um registro patológico não virar um arquivo de centenas de MB. */
 const MAX_TEXTO_CHARS = 300_000;
 
+/**
+ * Campo de observação dos avaliadores (Sprint C, 08/10/2026 — proposta do operador: "o LLM poderia dar um feedback
+ * de algum problema que encontrou e não está conseguindo fazer a tomada de decisão", como a avaliação de fim de curso).
+ * Texto ÚNICO, usado pelos três prompts (juiz de grounding, validador de qualidade, análise de risco). O campo é só
+ * observabilidade: vai para o gravador de voo e NENHUMA decisão o lê. Opcional de propósito — obrigatório, o modelo o
+ * preencheria sempre, por obrigação, e o sinal viraria ruído.
+ */
+export const INSTRUCAO_FALTOU =
+    'Campo OPCIONAL "faltou": se faltou alguma informação para você decidir com segurança, diga qual e por quê, em uma ' +
+    'frase (ex.: "o pedido do usuário — a resposta cita o curso pedido e não tenho como conferir"). Omita o campo se não ' +
+    'faltou nada. Ele não muda a sua decisão: serve para melhorar o sistema depois.';
+
+/** Lê o campo `faltou` da saída JSON de um avaliador. Estrutural: só existência e tipo — o texto não é interpretado. */
+export function lerFaltou(saida: string | undefined): string | undefined {
+    if (!saida) return undefined;
+    const limpo = saida.replace(/```json\n?/gi, '').replace(/```\n?/g, '');
+    const inicio = limpo.indexOf('{');
+    const fim = limpo.lastIndexOf('}');
+    if (inicio < 0 || fim <= inicio) return undefined;
+    try {
+        const v = (JSON.parse(limpo.slice(inicio, fim + 1)) as { faltou?: unknown }).faltou;
+        return typeof v === 'string' && v.trim() ? v.trim().slice(0, 500) : undefined;
+    } catch { return undefined; }
+}
+
 export function novaAvaliacaoId(): string {
     return `av_${Date.now().toString(36)}_${randomBytes(3).toString('hex')}`;
 }

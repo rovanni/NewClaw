@@ -164,7 +164,8 @@ async function main(): Promise<void> {
 
     if (logOriginal === undefined) delete process.env.LOG_FILE; else process.env.LOG_FILE = logOriginal;
     if (conteudoOriginal === undefined) delete process.env.TRACE_CONTENT; else process.env.TRACE_CONTENT = conteudoOriginal;
-    fs.rmSync(base, { recursive: true, force: true });
+    // A pasta temporária NÃO é apagada: o AppLogger abre o LOG_FILE em segundo plano, e apagar a pasta antes da abertura
+    // gera ENOENT sem tratamento (falhava só dentro da suíte, com a máquina ocupada). O SO limpa o diretório temporário.
 
     console.log(`\n${'─'.repeat(60)}`);
     console.log(`S352 RESULTADO: ✅ ${passed} passou | ❌ ${failed} falhou`);
