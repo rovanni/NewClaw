@@ -21,7 +21,8 @@ import * as path from 'path';
 import { createHash, randomBytes } from 'crypto';
 import type { AttemptTelemetry, CallTelemetry } from '../core/providerTypes';
 
-export type Avaliador = 'juiz_grounding' | 'validador_qualidade' | 'analise_risco';
+/** `validacao_<tipo>`: tipos executados pelo motor único (ADR-014). */
+export type Avaliador = 'juiz_grounding' | 'validador_qualidade' | 'analise_risco' | `validacao_${string}`;
 
 export interface ContextoAvaliacao {
     traceId?: string;
@@ -79,6 +80,15 @@ export const INSTRUCAO_FALTOU =
     'Campo OPCIONAL "faltou": se faltou alguma informação para você decidir com segurança, diga qual e por quê, em uma ' +
     'frase (ex.: "o pedido do usuário — a resposta cita o curso pedido e não tenho como conferir"). Omita o campo se não ' +
     'faltou nada. Ele não muda a sua decisão: serve para melhorar o sistema depois.';
+
+/**
+ * Campo de observação `dificuldade` (ADR-014, proposta do operador: "o validador vai ter o campo opcional para o LLM
+ * registrar problemas e dificuldades, para utilizar como logs"). Complementa `faltou`: não é informação ausente, é outro
+ * problema que atrapalhou a decisão. Mesmas regras: opcional, só observabilidade, nenhuma decisão o lê.
+ */
+export const INSTRUCAO_DIFICULDADE =
+    'Campo OPCIONAL "dificuldade": se outra coisa dificultou a sua decisão (pedido ambíguo, evidências que se ' +
+    'contradizem, regra destas instruções que não se aplica bem ao caso), diga o quê, em uma frase. Omita se não houve.';
 
 /** Lê o campo `faltou` da saída JSON de um avaliador. Estrutural: só existência e tipo — o texto não é interpretado. */
 export function lerFaltou(saida: string | undefined): string | undefined {

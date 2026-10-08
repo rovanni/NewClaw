@@ -452,10 +452,10 @@ export class ProviderFactory {
 
                     // Gravador de voo (ADR-013): uma entrada por tentativa; o provider preenche o que observou no streaming.
                     if (opts?.telemetry) {
-                        tentativaTele = { provider: providerName, model: modelUsed, startedAt: new Date().toISOString() };
+                        tentativaTele = { provider: providerName, model: modelUsed, startedAt: new Date().toISOString(), raciocinio: opts?.raciocinio };
                         opts.telemetry.attempts.push(tentativaTele);
                     }
-                    const chatOptions: ChatOptions = { signal: currentAbort.signal, timeoutMs, reasoningIntensive: opts?.reasoningIntensive, telemetry: tentativaTele };
+                    const chatOptions: ChatOptions = { signal: currentAbort.signal, timeoutMs, reasoningIntensive: opts?.reasoningIntensive, telemetry: tentativaTele, raciocinio: opts?.raciocinio };
                     const chatPromise = provider.chat(mensagensDoProvider, tools, chatOptions);
                     let result: LLMResponse;
 
@@ -660,7 +660,7 @@ export class ProviderFactory {
                         ? { provider: 'ollama', model: `${ollamaProvider.getModel()} (sem streaming)`, startedAt: new Date().toISOString() } : undefined;
                     if (teleNaoStreaming) opts!.telemetry!.attempts.push(teleNaoStreaming);
                     const t0NaoStreaming = Date.now();
-                    const result = await ollamaProvider.fallbackNonStreaming(mensagensNaoStreaming, tools, effectiveNonStreamingTimeoutMs)
+                    const result = await ollamaProvider.fallbackNonStreaming(mensagensNaoStreaming, tools, effectiveNonStreamingTimeoutMs, undefined, opts?.raciocinio)
                         .catch((e) => { if (teleNaoStreaming) Object.assign(teleNaoStreaming, { status: 'error', errorMessage: errorMessage(e), durationMs: Date.now() - t0NaoStreaming }); throw e; });
                     if (teleNaoStreaming) Object.assign(teleNaoStreaming, { status: result.content?.trim() ? 'success' : 'empty', durationMs: Date.now() - t0NaoStreaming, contentChars: (result.content || '').length, contentText: result.content || '' });
                     if (result.content && result.content.trim()) {

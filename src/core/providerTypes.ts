@@ -262,6 +262,12 @@ export interface ChatFallbackOptions {
      * que ACONTECEU em cada tentativa. Só observabilidade — nenhuma decisão do ProviderFactory o consulta.
      */
     telemetry?: CallTelemetry;
+    /**
+     * ADR-014 (modo de raciocínio por tipo de validação): `desligado` pede ao provedor que não raciocine antes de
+     * responder (Ollama: `think: false`); `livre` ou ausente = o padrão do modelo (comportamento anterior). Provedor
+     * que não suporta ignora — a telemetria registra o que foi pedido.
+     */
+    raciocinio?: 'desligado' | 'livre';
 }
 
 /** Gravador de voo (ADR-013): o que aconteceu numa chamada ao LLM, tentativa por tentativa. */
@@ -273,6 +279,8 @@ export interface AttemptTelemetry {
     provider: string;
     model: string;
     startedAt: string;
+    /** Modo de raciocínio pedido nesta tentativa (ADR-014); ausente = padrão do modelo. */
+    raciocinio?: 'desligado' | 'livre';
     status?: 'success' | 'timeout' | 'error' | 'empty' | 'cancelled';
     errorMessage?: string;
     durationMs?: number;
@@ -360,4 +368,6 @@ export interface ChatOptions {
     reasoningIntensive?: boolean;
     /** Ver `ChatFallbackOptions.telemetry` — a tentativa corrente, preenchida pelo provider. */
     telemetry?: AttemptTelemetry;
+    /** Ver `ChatFallbackOptions.raciocinio` (ADR-014). */
+    raciocinio?: 'desligado' | 'livre';
 }

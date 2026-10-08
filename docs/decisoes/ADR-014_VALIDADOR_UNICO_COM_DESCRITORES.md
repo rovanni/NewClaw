@@ -1,6 +1,7 @@
 # ADR-014 — Validador único com descritores de validação
 
-> **Status:** **proposta**, aguardando aprovação do operador. Nada implementado.
+> **Status:** **aprovado** pelo operador (08/10/2026). **M0 implementado** (motor, contrato, modo de raciocínio,
+> `faltou`/`dificuldade`; nenhum validador migrado ainda — `src/validation/`, teste `S363`). Próximo: M1 (juiz em sombra).
 > **Data:** 08/10/2026
 > **Origem:** proposta do operador — *"ao invés de ter vários validadores diferentes, ter um padrão e apenas um
 > validador; ele recebe o tipo de validação e todos os dados necessários — entrada, saída, risco etc. Como o MCP:
@@ -109,7 +110,7 @@ interface DescritorDeValidacao {
   }>;
   checklist: string[];                // perguntas que o modelo responde, uma a uma
   preVerificacoes?: string[];         // verificações estruturais declaradas (ex.: citação existe na evidência)
-  raciocinio: 'desligado' | 'curto' | 'livre';   // ver 4.3
+  raciocinio: 'desligado' | 'livre';             // ver 4.3 — 'curto' saiu no M0: o Ollama só liga/desliga
   modeloConfig: string;               // chave da configuração do painel (ex.: OBSERVER_MODEL)
   adaptador: (v: VereditoPadrao) => unknown;     // formato que o consumidor de hoje já usa
 }
@@ -186,3 +187,13 @@ observações `faltou` não apontam entrada obrigatória ausente.
   casos longos não foi medida — M1 mede, na sombra.
 - O formato único de veredito pode não cobrir bem um tipo futuro; o adaptador por tipo absorve, mas se precisar de
   campos novos o contrato muda (versão do contrato registrada no gravador).
+
+## Registro de implementação
+
+- **M0 (08/10/2026):** `src/validation/contratoDeValidacao.ts` (descritor, veredito padrão, registro de tipos com
+  validação do contrato, leitura estrutural da saída, agregação por itens, citação conferida pelo código) e
+  `src/validation/ValidationEngine.ts` (motor). `ChatFallbackOptions.raciocinio` → `think: false` no Ollama (streaming
+  e sem streaming), registrado na telemetria. `INSTRUCAO_DIFICULDADE` ao lado de `INSTRUCAO_FALTOU`. Teto único
+  `DECISION_PROMPT_MAX_CHARS`. Desvio do desenho: o modo `curto` saiu — o Ollama só aceita ligar/desligar o
+  raciocínio na maioria dos modelos; um "curto" não teria implementação real. O motor está no registro do
+  recenseamento (linha 16 do mapa).

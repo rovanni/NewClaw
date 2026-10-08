@@ -90,7 +90,8 @@ console.log('\n=== S293.3 — auditoria estrutural: o código real usa o valor e
     assert(idx2 > 0, 'chamada a fallbackNonStreaming: effectiveNonStreamingTimeoutMs é calculado', idx2);
     // ADR-013: o registro da tentativa sem streaming (gravador de voo) fica entre o cálculo e a chamada.
     const trecho2 = src.slice(idx2, idx2 + 1400);
-    assert(/fallbackNonStreaming\(mensagensNaoStreaming, tools, effectiveNonStreamingTimeoutMs\)/.test(trecho2), 'fallbackNonStreaming() recebe o valor efetivo, não o timeoutMs bruto', trecho2);
+    // ADR-014 M0.3: a chamada ganhou argumentos depois do prazo (sinal, modo de raciocínio) — o que importa é o 3º ser o efetivo.
+    assert(/fallbackNonStreaming\(mensagensNaoStreaming, tools, effectiveNonStreamingTimeoutMs[,)]/.test(trecho2), 'fallbackNonStreaming() recebe o valor efetivo, não o timeoutMs bruto', trecho2);
 }
 
 console.log('\n=== S293.4 — a constante vem de providerTypes.ts, não duplicada localmente ===');

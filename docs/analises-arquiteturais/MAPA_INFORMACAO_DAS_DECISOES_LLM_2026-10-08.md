@@ -37,6 +37,7 @@
 | 13 | `GoalExecutionLoop` (mensagem de entrega) | como contar ao usuário o que foi feito? | objetivo + pedido íntegro + dificuldades + passos + resultados | — | ✅ |
 | 14 | `AgentLoop` (evidence-check) | qual o valor exato de um parâmetro faltante? | nome/tipo/descrição do parâmetro + contexto do usuário + evidência da memória | — | ✅ |
 | 15 | `AgentLoop` (turno) | o que fazer agora? | conversa, ferramentas, memória, resultados | — | ✅ |
+| 16 | `ValidationEngine` (motor único, ADR-014) | a pergunta do tipo registrado (descritor) | o que o descritor declara, por papel — objeto, fonte de verdade e pedido inteiros; contexto da execução com corte declarado; entrada obrigatória ausente ou acima de `DECISION_PROMPT_MAX_CHARS` → não avaliável sem chamar o modelo | — (garantido pela estrutura; `S363`) | ✅ |
 
 ## 2. Achados
 
