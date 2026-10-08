@@ -1027,6 +1027,8 @@ export class AgentLoop {
                     last.toolOutput,
                     response,
                     signal,
+                    // Sprint V6: o julgamento de qualidade vê todas as ferramentas do turno, não só a última.
+                    AgentLoop.evidencesFromTrace(trace).map(e => ({ tool: e.tool, output: e.output })),
                 ),
                 new Promise<ResponseCommit>(resolve =>
                     setTimeout(

@@ -50,8 +50,10 @@ async function main(): Promise<void> {
     assert(p.includes(resposta), 'a resposta final chega INTEIRA ao juiz (antes: só os primeiros 500 chars)');
     assert(p.includes('**Ressalva importante:** remova os gabaritos'), 'o fim da resposta — a "ressalva" que o juiz disse faltar — está no prompt');
     assert(!p.includes('FIM_DO_RESULTADO'), 'o resultado da ferramenta continua sendo um trecho (o custo do prompt não explode)');
-    assert(/trecho: primeiros 1000 de \d+ caracteres/.test(p), 'o corte do resultado da ferramenta é declarado ao juiz');
-    assert(/trecho: primeiros 500 de \d+ caracteres/.test(p), 'o corte do pedido é declarado ao juiz');
+    // Sprint V6: o trecho de cada resultado passou de 1000 para 2000 chars (todas as ferramentas do turno entram).
+    assert(/trecho: primeiros 2000 de \d+ caracteres/.test(p), 'o corte do resultado da ferramenta é declarado ao juiz');
+    // Sprint V6 (Informação Completa para Decidir): a pergunta é "atende o pedido?" — o pedido vai ÍNTEGRO.
+    assert(p.includes(pedido) && !/trecho: primeiros 500 de/.test(p), 'o pedido chega íntegro ao juiz (antes: 500 chars com corte declarado)');
 
     console.log('\n=== S351 — conteúdo com "$" é inserido literalmente ===');
     prompts.length = 0;

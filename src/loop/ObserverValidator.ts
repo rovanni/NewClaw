@@ -11,6 +11,7 @@ import { createHash } from 'crypto';
 import { ANALYSIS_INTENT_PATTERN } from '../shared/analysisIntentPattern';
 import { gravarAvaliacao, novaAvaliacaoId, versaoDoPrompt, INSTRUCAO_FALTOU, lerFaltou } from '../shared/evaluatorFlightRecorder';
 import type { CallTelemetry } from '../core/providerTypes';
+import { DECISION_PROMPT_MAX_CHARS } from '../core/providerTypes';
 const log = createLogger('Observervalidator');
 
 /**
@@ -251,7 +252,7 @@ const CLAIM_VERDICTS: ReadonlySet<string> = new Set<ClaimVerdict>(['SUPPORTED', 
  * o teto de ENTRADA fica em 60k. Conservador de propósito: errar para o lado do bloqueio é o
  * comportamento pedido nesta implementação.
  */
-const GROUNDING_MAX_PROMPT_CHARS = 60_000;
+const GROUNDING_MAX_PROMPT_CHARS = DECISION_PROMPT_MAX_CHARS;   // fonte única em providerTypes (Sprint V5)
 
 // O contrato do juiz é o da ADR-010 §5, enunciado em termos gerais: nenhuma menção a ferramenta,
 // domínio, unidade ou idioma. O exemplo de unidade indeterminada existe para tornar concreta a
@@ -345,10 +346,10 @@ Analise as informações abaixo:
 2. Intenção identificada:
 {intent}
 
-3. Ferramenta executada:
+3. Ferramenta(s) executada(s) neste turno:
 {toolUsed}
 
-4. Resultado da ferramenta:
+4. Resultado da(s) ferramenta(s):
 {toolResult}
 
 5. Resposta final ao usuário:
@@ -462,10 +463,12 @@ export class ObserverValidator {
         toolResult: string,
         finalResponse: string,
         signal?: AbortSignal,
+        /** Sprint V6: todas as ferramentas do turno. Sem isto, só `toolUsed`/`toolResult` (a última). */
+        ferramentasDoTurno?: Array<{ tool: string; output: string }>,
     ): Promise<ValidationResult> {
         const t0 = Date.now();
         const reg: RegistroQualidade = { telemetria: { attempts: [] }, prompt: '' };
-        const result = await this.julgarQualidade(userMessage, intent, toolUsed, toolResult, finalResponse, signal, reg);
+        const result = await this.julgarQualidade(userMessage, intent, toolUsed, toolResult, finalResponse, signal, reg, ferramentasDoTurno);
         if (reg.desfecho === undefined) return result;
         const avaliacaoId = novaAvaliacaoId();
         gravarAvaliacao({
@@ -493,6 +496,7 @@ export class ObserverValidator {
         finalResponse: string,
         signal: AbortSignal | undefined,
         reg: RegistroQualidade,
+        ferramentasDoTurno?: Array<{ tool: string; output: string }>,
     ): Promise<ValidationResult> {
         // Try deterministic check first — avoids LLM entirely for obvious cases
         const deterministic = this.deterministicCheck(toolUsed, toolResult, finalResponse);
@@ -514,11 +518,17 @@ export class ObserverValidator {
             return { approved: true, reason: 'Validation cancelled before LLM call', confidence: 0, validationSkipped: true };
         }
 
+        const ferramentas = ferramentasDoTurno && ferramentasDoTurno.length > 0 ? ferramentasDoTurno : [{ tool: toolUsed, output: toolResult }];
         const prompt = OBSERVER_PROMPT
-            .replace('{userMessage}', () => trechoRotulado(userMessage, 500))
+            // Sprint V6 (Informação Completa para Decidir): a pergunta é "atende o pedido?" — o pedido vai ÍNTEGRO
+            // (antes: 500 chars), e o julgamento vê TODAS as ferramentas do turno (antes: só a última). Os resultados
+            // são contexto de execução: cada um pode ir em trecho, com o corte declarado.
+            .replace('{userMessage}', () => userMessage)
             .replace('{intent}', () => intent)
-            .replace('{toolUsed}', () => toolUsed)
-            .replace('{toolResult}', () => trechoRotulado(toolResult, 1000))
+            .replace('{toolUsed}', () => ferramentas.map(f => f.tool).join(', '))
+            .replace('{toolResult}', () => ferramentas.length === 1
+                ? trechoRotulado(ferramentas[0].output, 2000)
+                : ferramentas.map((f, i) => `[${i + 1}] ferramenta=${f.tool}\n${trechoRotulado(f.output, 2000)}`).join('\n\n'))
             // Issue 067: a resposta é o objeto julgado — vai inteira (mesma regra do juiz de grounding).
             // Cortada em 500 chars, o juiz reprovava como "truncada" uma resposta completa de 1914 chars.
             .replace('{finalResponse}', () => finalResponse);
@@ -528,6 +538,12 @@ export class ObserverValidator {
             { role: 'user', content: prompt }
         ];
         reg.prompt = prompt;
+        if (prompt.length > DECISION_PROMPT_MAX_CHARS) {
+            // Não cabe → não avaliável; nunca um veredito sobre um pedaço (princípio §4.5).
+            log.info(`[OBSERVER] prompt de qualidade com ${prompt.length} chars excede ${DECISION_PROMPT_MAX_CHARS} — não avaliável`);
+            reg.desfecho = 'nao_avaliavel';
+            return { approved: true, reason: 'não avaliável: pedido e resposta não cabem inteiros no orçamento', confidence: 0, validationSkipped: true, failureType: 'none' };
+        }
 
         try {
             const startTime = Date.now();
@@ -614,6 +630,8 @@ export class ObserverValidator {
         toolResult: string,
         finalResponse: string,
         signal?: AbortSignal,
+        /** Sprint V6: todas as ferramentas do turno, para o julgamento de qualidade (o cheque determinístico usa a última). */
+        ferramentasDoTurno?: Array<{ tool: string; output: string }>,
     ): Promise<ResponseCommit> {
         const t0 = Date.now();
 
@@ -659,7 +677,7 @@ export class ObserverValidator {
             return { valid: true, hallucinationRisk: 0, blocked: false, validationMs: Date.now() - t0 };
         }
 
-        const llmResult = await this.validate(userMessage, userMessage, toolUsed, toolResult, finalResponse, signal);
+        const llmResult = await this.validate(userMessage, userMessage, toolUsed, toolResult, finalResponse, signal, ferramentasDoTurno);
         const elapsed = Date.now() - t0;
 
         if (llmResult.approved || llmResult.validationSkipped) {
