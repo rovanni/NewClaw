@@ -96,7 +96,10 @@ async function main(): Promise<void> {
         const { value: real, lines } = await captureLogs(() => h.v.validateGrounding(response, evidences, undefined, ctx), 250);
         assert(h.prompts.length === 2, 'exatamente 2 chamadas ao juiz (real + sombra, sem recursão)', h.prompts.length);
         const [realPrompt, shadowPrompt] = h.prompts;
-        assert(!realPrompt.includes('PEDIDO-ORIGINAL') && !realPrompt.includes('pedido_do_usuario'), 'o prompt REAL não recebe o pedido do usuário');
+        // Sprint V3 (Informação Completa para Decidir): o prompt REAL passou a receber o pedido como CONTEXTO, numa
+        // seção própria — nunca como evidência (U1/pedido_do_usuario é só da sombra).
+        assert(!realPrompt.includes('pedido_do_usuario') && !/\[U1\]/.test(realPrompt), 'o prompt REAL não recebe o pedido como EVIDÊNCIA');
+        assert(realPrompt.includes('PEDIDO DO USUÁRIO (contexto') && realPrompt.includes('PEDIDO-ORIGINAL'), 'o prompt REAL recebe o pedido como contexto (Sprint V3)');
         // Atualizado DE PROPÓSITO na issue 051: o julgamento real passou a ver os argumentos inteiros (dentro do
         // orçamento do juiz). O que continua exclusivo da sombra é o pedido do usuário (U1), verificado acima.
         assert(realPrompt.includes('entrada_nao_numerica'), 'o prompt REAL traz os argumentos inteiros (issue 051)');

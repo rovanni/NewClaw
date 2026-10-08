@@ -164,9 +164,10 @@ export interface GroundingTraceContext {
     stepDescription?: string;
     planGeneration?: number;
     /**
-     * O pedido ORIGINAL do usuário. Só é lido pelo modo sombra de evidência ampliada
-     * (`GROUNDING_EVIDENCE_SHADOW`); o julgamento real nunca o recebe como evidência e ele não vai
-     * para o log (só o tamanho).
+     * O pedido ORIGINAL do usuário. Sprint V3 (Informação Completa para Decidir): entra no prompt do
+     * julgamento real como CONTEXTO, numa seção própria — nunca como evidência. O modo sombra de evidência
+     * ampliada (`GROUNDING_EVIDENCE_SHADOW`) continua a experimentá-lo como evidência (U1). Não vai para o
+     * `[GROUNDING-TRACE]` (só o tamanho); o gravador de voo o grava com TRACE_CONTENT.
      */
     userRequest?: string;
     /**
@@ -282,7 +283,15 @@ const GROUNDING_MAX_PROMPT_CHARS = 60_000;
 // ferramenta errado dentro de texto redigido — River/Clima em resposta longa): glm-5.3 de 14/19
 // para 19/19, gemma4 de 18/19 para 19/19, armadilhas 4/4 em todos; os dois modelos concordam
 // nos 19.
+// Sprint V3 (Informação Completa para Decidir, 08/10/2026): o juiz recebe o PEDIDO DO USUÁRIO numa seção própria,
+// marcada como contexto — não como evidência. Antes ele não o recebia e tinha de adivinhar o que "veio do pedido"
+// (experimento de 07/10: bloqueou uma resposta correta que citava o curso informado pelo usuário).
 const GROUNDING_PROMPT = `Você verifica quais afirmações de uma RESPOSTA são sustentadas pelas EVIDÊNCIAS.
+
+PEDIDO DO USUÁRIO (contexto — NÃO é evidência de ferramenta; serve para você saber o que veio do usuário):
+"""
+{pedido}
+"""
 
 EVIDÊNCIAS:
 {evidences}
@@ -311,8 +320,9 @@ o veredito é NOT_EVALUABLE, nunca SUPPORTED. Exemplo: evidência "X: 25" e afir
 25°C" — o número aparece, mas a unidade não está determinada, então NÃO é SUPPORTED.
 
 NÃO são dado obtido das evidências — não os inclua: texto que o assistente redigiu (explicação,
-conteúdo didático, conhecimento geral, opinião, recomendação, cortesia), contexto que vem do pedido
-do usuário, o que o assistente diz que fez ou vai fazer, e fato verificável por si só sem depender
+conteúdo didático, conhecimento geral, opinião, recomendação, cortesia), o que a resposta só repete
+do PEDIDO DO USUÁRIO acima (o pedido não confirma nem contradiz dado de ferramenta), o que o
+assistente diz que fez ou vai fazer, e fato verificável por si só sem depender
 de fonte externa (ex: dia da semana correspondente a uma data, resultado de um cálculo já
 classificado acima). Um valor que a resposta atribui a uma ferramenta ou apresenta como resultado
 de consulta (preço, temperatura, quantidade, nome de arquivo...) É dado obtido, mesmo no meio de
@@ -725,7 +735,9 @@ export class ObserverValidator {
     ): Promise<GroundingVerdict> {
         // Issue 051: o julgamento real recebe a evidência INTEIRA; só corta se o conjunto não couber no
         // orçamento de entrada do juiz (GROUNDING_MAX_PROMPT_CHARS). O modo sombra mantém limites fixos.
-        const budgetCap = ObserverValidator.evidenceCapForBudget(response, evidences);
+        // Sprint V3: o pedido do usuário entra no prompt como contexto (nunca como evidência) e conta no orçamento.
+        const pedidoDoUsuario = traceCtx?.userRequest?.trim() || '(não informado)';
+        const budgetCap = ObserverValidator.evidenceCapForBudget(response, evidences, pedidoDoUsuario);
         const evidenceCharsLimit = limits?.evidenceChars ?? budgetCap;
         const argsCharsLimit = limits?.argsChars ?? budgetCap;
         const t0 = Date.now();
@@ -760,7 +772,7 @@ export class ObserverValidator {
                     modelo: (limits?.model ?? this.effectiveModel) || '(padrão do provedor)', versaoPrompt: versaoDoPrompt(GROUNDING_PROMPT), promptChars: promptEnviado.length,
                     orcamentoMs: orcamento.timeoutMs,
                     fatos: { responseChars: response.length, evidencias: evidenceFacts, stepDescription: traceCtx?.stepDescription?.split('\n')[0] },
-                    conteudo: { prompt: promptEnviado, resposta: response, evidencias: evidences },
+                    conteudo: { prompt: promptEnviado, pedido: traceCtx?.userRequest, resposta: response, evidencias: evidences },
                 },
                 telemetria,
                 depois: {
@@ -805,6 +817,7 @@ export class ObserverValidator {
         // `$'` e `$$` são padrões — e evidência real carrega cifrão (preço de ativo, variável de
         // shell). Com string, um `$&` no output do tool reescreveria o prompt do juiz.
         const prompt = GROUNDING_PROMPT
+            .replace('{pedido}', () => pedidoDoUsuario)
             .replace('{evidences}', () => blocoEvidencias)
             .replace('{response}', () => response);
         promptEnviado = prompt;
@@ -897,10 +910,10 @@ export class ObserverValidator {
      *
      * Puro e determinístico; não decide nada sobre o conteúdo.
      */
-    static evidenceCapForBudget(response: string, evidences: EvidenceItem[]): number {
+    static evidenceCapForBudget(response: string, evidences: EvidenceItem[], pedido = ''): number {
         // Cabeçalho "[E1] ferramenta=x args=" + quebras + marcas de corte (a de evidência tem ~90 chars).
         const PER_EVIDENCE_OVERHEAD = 160;
-        const skeleton = GROUNDING_PROMPT.replace('{evidences}', () => '').replace('{response}', () => response).length;
+        const skeleton = GROUNDING_PROMPT.replace('{pedido}', () => pedido).replace('{evidences}', () => '').replace('{response}', () => response).length;
         const available = GROUNDING_MAX_PROMPT_CHARS - skeleton
             - evidences.reduce((s, e) => s + PER_EVIDENCE_OVERHEAD + e.id.length + e.tool.length, 0);
         const sizes = evidences.flatMap(e => [e.output.length, (e.input ?? '').length]).filter(n => n > 0);

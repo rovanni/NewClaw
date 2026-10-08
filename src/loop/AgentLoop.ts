@@ -1240,7 +1240,8 @@ export class AgentLoop {
             const isInsufficientSentinel = /^["'*_\s]*INSUFICIENTE["'.!*_\s]*$/i.test(text);
             if (!text || text.length < 10 || isInsufficientSentinel) return null;
 
-            const revalidated = await this.observer.validateGrounding(text, evidences, signal, { phase: 'partial-revalidation' });
+            // Sprint V3: a revalidação também julga com o pedido do usuário como contexto.
+            const revalidated = await this.observer.validateGrounding(text, evidences, signal, { phase: 'partial-revalidation', userRequest: userText });
             if (revalidated.state !== 'VALIDATED' && revalidated.state !== 'NOT_APPLICABLE') {
                 log.warn(`[${this.ts()}] [GROUNDING] resposta parcial também não passou (estado=${revalidated.state}) — descartando`);
                 return null;
