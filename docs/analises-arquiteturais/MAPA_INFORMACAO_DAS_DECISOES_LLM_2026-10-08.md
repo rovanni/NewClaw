@@ -90,3 +90,28 @@ juiz e passa por medição antes.
 O campo de observação dos avaliadores (Sprint C, 08/10/2026) pede ao próprio LLM que diga o que faltou para decidir,
 gravado pelo gravador de voo — sem afetar a decisão. Se este mapa estiver certo, as observações vão apontar os mesmos
 lugares; se apontarem outros, o mapa está incompleto.
+
+## 5. Validação ao vivo (Sprint E, 08/10/2026 — Bonsai 27B local)
+
+Instância isolada, provedor `bonsai` (llama-server local), todos os `MODEL_*` vazios; pergunta de leigo "Qual a
+previsão do tempo em Curitiba hoje?" enviada numa conversa antiga (que tinha um pedido de exercícios de sub-redes).
+
+- **Sem modelo, a chamada não sai (issue 068b):** o roteador estourou 30 s no Bonsai, caiu no Ollama (sem modelo
+  escolhido nesta configuração) e o log registrou "Nenhum modelo foi escolhido…" — nenhum pedido sem modelo saiu.
+- **Roteamento degradado:** com o roteador fora do prazo, a heurística classificou o pedido como conversa; a
+  ferramenta de clima não foi chamada, e o agente — com o contexto antigo da conversa — **regravou o arquivo de
+  sub-redes** antes de qualquer avaliação.
+- **O campo "faltou" funcionou na primeira chamada real:** o validador de qualidade reprovou a resposta e escreveu
+  *"Faltou registro de consulta a uma fonte de previsão do tempo para validar os valores informados na resposta."*
+  — exatamente o que aconteceu.
+- **O juiz bloqueou a entrega:** 240 s sem veredito no Bonsai → UNVALIDATED → o usuário recebeu "Não consegui
+  confirmar se a resposta é sustentada pelos dados obtidos nesta tentativa. Pode pedir de novo?". Efeito gravado.
+
+Pendências que o teste revelou:
+
+1. **Ação antes do julgamento:** o arquivo foi regravado antes de o juiz decidir; o bloqueio impede a resposta, não
+   o efeito colateral já feito. Questão de arquitetura, não de informação — registrar como item próprio.
+2. **Gravador de voo com provedor OpenAI-compatível:** a parte "durante" (primeiro trecho, raciocínio a cada 15 s)
+   só é preenchida pelo leitor do Ollama; no Bonsai ficaram só desfecho e duração.
+3. **Strata 120B não testado:** o Windows bloqueou o motor (`strata.exe`) pelo Controle Inteligente de Aplicativos
+   (Smart App Control). Liberar é decisão do operador (configuração de segurança do sistema).

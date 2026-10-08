@@ -172,7 +172,8 @@ async function main() {
     if (!process.env.RISK_MODEL)     missingInternalModels.push('RISK_MODEL (RiskAnalyzer)');
     if (!process.env.OBSERVER_MODEL) missingInternalModels.push('OBSERVER_MODEL (ObserverValidator)');
     if (missingInternalModels.length > 0) {
-        log.warn(`⚠️  Modelos internos não configurados (usando defaults): ${missingInternalModels.join(', ')}`);
+        // Issue 068: não há padrão embutido — sem escolha, o componente usa o modelo padrão do provedor (o do painel).
+        log.warn(`⚠️  Modelos internos não configurados (usam o modelo padrão do provedor): ${missingInternalModels.join(', ')}`);
         log.warn('   → Configure em: Dashboard → Modelos → Modelos dos Componentes Internos → Salvar & Reiniciar');
     }
 

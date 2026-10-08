@@ -461,7 +461,7 @@ export class ObserverValidator {
         gravarAvaliacao({
             id: avaliacaoId, avaliador: 'validador_qualidade',
             antes: {
-                modelo: this.effectiveModel, versaoPrompt: versaoDoPrompt(OBSERVER_PROMPT), promptChars: reg.prompt.length,
+                modelo: this.effectiveModel || '(padrão do provedor)', versaoPrompt: versaoDoPrompt(OBSERVER_PROMPT), promptChars: reg.prompt.length,
                 fatos: { ferramenta: toolUsed, pedidoChars: userMessage.length, resultadoChars: toolResult.length, respostaChars: finalResponse.length },
                 conteudo: { prompt: reg.prompt, pedido: userMessage, resultadoFerramenta: toolResult, resposta: finalResponse },
             },
@@ -757,7 +757,7 @@ export class ObserverValidator {
                 id: avaliacaoId, avaliador: 'juiz_grounding',
                 contexto: { traceId: traceCtx?.traceId, conversationId: traceCtx?.conversationId, goalId: traceCtx?.goalId, stepId: traceCtx?.stepId, phase: traceCtx?.phase ?? 'initial' },
                 antes: {
-                    modelo: limits?.model ?? this.effectiveModel, versaoPrompt: versaoDoPrompt(GROUNDING_PROMPT), promptChars: promptEnviado.length,
+                    modelo: (limits?.model ?? this.effectiveModel) || '(padrão do provedor)', versaoPrompt: versaoDoPrompt(GROUNDING_PROMPT), promptChars: promptEnviado.length,
                     orcamentoMs: orcamento.timeoutMs,
                     fatos: { responseChars: response.length, evidencias: evidenceFacts, stepDescription: traceCtx?.stepDescription?.split('\n')[0] },
                     conteudo: { prompt: promptEnviado, resposta: response, evidencias: evidences },
