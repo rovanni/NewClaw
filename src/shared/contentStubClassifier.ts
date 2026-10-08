@@ -35,11 +35,12 @@ export interface ContentStubVerdict {
 }
 
 /** Assinatura injetável em sanitizePlanSteps() — mesmo estilo de detectMissingRequiredArgs. */
-export type ContentStubClassifier = (content: string, toolName: string) => Promise<ContentStubVerdict>;
+/** `pedido` (Sprint V4, Informação Completa para Decidir): a pergunta é se o texto responde ao pedido real — sem o pedido, o LLM adivinhava. */
+export type ContentStubClassifier = (content: string, toolName: string, pedido?: string) => Promise<ContentStubVerdict>;
 
 /** Constrói o classificador real a partir de um ProviderFactory já existente (GoalPlanner/RiskAnalyzer). */
 export function makeContentStubClassifier(providerFactory: ProviderFactory): ContentStubClassifier {
-    return async (content: string, toolName: string): Promise<ContentStubVerdict> => {
+    return async (content: string, toolName: string, pedido?: string): Promise<ContentStubVerdict> => {
         if (!content || content.trim().length < 3) {
             return { isStub: true, reason: 'conteúdo vazio ou quase vazio' };
         }
@@ -49,9 +50,16 @@ export function makeContentStubClassifier(providerFactory: ProviderFactory): Con
             '',
             `Ferramenta: ${toolName} (o texto abaixo será entregue DIRETAMENTE ao usuário — como arquivo ou narração de áudio, sem revisão humana).`,
             '',
+            'Pedido do usuário (para saber o que é "responder ao pedido real"):',
+            '"""',
+            pedido?.trim() || '(não informado)',
+            '"""',
+            '',
             'Texto a avaliar:',
             '"""',
-            content.slice(0, 800),
+            // Sprint V4: o texto julgado vai inteiro (antes: 800 chars). O tamanho já é limitado pelo JSON de plano
+            // que o próprio LLM escreveu — não há teto novo a impor.
+            content,
             '"""',
             '',
             'O texto acima é CONTEÚDO REAL, pronto para entrega (mesmo que curto ou simples)?',

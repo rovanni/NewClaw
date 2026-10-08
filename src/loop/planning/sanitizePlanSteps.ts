@@ -162,6 +162,8 @@ export async function sanitizePlanSteps(
     detectMissingRequiredArgs: (tool: string, args: Record<string, unknown>) => string | null,
     classifyContentStub: ContentStubClassifier,
     knownExistingPaths?: Iterable<string>,
+    /** Sprint V4: o pedido do usuário, repassado ao classificador de content-stub. */
+    pedidoDoUsuario?: string,
 ): Promise<SanitizePlanStepsResult> {
     const mutations: StepMutation[] = [];
 
@@ -296,7 +298,7 @@ export async function sanitizePlanSteps(
                 resolvedTool = undefined;
                 toolArgs = undefined;
             } else {
-                const verdict = await classifyContentStub(contentStr, resolvedTool);
+                const verdict = await classifyContentStub(contentStr, resolvedTool, pedidoDoUsuario);
                 if (verdict.isStub) {
                     log.warn(
                         `${logPrefix} step ${i + 1}: '${resolvedTool}.${contentDepSpec.arg}' content stub detectado ` +

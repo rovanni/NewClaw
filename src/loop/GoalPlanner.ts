@@ -897,7 +897,7 @@ export class GoalPlanner {
                 return this.fallbackPlan(goal);
             }
 
-            let parsed = await this.parsePlanResponse(result.content);
+            let parsed = await this.parsePlanResponse(result.content, goal.userIntent);
             if (parsed.steps.length === 0) {
                 log.warn(`[GoalPlanner] plan empty after parse: model=${this.model} raw="${result.content.slice(0, 200)}"`);
                 const retried = await this.retryWithMinimalPrompt(goal, 'plan');
@@ -1002,7 +1002,7 @@ export class GoalPlanner {
                 return this.emergencyFallback(goal, blocker);
             }
 
-            let parsed = await this.parsePlanResponse(result.content);
+            let parsed = await this.parsePlanResponse(result.content, goal.userIntent);
             if (parsed.steps.length === 0) {
                 log.warn(`[GoalPlanner] replan empty after parse: model=${this.model} raw="${result.content.slice(0, 200)}"`);
                 const retried = await this.retryWithMinimalPrompt(goal, 'replan');
@@ -1080,7 +1080,7 @@ export class GoalPlanner {
 
     // ── Parsing ───────────────────────────────────────────────────────────────
 
-    private async parsePlanResponse(content: string): Promise<PlanResult> {
+    private async parsePlanResponse(content: string, pedidoDoUsuario?: string): Promise<PlanResult> {
         try {
             const cleaned = content
                 .replace(/```json\n?/g, '')
@@ -1117,6 +1117,8 @@ export class GoalPlanner {
                 '[GoalPlanner]',
                 detectMissingRequiredArgs,
                 this.classifyContentStub,
+                undefined,
+                pedidoDoUsuario,   // Sprint V4
             );
 
             // Parseia e valida os successCriteria
@@ -1241,7 +1243,7 @@ Regras:
         try {
             const result = await this.callPlannerLLM(messages, 30_000, 'retry-minimal-' + context, goal.id);
             if (result.status !== 'success' || !result.content) return null;
-            const parsed = await this.parsePlanResponse(result.content);
+            const parsed = await this.parsePlanResponse(result.content, goal.userIntent);
             if (parsed.steps.length === 0) {
                 log.warn(`[GoalPlanner] retry_minimal also empty: raw="${result.content.slice(0, 120)}"`);
                 return null;

@@ -928,6 +928,7 @@ OU
                 detectMissingRequiredArgs,
                 this.classifyContentStub,
                 evidenceBackedPaths,
+                goal.userIntent,   // Sprint V4
             );
             const adjustedPlan: PlanStep[] = sanitized.steps;
             if (sink) {
