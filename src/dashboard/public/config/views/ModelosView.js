@@ -2278,7 +2278,8 @@ export function aplicarModeloATudo(modelo, { visao = 'se_o_catalogo_disser' } = 
   const mr = { ...(cs.get('modelRouter') || {}) };
   ['chat', 'code', 'light', 'analysis', 'execution'].forEach(cat => { mr[cat] = valor; mr[`provider_${cat}`] = ''; });
   const doCatalogo = (providersStore.get('catalog') || []).find(m => m.id === valor);
-  const leImagem = visao === 'mesmo_modelo' || !!(doCatalogo?.capabilities || []).includes('vision');
+  // Issue 070: 'nao' = o operador declarou que o modelo não lê imagens — vale mais que o catálogo.
+  const leImagem = visao === 'mesmo_modelo' || (visao !== 'nao' && !!(doCatalogo?.capabilities || []).includes('vision'));
   mr.vision = valor && leImagem ? valor : '';
   mr.provider_vision = '';
   ['classifierModel', 'plannerModel', 'riskModel', 'observerModel'].forEach(k => { mr[k] = valor; });

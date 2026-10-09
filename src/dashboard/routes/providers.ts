@@ -3,6 +3,7 @@ import { errorMessage } from '../../shared/errors';
 import { createLogger } from '../../shared/AppLogger';
 import { DashboardContext } from './types';
 import { OpenAIProvider } from '../../core/OpenAIProvider';
+import { ROTA_DE_MODELOS_AUSENTE } from '../../core/ModelRegistryService';
 import { getLastKnownLocalServer } from '../../core/localRuntimeState';
 import { persistConfigToEnv, logEnvPersistResult } from './config';
 import { interpretOllamaPullFailure, interpretOllamaPullException } from './ollamaPullError';
@@ -135,6 +136,15 @@ export function createProvidersRouter(ctx: DashboardContext): Router {
             log.info(`Provider test OK: ${url} (${models.length} modelos)`);
             res.json({ success: true, online: true, models: models.map(m => m.id) });
         } catch (err) {
+            // Issue 070: o servidor RESPONDEU, só não listou modelos (rota /models ausente, 404/405, ou 503
+            // "Loading model" durante a carga). Está no ar — como no Cline, o Model ID pode ser digitado à mão.
+            const status = (err as { status?: number }).status;
+            // Só "esta rota não existe" (404/405/501) e 503 (carregando) contam como no ar; 401/403 (chave recusada) e
+            // 500 (erro do servidor) o operador precisa ver.
+            if (typeof status === 'number' && (ROTA_DE_MODELOS_AUSENTE.has(status) || status === 503)) {
+                log.info(`Provider test: ${url} respondeu ${status} em /models — no ar, sem lista de modelos`);
+                return res.json({ success: true, online: true, models: [], modelsStatus: status });
+            }
             // 200 com online:false, não 5xx: "o endpoint do usuário não respondeu" é um RESULTADO
             // de teste bem-sucedido, não uma falha do dashboard — a UI precisa da mensagem para
             // exibi-la, e um status de erro faria o wrapper de fetch tratá-la como erro de rota.

@@ -627,7 +627,9 @@ export function mountConfigWizard(container, { cloudProviders, provLabels, local
       const result = await testCustomProvider({ baseUrl: url, apiKey: key || undefined });
       if (destroyed) return;
       if (result.online) {
-        session = { ...session, customLabel: label, evidence: { configOk: true, baseUrl: url, apiKey: key, models: result.models || [] } };
+        // Issue 070: outro servidor, outra lista — o Model ID digitado antes não vale mais.
+        session.draft.customModelId = undefined;
+        session = { ...session, customLabel: label, evidence: { configOk: true, baseUrl: url, apiKey: key, models: result.models || [], modelsStatus: result.modelsStatus } };
       } else {
         session = { ...session, evidence: {} };
         configError = result.error || t('ml_cw_custom_offline_generic');
@@ -643,26 +645,61 @@ export function mountConfigWizard(container, { cloudProviders, provLabels, local
     }
   }
 
+  /**
+   * Issue 070 — como no Cline: o Model ID pode ser DIGITADO (servidores que não listam modelos, ou listam com outro
+   * nome), e o operador declara o raciocínio e se o modelo lê imagens, em vez de o painel adivinhar pelo nome.
+   * A lista descoberta continua sendo atalho: clicar numa linha preenche o campo.
+   */
   function renderCustomModelSelect(el) {
     const models = session.evidence.models || [];
+    // Servidor de modelo único: o campo já vem preenchido com o único modelo que ele anuncia.
+    if (session.draft.customModelId === undefined) {
+      session.draft.customModelId = session.selectedModel?.id ?? (models.length === 1 ? models[0] : '');
+    }
+    session.draft.customThinking ??= '';
+    session.draft.customImages ??= '';
+    const semLista = session.evidence.modelsStatus !== undefined;
     el.innerHTML = `
       <div class="ml-test-title">${t('ml_cw_custom_models_title')}</div>
       <div class="form-hint" style="margin:6px 0 12px;">${t('ml_cw_custom_models_hint')}</div>
-      <div id="ml-cw-customModelList" style="display:flex;flex-direction:column;gap:4px;max-height:280px;overflow-y:auto;"></div>
-      ${models.length === 0 ? `<div class="form-hint" style="margin-top:8px;">${t('ml_cw_custom_models_empty')}</div>` : ''}`;
+      <div id="ml-cw-customModelList" style="display:flex;flex-direction:column;gap:4px;max-height:220px;overflow-y:auto;"></div>
+      ${models.length === 0 ? `<div class="form-hint" style="margin-top:8px;">${semLista ? t('ml_cw_custom_models_unlisted', { status: session.evidence.modelsStatus }) : t('ml_cw_custom_models_empty')}</div>` : ''}
+      <div class="form-group" style="margin-top:10px;">
+        <label class="form-label" for="ml-cw-customModelId">${t('ml_cw_custom_model_id_label')}</label>
+        <input type="text" class="form-input" id="ml-cw-customModelId" value="${esc(session.draft.customModelId)}" placeholder="${t('ml_cw_custom_model_id_placeholder')}">
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="ml-cw-customThinking" title="${t('ml_provider_thinking_hint')}">${t('ml_provider_thinking_label')}</label>
+        <select class="form-input" id="ml-cw-customThinking" title="${t('ml_provider_thinking_hint')}">
+          <option value="" ${session.draft.customThinking === '' ? 'selected' : ''}>${t('ml_provider_thinking_default')}</option>
+          <option value="off" ${session.draft.customThinking === 'off' ? 'selected' : ''}>${t('ml_provider_thinking_off')}</option>
+          <option value="on" ${session.draft.customThinking === 'on' ? 'selected' : ''}>${t('ml_provider_thinking_on')}</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="ml-cw-customImages">${t('ml_cw_custom_images_label')}</label>
+        <select class="form-input" id="ml-cw-customImages">
+          <option value="" ${session.draft.customImages === '' ? 'selected' : ''}>${t('ml_cw_custom_images_auto')}</option>
+          <option value="sim" ${session.draft.customImages === 'sim' ? 'selected' : ''}>${t('ml_cw_custom_images_yes')}</option>
+          <option value="nao" ${session.draft.customImages === 'nao' ? 'selected' : ''}>${t('ml_cw_custom_images_no')}</option>
+        </select>
+      </div>`;
     const list = document.getElementById('ml-cw-customModelList');
     models.forEach(id => {
       const row = document.createElement('button');
       row.type = 'button';
-      row.className = `btn btn-sm ${session.selectedModel?.id === id ? 'btn-primary' : 'btn-ghost'}`;
+      row.className = `btn btn-sm ${session.draft.customModelId === id ? 'btn-primary' : 'btn-ghost'}`;
       row.style.cssText = 'justify-content:flex-start;text-align:left;';
       row.textContent = id;
       row.addEventListener('click', () => {
-        session = { ...session, selectedModel: { id, provider: session.customLabel } };
+        session.draft.customModelId = id;
         render();
       });
       list.appendChild(row);
     });
+    bindDraft('ml-cw-customModelId', 'customModelId');
+    document.getElementById('ml-cw-customThinking')?.addEventListener('change', e => { session.draft.customThinking = e.target.value; });
+    document.getElementById('ml-cw-customImages')?.addEventListener('change', e => { session.draft.customImages = e.target.value; });
   }
 
   async function confirmCustomEntry() {
@@ -678,10 +715,14 @@ export function mountConfigWizard(container, { cloudProviders, provLabels, local
       // 2026-08-23: ler da loja errada fazia a checagem nunca encontrar nada, e reconfigurar o
       // mesmo provider sempre tentava ADD de novo, batendo em 400 "já existe".
       const existing = (configStore.get('customProviders') || []).find(p => p.label === session.customLabel);
+      // Issue 070: o Model ID vem do campo (digitado ou preenchido pela lista), como no Cline.
+      const modelo = (session.draft.customModelId ?? '').trim();
+      session = { ...session, selectedModel: modelo ? { id: modelo, provider: session.customLabel } : undefined };
       const payload = {
         baseUrl: session.evidence.baseUrl,
         apiKey: session.evidence.apiKey || undefined,
-        model: session.selectedModel?.id,
+        model: modelo || undefined,
+        thinking: session.draft.customThinking || '',
       };
       if (existing) {
         await editCustomProvider(session.customLabel, payload);
@@ -704,7 +745,9 @@ export function mountConfigWizard(container, { cloudProviders, provLabels, local
       // nomes de outro provider presos em categorias que agora apontam pra este.
       applyDefaultProviderChange(session.customLabel);
       // Issue 071: a escolha vale para tudo; sem modelo escolhido, tudo herda o modelo padrão do provedor.
-      aplicarModeloATudo(session.selectedModel?.id || '');
+      // Imagens: declarado pelo operador (sim/não) ou, em "automático", o que o catálogo souber do modelo.
+      const visao = { sim: 'mesmo_modelo', nao: 'nao' }[session.draft.customImages] || 'se_o_catalogo_disser';
+      aplicarModeloATudo(modelo, { visao });
       await doSave();
       if (destroyed) return;
       await loadProviders(true);

@@ -5,6 +5,9 @@ import { createLogger } from '../shared/AppLogger';
 import { errorMessage } from '../shared/errors';
 import { guessCapabilities } from './modelCapabilityHeuristics';
 
+/** Issue 070: respostas de /models que significam "o servidor está no ar, só não tem esta rota". */
+export const ROTA_DE_MODELOS_AUSENTE = new Set([404, 405, 501]);
+
 const log = createLogger('ModelRegistryService');
 
 /** Os 5 provedores nativos de nuvem por API key — validados por `discoverModels()` da mesma forma
@@ -138,6 +141,18 @@ export class ModelRegistryService {
                 results.push(...models);
                 health.push({ provider: custom.label, baseUrl: custom.baseUrl, online: true, modelCount: models.length });
             } catch (err) {
+                // Issue 070: o servidor RESPONDEU, só não lista modelos (rota /models ausente ou com outro formato) —
+                // como no Cline, vale o Model ID que o operador declarou. Só 404/405/501 ("esta rota não existe"): 401/403
+                // (chave recusada), 500 (erro do servidor) e 503 (carregando) são estados que a tela precisa mostrar.
+                const status = (err as { status?: number }).status;
+                if (typeof status === 'number' && ROTA_DE_MODELOS_AUSENTE.has(status)) {
+                    log.info(`${custom.label}: servidor no ar sem lista de modelos (/models ${status}) — usando o modelo declarado${custom.model ? ` (${custom.model})` : ''}`);
+                    if (custom.model) {
+                        results.push({ id: custom.model, provider: custom.label, label: custom.model, capabilities: guessCapabilities(custom.model), status: 'available' });
+                    }
+                    health.push({ provider: custom.label, baseUrl: custom.baseUrl, online: true, modelCount: custom.model ? 1 : 0 });
+                    continue;
+                }
                 // 503 = servidor no ar, modelo ainda carregando. Não é falha: registrar como tal
                 // encheria o log de "discovery failed" durante toda a carga (foi o que aconteceu
                 // em 02/08/2026 — dezenas de linhas idênticas enquanto o modelo subia) e faria a
