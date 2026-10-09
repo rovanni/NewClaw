@@ -235,6 +235,9 @@ export class GoalOrchestrator {
             (Date.now() - recentGoal.completedAt) < RECENT_GOAL_TTL_MS;
 
         let classifyMessages = recentMessages;
+        // Fatos de apoio (goal recente, preferências) — o GoalExtractor os lê como mensagens marcadas; o roteador NÃO: para ele
+        // são contexto de apoio rotulado (RouterContext.contextoDeApoio), nunca voltas do assistente.
+        const apoioDoRoteador: string[] = [];
         if (isWithinFollowUpWindow && recentGoal) {
             const elapsedSec = Math.round((Date.now() - recentGoal.completedAt) / 1000);
             // Sugestão 3: injeta o output anterior no contexto do GoalExtractor LLM.
@@ -247,6 +250,7 @@ export class GoalOrchestrator {
                 content: `[${elapsedSec}s atrás — goal concluído: "${recentGoal.intent.slice(0, 200)}" — sucesso: ${recentGoal.success}${outputSnippet}]`,
             };
             classifyMessages = [followUpContext, ...(recentMessages ?? [])];
+            apoioDoRoteador.push(followUpContext.content);
             log.info(`[GoalOrchestrator] recent goal context injected for classification (${elapsedSec}s ago): "${recentGoal.intent.slice(0, 80)}"`);
         }
 
@@ -270,6 +274,7 @@ export class GoalOrchestrator {
                 preferencias.map(p => ({ nome: p.name, texto: p.content })), ContextBuilder.MAX_MEMORY_CHARS_COMPLETO);
             if (bloco) {
                 classifyMessages = [{ role: 'assistant', content: bloco }, ...(classifyMessages ?? [])];
+                apoioDoRoteador.unshift(bloco);
                 log.info(`[GoalOrchestrator] preference memory injected for classification: ${preferencias.length} node(s)`);
             }
         } catch (err) {
@@ -311,7 +316,8 @@ export class GoalOrchestrator {
         try {
             const routerDecision = await this.agentLoop.getIntentRouter().route(message, {
                 sessionId: sessionKey,
-                recentMessages: classifyMessages,
+                recentMessages,
+                contextoDeApoio: apoioDoRoteador,
             });
             routerRequiresGoal = routerDecision.requiresPlanning;
             routerRequiresTools = routerDecision.requiresTools;

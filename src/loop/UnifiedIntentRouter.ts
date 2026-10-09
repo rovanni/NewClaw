@@ -268,6 +268,21 @@ export interface RouterContext {
      * (não pode chamar LLM de forma síncrona).
      */
     recentMessages?: RecentTurn[];
+    /**
+     * Fatos do sistema que ajudam a interpretar a mensagem atual (preferências salvas do usuário, goal recém-concluído).
+     * NÃO são turnos da conversa: vão no prompt como contexto de apoio rotulado, nunca em `recentMessages` — um fato
+     * disfarçado de volta do assistente vira "a última resposta real do assistente" e o modelo local o repete em vez de
+     * classificar (achado real, 09/10/2026: primeira mensagem da sessão, resposta começando em "[PREFERÊNCIAS…", JSON
+     * inválido, fallback por palavras e categoria errada — 15 s perdidos).
+     */
+    contextoDeApoio?: string[];
+}
+
+/** Contexto de apoio como bloco rotulado do prompt do classificador ('' quando não há). Íntegro — nunca cortado. */
+function blocoDeApoio(context?: RouterContext): string {
+    const itens = (context?.contextoDeApoio ?? []).filter(t => t.trim().length > 0);
+    if (itens.length === 0) return '';
+    return `\nContexto de apoio (fatos do sistema — NÃO são mensagens da conversa; use só para interpretar a mensagem atual):\n"""\n${itens.join('\n\n')}\n"""\n`;
 }
 
 /**
@@ -362,12 +377,13 @@ If the request represents a narrow, specific, potentially recurring capability t
 
     const recentMessages = resolveClassificationWindow(input, context);
     const lastAssistantMessage = extractLastAssistantMessage(recentMessages);
+    const apoio = blocoDeApoio(context);
 
     if (recentMessages.length === 0) {
         // Sem histórico disponível (primeira mensagem da sessão, ou sessão sem turnos recentes) —
         // comportamento idêntico ao original: classifica a mensagem isolada.
         return [
-            { role: 'system', content: `You are an intent classifier. Classify the user message into exactly one category.\n\n${baseCategories}\n${toolBridge}\n${topicSlugBridge}\n\nRespond with ONLY valid JSON, no other text:\n${jsonSchema}` },
+            { role: 'system', content: `You are an intent classifier. Classify the user message into exactly one category.\n\n${baseCategories}\n${toolBridge}\n${topicSlugBridge}\n${apoio}\nRespond with ONLY valid JSON, no other text:\n${jsonSchema}` },
             { role: 'user', content: input },
         ];
     }
@@ -378,7 +394,7 @@ ${baseCategories}
 ${toolBridge}
 ${topicSlugBridge}
 
-${lastAssistantMessage ? `A última resposta real do assistente nesta conversa foi:\n"""${lastAssistantMessage.slice(0, 500)}"""\n` : ''}
+${lastAssistantMessage ? `A última resposta real do assistente nesta conversa foi:\n"""${lastAssistantMessage.slice(0, 500)}"""\n` : ''}${apoio}
 Respond with ONLY valid JSON, no other text:
 ${jsonSchema}`;
 
@@ -839,9 +855,10 @@ export class UnifiedIntentRouter {
     private buildCacheKey(input: string, context?: RouterContext): string {
         const normalized = input.trim().toLowerCase();
         const window = resolveClassificationWindow(input, context);
-        if (window.length === 0) return normalized;
+        const apoio = blocoDeApoio(context);
+        if (window.length === 0 && !apoio) return normalized;
         const windowFingerprint = window.map(m => `${m.role}:${m.content}`).join('');
-        return `${normalized}::ctx:${context?.sessionId ?? 'unknown'}:${this.hashInput(windowFingerprint)}`;
+        return `${normalized}::ctx:${context?.sessionId ?? 'unknown'}:${this.hashInput(windowFingerprint + apoio)}`;
     }
 
     private purgeCache(): void {

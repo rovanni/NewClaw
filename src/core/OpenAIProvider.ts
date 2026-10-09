@@ -122,6 +122,33 @@ export function normalizeSystemMessages(messages: LLMMessage[]): LLMMessage[] {
     return out;
 }
 
+/**
+ * Tradução de uma mensagem do formato interno para o corpo da API OpenAI-compatível.
+ *
+ * O formato interno guarda as chamadas de ferramenta de uma volta do assistente em `toolCalls`; a API só
+ * entende `tool_calls` (`{ id, type: 'function', function: { name, arguments: <JSON em texto> } }`). Com o
+ * `toolCalls` seguindo adiante cru, o servidor o ignora: a volta do assistente chega sem nenhuma chamada,
+ * só com o texto que o modelo escreveu junto, e a mensagem `tool` seguinte fica órfã (sem a chamada a que
+ * responde). Achado real (09/10/2026, passo 3 de "salve essas informações na memória"): no passo 2 o modelo
+ * devolveu a chamada de `memory_admin` MAIS o texto "[Tool call: memory_admin]"; o histórico reenviado só
+ * trazia esse texto como volta do assistente, e no passo 3 o modelo o repetiu sem chamar nada — o loop
+ * entregou "[Tool call: memory_admin]" ao usuário e nada foi salvo.
+ *
+ * Tradução de formato, não de conteúdo (ARCHITECTURE.md, princípio 7). O Ollama não passa por aqui.
+ */
+export function toOpenAIMessage(m: LLMMessage): Record<string, unknown> {
+    const { toolCalls, images: _images, ...resto } = m;
+    const corpo: Record<string, unknown> = { ...resto, content: toOpenAIContent(m) };
+    if (m.role === 'assistant' && toolCalls && toolCalls.length > 0) {
+        corpo.tool_calls = toolCalls.map(tc => ({
+            id: tc.id,
+            type: 'function',
+            function: { name: tc.name, arguments: JSON.stringify(tc.arguments ?? {}) },
+        }));
+    }
+    return corpo;
+}
+
 /** Assinatura dos primeiros bytes em base64. Sem dependência externa e sem chute por extensão. */
 function sniffImageMime(b64: string): string {
     if (b64.startsWith('/9j/')) return 'image/jpeg';
@@ -233,7 +260,7 @@ export class OpenAIProvider implements ILLMProvider {
                         // Imagem viaja dentro de `content` (ver toOpenAIContent) — um campo
                         // `images` solto seria ignorado pelo servidor, e a visão responderia
                         // sobre uma imagem que nunca chegou.
-                        messages: normalizeSystemMessages(messages).map(m => ({ ...m, images: undefined, content: toOpenAIContent(m) })),
+                        messages: normalizeSystemMessages(messages).map(toOpenAIMessage),
                         tools: tools ? tools.map(t => ({
                             type: 'function',
                             function: { name: t.name, description: t.description, parameters: t.parameters }
