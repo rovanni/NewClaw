@@ -349,6 +349,16 @@ export class ProviderFactory {
         const RETRY_BACKOFF_MS = 10000 + Math.floor(Math.random() * 3000);
         const requestId = `req-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
         const startTime = Date.now();
+        // Campanha 09/10/2026: `timeoutMs` é o prazo de QUEM CHAMOU, para a chamada inteira — não por tentativa. Antes,
+        // cada tentativa (nova tentativa, reserva, refação sem streaming) recebia o prazo cheio de novo: o juiz com
+        // orçamento de 46 s esperou 2 × 240 s (08/10, servidor local) e 3 tentativas somaram 763 s (07/10). Agora a
+        // reserva continua valendo quando a primeira falha CEDO (conexão recusada), e não começa depois que o prazo
+        // acabou. O piso de raciocínio (issue 047) entra aqui, uma vez, no prazo total.
+        const prazoTotalMs = (opts?.reasoningIntensive && timeoutMs)
+            ? Math.max(timeoutMs, REASONING_INTENSIVE_TIMEOUT_FLOOR_MS)
+            : timeoutMs;
+        const prazoFinal = prazoTotalMs ? startTime + prazoTotalMs : undefined;
+        const restanteDoPrazo = (): number | undefined => prazoFinal === undefined ? undefined : prazoFinal - Date.now();
 
         let activeAbortController: AbortController | null = null;
 
@@ -396,10 +406,18 @@ export class ProviderFactory {
         // configurado — que é justamente o sentido de existir um fallback.
         const modelOverrideOwner = preferredProvider || this.defaultProvider;
 
-        for (const providerName of activeProviders) {
+        cadeia: for (const providerName of activeProviders) {
             for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
                 const attemptId = `${requestId}-${providerName}-${attempt}`;
                 const attemptStart = Date.now();
+
+                // Prazo de quem chamou já acabou: nenhuma tentativa nova começa (nem neste provider, nem na reserva).
+                const restanteAntes = restanteDoPrazo();
+                if (restanteAntes !== undefined && restanteAntes <= 0) {
+                    prazoEsgotado = true;
+                    log.info(`[${requestId}] Prazo de quem chamou esgotado (${prazoTotalMs}ms) — '${providerName}' não tentado`);
+                    break cadeia;
+                }
 
                 if (externalSignal?.aborted) {
                     if (activeAbortController) { activeAbortController.abort(); activeAbortController = null; }
@@ -440,6 +458,13 @@ export class ProviderFactory {
                     attemptModel = modelUsed;
 
                     if (attempt > 0) {
+                        const restanteNaEspera = restanteDoPrazo();
+                        if (restanteNaEspera !== undefined && restanteNaEspera <= RETRY_BACKOFF_MS) {
+                            log.info(`[${attemptId}] Retry não cabe no prazo de quem chamou (restam ${restanteNaEspera}ms, espera ${RETRY_BACKOFF_MS}ms)`);
+                            activeAbortController = null;
+                            if (onExternalAbort) externalSignal!.removeEventListener('abort', onExternalAbort);
+                            break;
+                        }
                         log.info(`[${attemptId}] Retry ${attempt}/${MAX_RETRIES} after ${RETRY_BACKOFF_MS}ms backoff`);
                         await new Promise(r => setTimeout(r, RETRY_BACKOFF_MS));
                         if (externalSignal?.aborted) {
@@ -472,7 +497,10 @@ export class ProviderFactory {
                         tentativaTele = { provider: providerName, model: modelUsed, startedAt: new Date().toISOString(), raciocinio: opts?.raciocinio };
                         opts.telemetry.attempts.push(tentativaTele);
                     }
-                    const chatOptions: ChatOptions = { signal: currentAbort.signal, timeoutMs, reasoningIntensive: opts?.reasoningIntensive, telemetry: tentativaTele, raciocinio: opts?.raciocinio };
+                    // O que sobra do prazo de quem chamou (na primeira tentativa, o próprio `timeoutMs`).
+                    const restanteDaTentativa = restanteDoPrazo();
+                    const timeoutDaTentativa = (timeoutMs && restanteDaTentativa !== undefined) ? Math.min(timeoutMs, Math.max(1, restanteDaTentativa)) : timeoutMs;
+                    const chatOptions: ChatOptions = { signal: currentAbort.signal, timeoutMs: timeoutDaTentativa, reasoningIntensive: opts?.reasoningIntensive, telemetry: tentativaTele, raciocinio: opts?.raciocinio };
                     const chatPromise = provider.chat(mensagensDoProvider, tools, chatOptions);
                     let result: LLMResponse;
 
@@ -483,9 +511,7 @@ export class ProviderFactory {
                     // corretamente elevado pela issue 038 (240s) ter qualquer chance de agir.
                     // Reproduzido ao vivo: `[STREAM] maxTimeout=240000ms` seguido de
                     // `[STREAM] ABORTED ... duration=65619ms` — abortado por fora, não por dentro.
-                    const effectiveTimeoutMs = (opts?.reasoningIntensive && timeoutMs)
-                        ? Math.max(timeoutMs, REASONING_INTENSIVE_TIMEOUT_FLOOR_MS)
-                        : timeoutMs;
+                    const effectiveTimeoutMs = restanteDaTentativa !== undefined ? Math.max(1, restanteDaTentativa) : prazoTotalMs;
 
                     if (effectiveTimeoutMs) {
                         const attemptTimeout = setTimeout(() => { prazoDaTentativaEsgotado = true; currentAbort.abort(); }, effectiveTimeoutMs);
@@ -676,9 +702,9 @@ export class ProviderFactory {
                     // "thinking" interno próprio), mas o timeoutMs passado por fora precisa do mesmo
                     // piso, ou uma chamada pesada que só chegou até aqui por já ter estourado o
                     // streaming abortaria de novo, cedo demais, na última tentativa.
-                    const effectiveNonStreamingTimeoutMs = (opts?.reasoningIntensive && timeoutMs)
-                        ? Math.max(timeoutMs, REASONING_INTENSIVE_TIMEOUT_FLOOR_MS)
-                        : timeoutMs;
+                    // Campanha 09/10: e só o que sobra do prazo total de quem chamou.
+                    const restanteNaoStreaming = restanteDoPrazo();
+                    const effectiveNonStreamingTimeoutMs = restanteNaoStreaming !== undefined ? Math.max(1, restanteNaoStreaming) : prazoTotalMs;
                     const teleNaoStreaming: AttemptTelemetry | undefined = opts?.telemetry
                         ? { provider: 'ollama', model: `${ollamaProvider.getModel()} (sem streaming)`, startedAt: new Date().toISOString() } : undefined;
                     if (teleNaoStreaming) opts!.telemetry!.attempts.push(teleNaoStreaming);

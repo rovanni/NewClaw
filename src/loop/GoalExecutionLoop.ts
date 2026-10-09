@@ -21,6 +21,8 @@ import * as path from 'path';
 import * as crypto from 'crypto';
 import { createLogger } from '../shared/AppLogger';
 import { gravarEfeito } from '../shared/evaluatorFlightRecorder';
+import { limiteComum } from '../shared/orcamentoDeTexto';
+import { DECISION_PROMPT_MAX_CHARS } from '../core/providerTypes';
 import { buildHostAppContextBlock, hostContextMode, appendHostBlock } from '../shared/hostAppContext';
 import { AgentLoop } from './AgentLoop';
 import { traceManager } from '../core/ExecutionTrace';
@@ -125,6 +127,18 @@ interface GoalExecutionState {
     /** RFC-008 (HOST_CONTEXT=on): fatos do aplicativo hospedeiro, anexados ao contexto de TODA chamada
      * ao Planner desta execução (plano inicial, replan, próximo marco). '' = canal comum ou modo != on. */
     hostBlock?: string;
+    /**
+     * Campanha 09/10/2026: a saída COMPLETA de cada passo desta execução, por `${planGeneration}:${stepId}`. O
+     * registro do goal guarda só um trecho (ATTEMPT_OUTPUT_EVIDENCE_LIMIT) para não crescer sem limite; quem
+     * precisa do resultado inteiro de um passo anterior (a etapa do agente que consolida, o juiz) lê daqui. Vive
+     * só durante a execução — num goal retomado após reinício, vale o trecho guardado, com o corte declarado.
+     */
+    saidasCompletas?: Map<string, string>;
+}
+
+/** Chave de `GoalExecutionState.saidasCompletas`. */
+function chaveDaSaida(planGeneration: number | undefined, stepId: string): string {
+    return `${planGeneration ?? 0}:${stepId}`;
 }
 
 /**
@@ -786,6 +800,7 @@ export class GoalExecutionLoop {
             cognitiveContext: createEmptyStepCognitiveContext(),
             progressModel: this.buildInitialProgressModel(goal),
             hostBlock: hostContextMode() === 'on' ? buildHostAppContextBlock(channelContext.metadata) : '',
+            saidasCompletas: new Map(),
         };
 
         try {
@@ -2276,6 +2291,7 @@ export class GoalExecutionLoop {
 
             if (step.toolName) {
                 const { toolResult, stepMutations } = await this.dispatchToolStep(goal, step, step.toolName, channelContext, isAudioAlreadySent);
+                if (toolResult.success && toolResult.output) state.saidasCompletas?.set(chaveDaSaida(goal.planGeneration, step.id), toolResult.output);
                 // Sprint 0.8: caminho de tool direta é determinístico, sem heurística — sempre confiável.
                 return this.finalizeStepAttempt(goal, step, channelContext, cycle, startMs, toolResult, {
                     stepMutations,
@@ -2295,6 +2311,9 @@ export class GoalExecutionLoop {
                 deferredSendArgsMap, deferredSendArgs, onArtifactDelivered, isAudioAlreadySent,
             );
             if (agentloopResult.earlyReturn) return agentloopResult.cycleResult;
+            if (agentloopResult.toolResult.success && agentloopResult.toolResult.output) {
+                state.saidasCompletas?.set(chaveDaSaida(goal.planGeneration, step.id), agentloopResult.toolResult.output);
+            }
 
             return this.finalizeStepAttempt(goal, step, channelContext, cycle, startMs, agentloopResult.toolResult, {
                 stepEvalForAttempt: agentloopResult.stepEvalForAttempt,
@@ -2627,7 +2646,7 @@ export class GoalExecutionLoop {
             ? `\n\n[REGRA DE EXECUÇÃO] Esta tarefa exige ação observável com dados reais. Chame obrigatoriamente uma ferramenta (list_workspace, read, exec_command, send_document, etc.) antes de responder. Não descreva o resultado sem executar a ferramenta que o produz.`
             : '';
 
-        const stepPrompt = [
+        const stepPromptSemResultados = [
             `[GOAL STEP] ${this.sanitizeStepDescription(step.description)}`,
             `\nContexto do objetivo: ${goal.objective}`,
             focusLine,
@@ -2635,6 +2654,11 @@ export class GoalExecutionLoop {
             evidenceDirective,
             cognitiveBlock ? `\n${cognitiveBlock}` : '',
         ].join('');
+        // Campanha 09/10/2026: os resultados INTEIROS dos passos anteriores e os passos que ainda virão. Antes, esta
+        // etapa via 150–200 chars de cada resultado e refazia as consultas (goal de 08/10: "Top 10 losers" 2×,
+        // Bitcoin de novo, memória gravada aqui e de novo no passo seguinte do plano).
+        const secaoDoPlano = GoalExecutionLoop.secaoDoPlanoParaEtapa(goal, step, state, DECISION_PROMPT_MAX_CHARS - stepPromptSemResultados.length);
+        const stepPrompt = stepPromptSemResultados + secaoDoPlano;
         const { channel: goalCh, userId: sessionUserId } = parseSessionKey(goal.sessionKey);
         const stepSessionKey = { channel: goalCh || 'unknown', userId: sessionUserId || goal.conversationId };
         this.sessionManager?.resetTurnToolCounts(stepSessionKey);
@@ -2652,7 +2676,8 @@ export class GoalExecutionLoop {
                     id: '',
                     tool: a.toolName,
                     input: (() => { try { return JSON.stringify(a.args ?? {}); } catch { return undefined; } })(),
-                    output: a.output ?? '',
+                    // Campanha 09/10/2026: a saída inteira desta execução, quando existe (o registro guarda só um trecho).
+                    output: state.saidasCompletas?.get(chaveDaSaida(a.planGeneration, a.planStepId)) ?? a.output ?? '',
                 })),
             // Issue 065e: o CONTEÚDO ATUAL dos arquivos que etapas anteriores produziram. A saída de um attempt é
             // guardada cortada, e um arquivo gravado dentro de uma etapa do agente só deixa o caminho
@@ -3260,6 +3285,60 @@ export class GoalExecutionLoop {
      *   goal.strategiesTried      → failedStrategies
      *   attempt.discoveries       → discoveries (ProactiveRecovery + step)
      */
+    /**
+     * Campanha 09/10/2026 — o que a etapa do agente precisa saber do plano: os RESULTADOS INTEIROS dos passos já
+     * feitos (mesma fonte que o juiz recebe) e os passos que ainda virão (para não antecipá-los).
+     *
+     * Princípio Informação Completa para Decidir: o dado que a etapa vai consolidar não é cortado por número fixo.
+     * Se tudo não couber em `orcamentoChars`, a divisão é a de shared/orcamentoDeTexto (a mesma do juiz) e o corte
+     * fica declarado no texto. Num goal retomado após reinício, só o trecho guardado existe — também declarado.
+     */
+    static secaoDoPlanoParaEtapa(goal: Goal, currentStep: PlanStep, state: GoalExecutionState, orcamentoChars: number): string {
+        const geracao = goal.planGeneration ?? 0;
+        // Último attempt com resultado de cada passo desta geração do plano (sem o passo atual).
+        const porPasso = new Map<string, GoalAttempt>();
+        for (const a of goal.attempts) {
+            if ((a.planGeneration ?? 0) !== geracao || a.planStepId === currentStep.id) continue;
+            if ((a.result === 'success' || a.result === 'partial') && a.output) porPasso.set(a.planStepId, a);
+        }
+        const feitos = goal.currentPlan
+            .filter(s => porPasso.has(s.id))
+            .map(s => {
+                const a = porPasso.get(s.id)!;
+                const completa = state.saidasCompletas?.get(chaveDaSaida(geracao, s.id));
+                return { passo: s, attempt: a, texto: completa ?? a.output ?? '', soTrecho: completa === undefined };
+            });
+        const idxAtual = goal.currentPlan.findIndex(s => s.id === currentStep.id);
+        const seguintes = goal.currentPlan.filter((s, i) => i > idxAtual && s.status !== 'completed');
+        if (feitos.length === 0 && seguintes.length === 0) return '';
+
+        const CABECALHO_POR_ITEM = 220;
+        const limite = limiteComum(feitos.map(f => f.texto.length), orcamentoChars - feitos.length * CABECALHO_POR_ITEM - 600);
+        const linhas: string[] = [];
+        if (feitos.length > 0) {
+            linhas.push('\n\n[RESULTADOS DOS PASSOS ANTERIORES DESTE OBJETIVO — dados já obtidos; use-os e só busque de novo o que faltar]');
+            for (const f of feitos) {
+                let args = '';
+                try { args = JSON.stringify(f.attempt.args ?? {}); } catch { /* sem args */ }
+                const cortado = f.texto.length > limite;
+                const corpo = cortado ? f.texto.slice(0, limite) : f.texto;
+                const notas = [
+                    f.attempt.result === 'partial' ? 'resultado não confirmado' : '',
+                    f.soTrecho ? 'só o trecho guardado no registro do objetivo — o resultado completo não está mais disponível' : '',
+                    cortado ? `cortado para caber: mostrando ${limite} de ${f.texto.length} caracteres` : '',
+                ].filter(Boolean);
+                linhas.push(`\n--- ${f.passo.id} · ${f.passo.toolName ?? 'agentloop'}${args && args !== '{}' ? ` ${args}` : ''} — ${f.passo.description}${notas.length ? ` [${notas.join('; ')}]` : ''}`);
+                linhas.push(corpo);
+            }
+            linhas.push('\n[FIM DOS RESULTADOS ANTERIORES]');
+        }
+        if (seguintes.length > 0) {
+            linhas.push('\n[PRÓXIMOS PASSOS DO PLANO — serão executados depois desta etapa; não os faça agora]');
+            for (const s of seguintes) linhas.push(`  • ${s.id} · ${s.toolName ?? 'agentloop'} — ${s.description}`);
+        }
+        return linhas.join('\n');
+    }
+
     private buildIncrementalExecutionContext(goal: Goal, currentStep: PlanStep, state: GoalExecutionState): string {
         const attempts = goal.attempts;
 
@@ -3269,7 +3348,6 @@ export class GoalExecutionLoop {
         const filesModified: string[] = [];
         const generatedArtifacts: string[] = [];
         const executedCommands: string[] = [];
-        const importantOutputs: string[] = [];
         const discoveries: string[] = [];
 
         const seenPaths = new Set<string>();
@@ -3308,11 +3386,6 @@ export class GoalExecutionLoop {
                 }
             }
 
-            // Outputs relevantes de attempts recentes bem-sucedidos
-            if (attempt.output && attempt.output.length > 30) {
-                importantOutputs.push(attempt.output.slice(0, 200).replace(/\n+/g, ' '));
-            }
-
             // Descobertas anotadas explicitamente (campo novo do GoalAttempt)
             if (attempt.discoveries?.length) {
                 for (const d of attempt.discoveries) {
@@ -3322,10 +3395,7 @@ export class GoalExecutionLoop {
         }
 
         // ── Montar bloco de contexto ──────────────────────────────────────────
-        const completedSteps = goal.currentPlan
-            .filter(s => s.status === 'completed' && s.result && s.id !== currentStep.id)
-            .slice(-3);
-
+        // Passos concluídos e seus resultados: ver secaoDoPlanoParaEtapa (fonte única, resultados inteiros).
         const lines: string[] = ['[CONTEXTO COGNITIVO — leia antes de executar]'];
 
         if (goal.isConstruction && goal.roadmap && goal.roadmap.length > 0) {
@@ -3341,13 +3411,6 @@ export class GoalExecutionLoop {
 
         if (goal.cycleFocus) {
             lines.push(`\nFoco do ciclo atual: ${goal.cycleFocus}`);
-        }
-
-        if (completedSteps.length > 0) {
-            lines.push('\nSteps já executados:');
-            for (const s of completedSteps) {
-                lines.push(`  ✓ ${s.description}: ${(s.result ?? '').slice(0, 150)}`);
-            }
         }
 
         // D: GoalProgressModel — visão dimensional do progresso para o AgentLoop
@@ -3425,13 +3488,6 @@ export class GoalExecutionLoop {
             lines.push('\nEstratégias que falharam (NÃO repetir):');
             for (const f of goal.strategiesTried.slice(-4)) {
                 lines.push(`  ✗ ${f}`);
-            }
-        }
-
-        if (importantOutputs.length > 0) {
-            lines.push('\nOutputs relevantes dos steps anteriores:');
-            for (const o of importantOutputs.slice(-3)) {
-                lines.push(`  → ${o}`);
             }
         }
 
@@ -4425,6 +4481,22 @@ OU
             // Se o LLM afirma achieved=true com claims observáveis ("foi apresentado",
             // "foi enviado", etc.), verifica se existe attempt correspondente em goal.attempts.
             // Funciona para qualquer tool — não hardcoded para casos específicos.
+            // Campanha 09/10/2026 — fato ESTRUTURAL no lugar da regex "foi criado/gerado" (removida, ver
+            // checkClaimsAgainstEvidence): o plano previu gravar um arquivo (passo `write`) e nenhuma gravação
+            // bem-sucedida existe — nem direta, nem dentro de uma etapa do agente. Pergunta objetiva (houve ou não um
+            // attempt de write), não leitura da prosa do validador.
+            if (parsed.achieved) {
+                const gravacaoFaltando = GoalExecutionLoop.gravacaoPrevistaSemEvidencia(goal);
+                if (gravacaoFaltando) {
+                    log.warn(`[PLANNED-WRITE-MISSING] goal=${goal.id} step=${gravacaoFaltando.id} llm_said=achieved_true decision=override_to_false`);
+                    return {
+                        achieved: false,
+                        reason: `O plano previu gravar um arquivo ("${gravacaoFaltando.description.slice(0, 120)}"), mas nenhuma gravação foi executada com sucesso.`,
+                        suggestions: ['Execute a gravação prevista (write) antes de concluir'],
+                    };
+                }
+            }
+
             if (parsed.achieved) {
                 const evidenceCheck = this.checkClaimsAgainstEvidence(
                     goal,
@@ -4491,6 +4563,22 @@ OU
      * Não usa regras hardcoded para ferramentas específicas — o mapeamento é baseado
      * em categorias de ação (apresentação, entrega, exportação, criação, organização).
      */
+    /**
+     * Campanha 09/10/2026 — o passo `write` do plano atual que não tem NENHUMA gravação bem-sucedida como evidência
+     * (attempt `write` direto, ou `write` dentro de uma etapa do agente — subToolCalls/subToolWrites). `null` quando
+     * o plano não prevê gravação ou ela aconteceu. Estrutural: só olha attempts, nunca texto.
+     */
+    static gravacaoPrevistaSemEvidencia(goal: Goal): PlanStep | null {
+        const passoDeGravacao = goal.currentPlan.find(s => s.toolName === 'write');
+        if (!passoDeGravacao) return null;
+        const houveGravacao = goal.attempts.some(a => a.result === 'success' && (
+            a.toolName === 'write'
+            || (a.subToolCalls ?? []).includes('write')
+            || (a.subToolWrites ?? []).length > 0
+        ));
+        return houveGravacao ? null : passoDeGravacao;
+    }
+
     private checkClaimsAgainstEvidence(
         goal: Goal,
         llmSummary: string,
@@ -4530,12 +4618,13 @@ OU
                 label: 'organização de arquivos',
                 requiredTools: ['organize_workspace', 'exec_command', 'write'],
             },
-            {
-                // "foi criado / foi gerado"
-                pattern: /foi\s+(criad[ao]|gerado|gerada)\b/i,
-                label: 'criação ou geração de artefato',
-                requiredTools: ['write', 'exec_command'],
-            },
+            // Campanha 09/10/2026: a regra "foi criado/gerado" → exige write/exec_command foi REMOVIDA, pelo mesmo motivo
+            // da issue 061. A prosa do validador diz "foi gerada uma explicação" sobre TEXTO; a regex lia como arquivo
+            // e derrubava a aprovação. Produção: 5 overrides, 0 verdadeiros — o9yw2, x2s6c e 0q9n6 (arquivo criado e
+            // entregue; concluíram segundos depois), guufa (arquivo criado dentro do agente; o goal terminou em FALHA
+            // após 5 replans) e, em 09/10, uma resposta pronta em 3 min 51 s que virou 11 min de replans para gravar e
+            // enviar um arquivo que ninguém pediu. Arquivo pedido é cobrado por critério estrutural do plano
+            // (isExpectedDeliverableFile, tool_succeeded(write/send_*)); o validador recebe o histórico de execução.
         ];
 
         const successfulAttempts = goal.attempts.filter(a => a.result === 'success');

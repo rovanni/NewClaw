@@ -44,6 +44,7 @@ function emptyState(goalId: string): { cognitiveContext: unknown; progressModel:
 
 function makeFakeProviderFactory() {
     return {
+        getBudgetAuxiliar: () => ({ timeoutMs: 45_000, origem: 'padrao', latenciaTipicaMs: null }),
         chatWithFallback: async () => ({ status: 'success', content: JSON.stringify({ achieved: true, summary: 'teste S89' }) }),
         getProvider: () => undefined,
         getProviderWithModel: () => ({ chat: async () => ({ status: 'success', content: JSON.stringify({ achieved: true, summary: 'teste S89' }) }) }),

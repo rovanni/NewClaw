@@ -173,13 +173,22 @@ console.log('\n=== S186-8 — os tetos SEM evidência não foram tocados ===');
     // no log, então continuam como estavam — e este teste trava isso para não virar
     // refatoração oportunista numa próxima passagem.
     const intactos: Array<[string, string, RegExp]> = [
-        ['StepSemanticValidator', 'src/loop/StepSemanticValidator.ts', /const TIMEOUT_MS = 8_000;/],
         ['AgentLoop (commit)', 'src/loop/AgentLoop.ts', /const COMMIT_TIMEOUT_MS = 12_000;/],
     ];
     for (const [nome, arquivo, padrao] of intactos) {
         const src = fs.readFileSync(path.join(process.cwd(), arquivo), 'utf-8');
         assert(padrao.test(src), `${nome} permanece com seu teto fixo — sem evidência, sem mudança`);
     }
+}
+
+console.log('\n=== S186-8b — StepSemanticValidator: a evidência apareceu, o teto fixo saiu (campanha 09/10/2026) ===');
+{
+    // Saiu da lista acima pelo mesmo critério do contentStubClassifier: `StepSemanticValidator status=timeout ms=16025`
+    // (2 × 8 s) com um modelo local, em 08/10/2026. Migrou para o MESMO mecanismo — perfil 'validacao' ("avaliar um passo").
+    const src = fs.readFileSync(path.join(process.cwd(), 'src/loop/StepSemanticValidator.ts'), 'utf-8');
+    assert(!/const TIMEOUT_MS = \d[\d_]*;/.test(src), 'não é mais um número fixo em milissegundos');
+    assert(/getBudgetAuxiliar\('validacao'\)/.test(src) && /chatWithFallback\(messages, undefined, undefined, orcamento\.timeoutMs,/.test(src),
+        "usa getBudgetAuxiliar('validacao') como prazo da chamada");
 }
 
 console.log('\n=== S186-9 — contentStubClassifier: a evidência apareceu, o teto fixo saiu (Sprint 043) ===');

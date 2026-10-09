@@ -26,6 +26,7 @@ function assert(c: boolean, m: string, d?: unknown): void {
 
 function capturingFactory(prompts: string[], verdict: string) {
     return {
+        getBudgetAuxiliar: () => ({ timeoutMs: 45_000, origem: 'padrao', latenciaTipicaMs: null }),
         chatWithFallback: async (messages: Array<{ content: string }>) => {
             prompts.push(messages[0].content);
             return { status: 'success', content: verdict, attempts: [] };

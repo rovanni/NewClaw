@@ -78,16 +78,24 @@ console.log('\n=== S293.3 — auditoria estrutural: o código real usa o valor e
 {
     const src = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'ProviderFactory.ts'), 'utf-8');
 
-    const idx1 = src.indexOf('const effectiveTimeoutMs = (opts?.reasoningIntensive && timeoutMs)');
-    assert(idx1 > 0, 'attemptTimeout/safetyTimeoutMs: effectiveTimeoutMs é calculado', idx1);
+    // Campanha 09/10/2026: o piso entra UMA vez, no prazo total de quem chamou (`prazoTotalMs`); cada tentativa usa o
+    // que sobra dele. O que este teste protege continua igual: timers e refação usam o valor COM piso, nunca o bruto.
+    const idx0 = src.indexOf('const prazoTotalMs = (opts?.reasoningIntensive && timeoutMs)');
+    assert(idx0 > 0, 'o prazo total (com piso) é calculado uma vez', idx0);
+    assert(/Math\.max\(timeoutMs, REASONING_INTENSIVE_TIMEOUT_FLOOR_MS\)/.test(src.slice(idx0, idx0 + 300)), 'usa Math.max com o piso compartilhado, não um número novo');
+    assert(/const prazoFinal = prazoTotalMs \? startTime \+ prazoTotalMs/.test(src) && /const restanteDoPrazo = \(\)[^\n]*prazoFinal - Date\.now\(\)/.test(src),
+        'o restante é medido contra o prazo total (com piso) desde o início da chamada');
+
+    const idx1 = src.indexOf('const effectiveTimeoutMs = restanteDaTentativa');
+    assert(idx1 > 0, 'attemptTimeout/safetyTimeoutMs: effectiveTimeoutMs vem do restante do prazo total', idx1);
     const trecho1 = src.slice(idx1, idx1 + 900);
-    assert(/Math\.max\(timeoutMs, REASONING_INTENSIVE_TIMEOUT_FLOOR_MS\)/.test(trecho1), 'usa Math.max com o piso compartilhado, não um número novo', trecho1);
+    assert(/: prazoTotalMs;/.test(trecho1.split('\n')[0]), 'sem prazo restante calculável, cai no prazo total (com piso), não no timeoutMs bruto', trecho1.split('\n')[0]);
     // 064b: o corpo do timer também marca o prazo esgotado — o que importa aqui é o prazo ser effectiveTimeoutMs.
     assert(/const attemptTimeout = setTimeout\(\(\) => \{?[^}]*currentAbort\.abort\(\);? ?\}?, effectiveTimeoutMs\)/.test(trecho1), 'attemptTimeout usa effectiveTimeoutMs, não o timeoutMs bruto', trecho1);
     assert(/const safetyTimeoutMs = effectiveTimeoutMs \+ 15000/.test(trecho1), 'safetyTimeoutMs deriva de effectiveTimeoutMs, não do timeoutMs bruto', trecho1);
 
-    const idx2 = src.indexOf('const effectiveNonStreamingTimeoutMs = (opts?.reasoningIntensive && timeoutMs)');
-    assert(idx2 > 0, 'chamada a fallbackNonStreaming: effectiveNonStreamingTimeoutMs é calculado', idx2);
+    const idx2 = src.indexOf('const effectiveNonStreamingTimeoutMs = restanteNaoStreaming');
+    assert(idx2 > 0, 'chamada a fallbackNonStreaming: effectiveNonStreamingTimeoutMs vem do restante do prazo total', idx2);
     // ADR-013: o registro da tentativa sem streaming (gravador de voo) fica entre o cálculo e a chamada.
     const trecho2 = src.slice(idx2, idx2 + 1400);
     // ADR-014 M0.3: a chamada ganhou argumentos depois do prazo (sinal, modo de raciocínio) — o que importa é o 3º ser o efetivo.

@@ -197,3 +197,11 @@ observações `faltou` não apontam entrada obrigatória ausente.
   `DECISION_PROMPT_MAX_CHARS`. Desvio do desenho: o modo `curto` saiu — o Ollama só aceita ligar/desligar o
   raciocínio na maioria dos modelos; um "curto" não teria implementação real. O motor está no registro do
   recenseamento (linha 16 do mapa).
+- **Campanha 09/10/2026 (modelo local OpenAI-compatível):** `raciocinio: 'desligado'` passa a chegar também ao
+  servidor OpenAI-compatível (`chat_template_kwargs.enable_thinking=false`) — mas só quando o operador declarou o
+  controle de raciocínio no provedor (Ligado/Desligado no painel). Sem declaração, nada é enviado: a API oficial
+  da OpenAI pode recusar o campo, e a capacidade do servidor é declarada pelo operador, não adivinhada. Evidência:
+  produção 08/10, juiz em servidor local com raciocínio "padrão do modelo" gerou 10.950 tokens em 307 s para um
+  veredito; com o raciocínio desligado no provedor, 26 s e veredito válido. **Pendente (decisão do operador):** se os
+  avaliadores atuais (antes da migração M1–M6) devem declarar `raciocinio: 'desligado'` — a qualidade dos vereditos
+  sem raciocínio em casos longos continua não medida (ver "Riscos que permanecem").

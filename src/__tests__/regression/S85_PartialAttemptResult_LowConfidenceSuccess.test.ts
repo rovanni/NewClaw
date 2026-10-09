@@ -97,6 +97,7 @@ function makeFakeProviderFactory() {
         // (SHARED_TERMS/TEXT_EXPLICIT_SUCCESS sempre batem o hitRate mínimo), então o ramo do
         // validador semântico abaixo nunca deveria ser invocado; resposta genérica aqui é só
         // para não quebrar se for.
+        getBudgetAuxiliar: () => ({ timeoutMs: 45_000, origem: 'padrao', latenciaTipicaMs: null }),
         chatWithFallback: async (messages: Array<{ content?: string }>) => isSemanticValidatorPrompt(messages)
             ? { status: 'success', content: '{}', attempts: [] }
             : { status: 'success', content: JSON.stringify({ achieved: true, summary: 'teste S85' }), attempts: [] },
@@ -107,6 +108,7 @@ function makeFakeProviderFactory() {
 /** Simula erro/timeout do LLM de StepSemanticValidator (slow path) — fail-safe conservador. */
 function makeSemanticValidatorErrorProviderFactory() {
     return {
+        getBudgetAuxiliar: () => ({ timeoutMs: 45_000, origem: 'padrao', latenciaTipicaMs: null }),
         chatWithFallback: async (messages: Array<{ content?: string }>) => isSemanticValidatorPrompt(messages)
             ? { status: 'error', content: '', attempts: [] }
             : { status: 'success', content: JSON.stringify({ achieved: true, summary: 'teste S85' }), attempts: [] },
@@ -117,6 +119,7 @@ function makeSemanticValidatorErrorProviderFactory() {
 /** LLM do StepSemanticValidator (slow path) confirma relevância genuína, alta confiança. */
 function makeSemanticValidatorRelevantProviderFactory() {
     return {
+        getBudgetAuxiliar: () => ({ timeoutMs: 45_000, origem: 'padrao', latenciaTipicaMs: null }),
         chatWithFallback: async (messages: Array<{ content?: string }>) => isSemanticValidatorPrompt(messages)
             ? { status: 'success', content: JSON.stringify({ result: 'relevant', confidence: 0.85, reason: 'teste S85 — LLM confirma relevância genuína' }), attempts: [] }
             : { status: 'success', content: JSON.stringify({ achieved: true, summary: 'teste S85' }), attempts: [] },
@@ -127,6 +130,7 @@ function makeSemanticValidatorRelevantProviderFactory() {
 /** Conta chamadas ao LLM do StepSemanticValidator — usado para provar 0 chamadas via fast path. */
 function makeCountingProviderFactory(counter: { calls: number }) {
     return {
+        getBudgetAuxiliar: () => ({ timeoutMs: 45_000, origem: 'padrao', latenciaTipicaMs: null }),
         chatWithFallback: async (messages: Array<{ content?: string }>) => {
             if (isSemanticValidatorPrompt(messages)) {
                 counter.calls++;
@@ -141,6 +145,7 @@ function makeCountingProviderFactory(counter: { calls: number }) {
 function makeMismatchProviderFactory() {
     return {
         // Usado só pelo StepSemanticValidator (slow path) no cenário S85.5.
+        getBudgetAuxiliar: () => ({ timeoutMs: 45_000, origem: 'padrao', latenciaTipicaMs: null }),
         chatWithFallback: async (messages: Array<{ content?: string }>) => isSemanticValidatorPrompt(messages)
             ? { status: 'success', content: JSON.stringify({ result: 'mismatch', confidence: 0.9, reason: 'teste S85 — output não endereça a intenção do step' }), attempts: [] }
             : { status: 'success', content: JSON.stringify({ achieved: true, summary: 'teste S85' }), attempts: [] },

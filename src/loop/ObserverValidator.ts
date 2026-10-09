@@ -12,6 +12,7 @@ import { ANALYSIS_INTENT_PATTERN } from '../shared/analysisIntentPattern';
 import { gravarAvaliacao, novaAvaliacaoId, versaoDoPrompt, INSTRUCAO_FALTOU, lerFaltou } from '../shared/evaluatorFlightRecorder';
 import type { CallTelemetry } from '../core/providerTypes';
 import { DECISION_PROMPT_MAX_CHARS } from '../core/providerTypes';
+import { limiteComum } from '../shared/orcamentoDeTexto';
 const log = createLogger('Observervalidator');
 
 /**
@@ -934,21 +935,8 @@ export class ObserverValidator {
         const skeleton = GROUNDING_PROMPT.replace('{pedido}', () => pedido).replace('{evidences}', () => '').replace('{response}', () => response).length;
         const available = GROUNDING_MAX_PROMPT_CHARS - skeleton
             - evidences.reduce((s, e) => s + PER_EVIDENCE_OVERHEAD + e.id.length + e.tool.length, 0);
-        const sizes = evidences.flatMap(e => [e.output.length, (e.input ?? '').length]).filter(n => n > 0);
-        const total = sizes.reduce((s, n) => s + n, 0);
-        if (total <= available) return Infinity;
-        if (available <= 0) return 0;
-
-        sizes.sort((a, b) => a - b);
-        let remaining = available;
-        for (let i = 0; i < sizes.length; i++) {
-            const left = sizes.length - i;
-            // Se todos os textos restantes couberem no limite `sizes[i]`, este entra inteiro; senão o
-            // limite comum é a divisão por igual do que sobrou entre os restantes.
-            if (sizes[i] * left > remaining) return Math.floor(remaining / left);
-            remaining -= sizes[i];
-        }
-        return Infinity;
+        // A divisão em si é a fonte única de shared/orcamentoDeTexto.ts (campanha 09/10/2026).
+        return limiteComum(evidences.flatMap(e => [e.output.length, (e.input ?? '').length]), available);
     }
 
     // ── Modo sombra de evidência ampliada (Sprint 3, issue 048) ──────────────────────────────────

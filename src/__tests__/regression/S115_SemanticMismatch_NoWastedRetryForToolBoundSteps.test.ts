@@ -57,6 +57,7 @@ function emptyState(goalId: string): { cognitiveContext: unknown; progressModel:
 // da mensagem qual dos dois está perguntando, em vez de responder sempre a mesma coisa.
 function makeMismatchProviderFactory() {
     return {
+        getBudgetAuxiliar: () => ({ timeoutMs: 45_000, origem: 'padrao', latenciaTipicaMs: null }),
         chatWithFallback: async (messages: Array<{ content?: string }>) => {
             const prompt = messages.map(m => m.content ?? '').join('\n');
             if (prompt.includes('validador de relevância de resultado de ferramentas')) {

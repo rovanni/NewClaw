@@ -43,7 +43,9 @@ async function main(): Promise<void> {
 
     console.log('\n=== S294.1 — provider inalcançável: mensagem não alega lentidão e nomeia o provedor ===');
     let last: any;
-    for (let i = 0; i < 4 && (!last || last.fallbackReason !== 'unavailable'); i++) {
+    // Campanha 09/10/2026: com prazo de 5 s, a nova tentativa (espera de 10 s) não cabe e não acontece — uma falha
+    // por chamada, então o circuito precisa de mais chamadas para abrir.
+    for (let i = 0; i < 10 && (!last || last.fallbackReason !== 'unavailable'); i++) {
         last = await pf.chatWithFallback([{ role: 'user', content: 'oi' }], undefined, undefined, 5000);
         if (i === 0) {
             assert(last.status === 'error', `status error (obtido ${last.status})`);

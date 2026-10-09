@@ -72,6 +72,7 @@ function makeAttempt(overrides: Partial<GoalAttempt> = {}): GoalAttempt {
 function makeProviderFactory(response: { result: string; confidence: number }) {
     return {
         chatWithFallback: async () => ({ status: 'success', content: JSON.stringify(response), attempts: [] }),
+        getBudgetAuxiliar: () => ({ timeoutMs: 45_000, origem: 'padrao', latenciaTipicaMs: null }),
     } as unknown as import('../../core/ProviderFactory').ProviderFactory;
 }
 

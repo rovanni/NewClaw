@@ -28,7 +28,6 @@ const log = createLogger('StepSemanticValidator');
 const VALIDATOR_MODEL = process.env['SEMANTIC_VALIDATOR_MODEL'] ?? '';
 const FAST_PATH_CONFIDENCE_THRESHOLD = 0.72;
 const LLM_MISMATCH_CONFIDENCE_THRESHOLD = 0.80;
-const TIMEOUT_MS = 8_000;
 
 /**
  * ARCH-013: bar de confiança para promover um attempt 'partial' a 'success' quando o
@@ -246,10 +245,14 @@ export class StepSemanticValidator {
         // docs/ARCHITECTURE/INVENTARIO_DUPLICACAO_2026-08-24.md) — mesmo mecanismo que
         // ObserverValidator (S258) já usa. getProviderWithModel() sem providerName cai sempre em
         // this.defaultProvider, sem nenhum fallback se essa única chamada falhar; chatWithFallback
-        // tenta os demais providers antes de desistir, com o mesmo TIMEOUT_MS de hoje delimitando
-        // cada tentativa. O fail-soft ("unverifiable") continua decidido aqui, não no
+        // tenta os demais providers antes de desistir, com o orçamento abaixo delimitando a
+        // chamada inteira. O fail-soft ("unverifiable") continua decidido aqui, não no
         // ProviderFactory — qualquer status diferente de 'success' cai no mesmo ramo.
-        const result = await this.providerFactory.chatWithFallback(messages, undefined, undefined, TIMEOUT_MS, undefined, VALIDATOR_MODEL, { diag: { component: 'StepSemanticValidator', role: 'validator' } });
+        // Campanha 09/10/2026: o teto fixo de 8 s saiu pelo mesmo caminho do contentStubClassifier (Sprint 043) — a
+        // evidência apareceu: `StepSemanticValidator status=timeout ms=16025` (2 × 8 s) num modelo local que leva ~5–6 s
+        // só para ler um prompt deste tamanho. Validar um passo é o perfil 'validacao' (ver auxTimeout.ts).
+        const orcamento = this.providerFactory.getBudgetAuxiliar('validacao');
+        const result = await this.providerFactory.chatWithFallback(messages, undefined, undefined, orcamento.timeoutMs, undefined, VALIDATOR_MODEL, { diag: { component: 'StepSemanticValidator', role: 'validator' } });
         if (result.status !== 'success') {
             log.debug(`[StepSemanticValidator] LLM falhou (status=${result.status}) — unverifiable`);
             return { result: 'unverifiable', confidence: 0.5, reason: 'erro na validação LLM', usedFastPath: false };

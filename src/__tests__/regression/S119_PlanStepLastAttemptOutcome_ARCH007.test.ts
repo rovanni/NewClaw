@@ -58,6 +58,7 @@ if (TEXT_LONG_FALLBACK.length < 200) throw new Error('TEXT_LONG_FALLBACK curto d
 
 function makeFakeProviderFactory() {
     return {
+        getBudgetAuxiliar: () => ({ timeoutMs: 45_000, origem: 'padrao', latenciaTipicaMs: null }),
         chatWithFallback: async () => ({ status: 'success', content: JSON.stringify({ achieved: true, summary: 'teste S119' }) }),
         getProvider: () => undefined,
         getProviderWithModel: () => ({ chat: async () => ({ status: 'success', content: JSON.stringify({ achieved: true, summary: 'teste S119' }) }) }),
@@ -165,6 +166,7 @@ async function main() {
         // chamadas passam pelo MESMO chatWithFallback agora; o mock distingue pelo conteúdo do
         // prompt qual dos dois validadores está perguntando (mesmo padrão de S85/S115).
         const mismatchProviderFactory = {
+            getBudgetAuxiliar: () => ({ timeoutMs: 45_000, origem: 'padrao', latenciaTipicaMs: null }),
             chatWithFallback: async (messages: Array<{ content?: string }>) => {
                 const prompt = messages.map(m => m.content ?? '').join('\n');
                 if (prompt.includes('validador de relevância de resultado de ferramentas')) {

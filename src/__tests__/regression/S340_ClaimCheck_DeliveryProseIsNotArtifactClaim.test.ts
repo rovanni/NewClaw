@@ -71,10 +71,13 @@ async function main(): Promise<void> {
     console.log('\n=== S340-3 — as outras regras de alegação não foram tocadas ===');
     {
         const src = require('fs').readFileSync(require('path').join(process.cwd(), 'src', 'loop', 'GoalExecutionLoop.ts'), 'utf-8') as string;
-        for (const label of ['apresentação/listagem de dados reais', 'exportação ou conversão', 'organização de arquivos', 'criação ou geração de artefato']) {
+        for (const label of ['apresentação/listagem de dados reais', 'exportação ou conversão', 'organização de arquivos']) {
             assert(src.includes(`label: '${label}'`), `regra "${label}" continua presente`);
         }
         assert(!src.includes(`label: 'envio de artefato'`), 'regra "envio de artefato" removida');
+        // Campanha 09/10/2026: "criação ou geração de artefato" também saiu (5 overrides, 0 verdadeiros) — o caso
+        // S340-2 (gravação prevista e não feita) passou a ser cobrado pela checagem estrutural gravacaoPrevistaSemEvidencia.
+        assert(!src.includes(`label: 'criação ou geração de artefato'`), 'regra "criação ou geração de artefato" removida');
     }
 
     console.log(`\n${'─'.repeat(60)}`);

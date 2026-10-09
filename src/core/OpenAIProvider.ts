@@ -240,7 +240,9 @@ export class OpenAIProvider implements ILLMProvider {
                         })) : undefined,
                         // Issue 054 (D3): só quando o operador declarou `thinking` no provedor. Nunca por
                         // padrão — a API oficial da OpenAI pode recusar parâmetro desconhecido.
-                        ...(this.thinking ? { chat_template_kwargs: { enable_thinking: this.thinking === 'on' } } : {}),
+                        // ADR-014 (campanha 09/10/2026): declarado o controle, a chamada que pede raciocínio
+                        // 'desligado' (descritor de validação) prevalece — mesmo efeito do `think: false` do Ollama.
+                        ...(this.thinking ? { chat_template_kwargs: { enable_thinking: options?.raciocinio === 'desligado' ? false : this.thinking === 'on' } } : {}),
                     })
                 });
             } catch (err) {
