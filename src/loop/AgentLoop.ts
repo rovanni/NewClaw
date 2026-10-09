@@ -27,6 +27,8 @@ import { AuthorizationManager } from './AuthorizationManager';
 import { ProtocolParser } from './ProtocolParser';
 import { createLogger } from '../shared/AppLogger';
 import { gravarEfeito } from '../shared/evaluatorFlightRecorder';
+import type { ValidationEngine } from '../validation/ValidationEngine';
+import { criarMotorDeValidacao } from '../validation/motorPadrao';
 import { ANALYSIS_INTENT_PATTERN } from '../shared/analysisIntentPattern';
 import { ClassificationMemory } from '../memory/ClassificationMemory';
 import { DecisionMemory } from '../memory/DecisionMemory';
@@ -448,10 +450,13 @@ export interface TurnState {
     groundingBlock?: GroundingBlock;
     /** O provedor de LLM não respondeu e o turno terminou com a mensagem fixa (issue 053) — `run()` o devolve. */
     providerFailure?: ProviderFailure;
+    /** O roteador declarou que este pedido exige ferramenta (`IntentDecision.requiresTools`) — portão de `verificarAcaoAfirmada`. */
+    exigeFerramenta?: boolean;
 }
 
 export class AgentLoop {
     private providerFactory: ProviderFactory;
+    private readonly motorDeValidacao: ValidationEngine;
     private memory: MemoryManager;
     private tools: Map<string, ToolExecutor> = new Map();
     private authManager = new AuthorizationManager();
@@ -504,6 +509,7 @@ export class AgentLoop {
         decisionMemory?: DecisionMemory
     ) {
         this.providerFactory = providerFactory;
+        this.motorDeValidacao = criarMotorDeValidacao(providerFactory);
         this.memory = memory;
         this.skillLearner = skillLearner as SkillLearner;
         this.skillLoader = skillLoader as SkillLoader;
@@ -933,6 +939,51 @@ export class AgentLoop {
         return 'A resposta que eu ia enviar continha uma afirmação que os dados coletados contradizem. Pode pedir de novo? Vou revisar antes de responder.';
     }
 
+    /**
+     * Turno que o roteador marcou como exigindo ferramenta e terminou sem nenhuma executada com sucesso: a resposta
+     * pode afirmar uma ação feita que nunca aconteceu ("Salvo!", "criei o arquivo"). O portão é estrutural (fato do
+     * roteador + fato da execução); a pergunta "o que a resposta AFIRMA?" é do motor único — o MESMO tipo
+     * `qualidade_da_resposta` que julga a resposta nos turnos com ferramenta, agora também aqui.
+     *
+     * - reprovado por `claimed_without_execution`: entrega a mensagem escrita pelo próprio modelo, no idioma do pedido,
+     *   dizendo que nada foi feito. Outras reprovações de qualidade não bloqueiam (fora do escopo deste portão).
+     * - sem veredito (prazo, modelo fora): não bloqueia — mesma política do ADR-015; fica no log e no gravador de voo.
+     * - Passo de goal com evidência de passos anteriores fica de fora: o consolidador fala de ações já feitas e os
+     *   validadores do goal (conclusão, evidência) são quem as confere.
+     * Desliga com `VALIDACAO_ACAO_AFIRMADA=off`.
+     */
+    private async verificarAcaoAfirmada(
+        response: string,
+        userText: string,
+        conversationId: string,
+        toolFailureCount: number,
+        signal?: AbortSignal,
+        channelContext?: ChannelContext,
+    ): Promise<string> {
+        if (!this.getTurnState(conversationId).exigeFerramenta) return response;
+        if (process.env.VALIDACAO_ACAO_AFIRMADA === 'off' || !response.trim()) return response;
+        if ((channelContext?.priorStepEvidence?.length ?? 0) > 0) return response;
+        try {
+            const ferramentas = 'Ferramentas executadas com sucesso neste turno: nenhuma.'
+                + (toolFailureCount > 0 ? ` Chamadas de ferramenta que falharam neste turno: ${toolFailureCount}.` : '');
+            const { veredito } = await this.motorDeValidacao.validar('qualidade_da_resposta',
+                { pedido: userText, resposta: response, ferramentas }, { conversationId, phase: 'commit-sem-ferramenta', signal });
+            const bloquear = veredito.estado === 'reprovado' && veredito.extras?.tipo_de_falha === 'claimed_without_execution';
+            log.info(`[${this.ts()}] [ACAO-AFIRMADA] estado=${veredito.estado} falha=${veredito.extras?.tipo_de_falha ?? '-'} bloquear=${bloquear}${veredito.naoAvaliavelPorque ? ` (sem veredito: ${veredito.naoAvaliavelPorque.slice(0, 80)})` : ''}`);
+            gravarEfeito({
+                avaliacaoId: veredito.avaliacaoId, avaliador: 'validacao_qualidade_da_resposta',
+                efeito: bloquear ? 'resposta_bloqueada' : 'resposta_liberada', detalhe: { portao: 'sem_ferramenta', falha: veredito.extras?.tipo_de_falha },
+                contexto: { conversationId },
+            });
+            if (!bloquear) return response;
+            return veredito.extras?.mensagem_ao_usuario?.trim()
+                || 'Eu disse que tinha feito a ação, mas nenhuma ferramenta foi executada — nada foi feito. Pode pedir de novo?';
+        } catch (err) {
+            log.warn(`[${this.ts()}] [ACAO-AFIRMADA] falhou — entrega sem bloquear: ${errorMessage(err)}`);
+            return response;
+        }
+    }
+
     private async commitResponse(
         response: string,
         userText: string,
@@ -1000,7 +1051,9 @@ export class AgentLoop {
                    'Pode pedir de novo? Desta vez a ação será executada de verdade antes de eu responder.';
         }
 
-        if (!last) return response; // sem tool executada → sem risco de alucinação de ação
+        // Sem tool executada o risco de alucinação de AÇÃO não some: "Salvo!" sem memory_write (09/10/2026). Quem julga é o
+        // motor (a pergunta é semântica); aqui só o portão estrutural — ver verificarAcaoAfirmada.
+        if (!last) return await this.verificarAcaoAfirmada(response, userText, conversationId, toolFailureCount, signal, channelContext);
 
         try {
             const COMMIT_TIMEOUT_MS = 12_000;
@@ -3300,6 +3353,7 @@ export class AgentLoop {
             requiresReasoning: intentDecision.requiresReasoning,
         });
         log.info(`[${this.ts()}] [UNIFIED-ROUTER] intent=${intentDecision.intent} mode=${intentDecision.executionMode} category=${intentDecision.category} confidence=${intentDecision.confidence} source=${intentDecision.source} model=${intentDecision.modelCategory}`);
+        this.getTurnState(conversationId).exigeFerramenta = intentDecision.requiresTools;
 
         // Fast-paths must not fire when there is a pending auth action — the auth check handles those turns.
         const hasPendingAuth = !!this.authManager.getPending(conversationId);

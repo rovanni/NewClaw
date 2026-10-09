@@ -65,8 +65,10 @@ console.log('\n=== S56-1 — AgentLoop.ts: guard de pending-action-promise exist
         'helper looksLikePendingActionPromise existe como método estático dedicado (não reaproveita looksLikeFalseSuccess)',
     );
     const guardIdx = agentLoopSource.indexOf('AgentLoop.looksLikePendingActionPromise(response)');
-    const bypassIdx = agentLoopSource.indexOf('if (!last) return response; // sem tool executada');
-    assert(guardIdx > -1 && bypassIdx > -1 && guardIdx < bypassIdx, 'checagem roda ANTES do bypass "sem tool executada → sem risco"');
+    // S372 (09/10/2026): o bypass `return response` virou o portão do motor único (`verificarAcaoAfirmada`); a ordem que
+    // este teste trava — o guard de promessa roda ANTES de qualquer saída do turno sem ferramenta — continua a mesma.
+    const bypassIdx = agentLoopSource.indexOf('if (!last) return await this.verificarAcaoAfirmada(');
+    assert(guardIdx > -1 && bypassIdx > -1 && guardIdx < bypassIdx, 'checagem roda ANTES da saída "sem tool executada" (portão do motor único)');
 }
 
 console.log('\n=== S56-2 — reprodução isolada: frase real do incidente é detectada ===');

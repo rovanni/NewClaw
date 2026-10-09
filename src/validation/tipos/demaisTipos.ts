@@ -22,9 +22,14 @@ export const descritorQualidadeDaResposta: DescritorDeValidacao = {
         'A resposta atende plenamente ao que foi pedido (não para no meio, não responde outra coisa)?',
         'A ação executada é a adequada ao pedido (não só leu quando o pedido exigia agir; não promete fazer depois o que deveria ter feito agora)?',
         'A resposta não ignora nem esconde um erro de ferramenta?',
+        // Teste real 09/10/2026: "Salvo! Criei o nó…" com zero ferramentas executadas. Vale para QUALQUER turno, inclusive o que terminou sem ferramenta.
+        'A resposta NÃO afirma como JÁ FEITA (ou em andamento agora) uma ação que muda algo fora da conversa — salvar, criar, enviar, apagar, agendar, instalar — sem que conste em "Ferramentas executadas neste turno" uma ferramenta bem-sucedida que a realizou? Oferta ou pergunta ("quer que eu salve?"), explicação e conhecimento geral não são afirmação de ação feita.',
     ],
     agregacao: 'modelo',
-    camposExtras: [{ nome: 'tipo_de_falha', instrucao: 'Se reprovado: incomplete_response | read_only | future_action | tool_error | other. Se aprovado: none.' }],
+    camposExtras: [
+        { nome: 'tipo_de_falha', instrucao: 'Se reprovado: incomplete_response | read_only | future_action | tool_error | claimed_without_execution | other (claimed_without_execution = a resposta afirma uma ação feita que nenhuma ferramenta executou). Se aprovado: none.' },
+        { nome: 'mensagem_ao_usuario', instrucao: 'Só quando tipo_de_falha for claimed_without_execution: 2 a 3 frases, no MESMO IDIOMA do pedido do usuário, dizendo com honestidade que a ação NÃO foi executada (nada foi feito) e o que o usuário pode fazer a seguir — pedir de novo, ou dar o dado que faltar. Sem desculpas longas e sem repetir a resposta rejeitada. Vazio nos outros casos.' },
+    ],
     raciocinio: 'desligado',
     modeloConfig: 'OBSERVER_MODEL',
 };
