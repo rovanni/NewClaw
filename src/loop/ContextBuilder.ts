@@ -22,6 +22,7 @@ import { MultiLayerRetriever } from '../memory/MultiLayerRetriever';
 import { CognitiveMemoryIndex, MemoryTier, type MemoryIndexEntry } from '../memory/CognitiveMemoryIndex';
 import { createLogger } from '../shared/AppLogger';
 import { keywordBoundaryMatches } from '../shared/keywordBoundary';
+import { limiteComum } from '../shared/orcamentoDeTexto';
 
 const log = createLogger('ContextBuilder');
 
@@ -678,7 +679,9 @@ export class ContextBuilder {
     /** Returns the metadata produced by the most recent buildContext() call, or null before first call. */
     getLastBuildMetadata(): ContextBuildMetadata | null { return this._lastBuildMetadata; }
 
-    private readonly MAX_MEMORY_CHARS  = 3200;
+    /** Teto do bloco de memória do agente (modo completo). Público: a classificação do pedido usa o mesmo teto para as preferências. */
+    static readonly MAX_MEMORY_CHARS_COMPLETO = 3200;
+    private readonly MAX_MEMORY_CHARS  = ContextBuilder.MAX_MEMORY_CHARS_COMPLETO;
     private readonly BUDGET_REFLECTION = 500;
     private readonly BUDGET_EPISODIC   = 400;
     private readonly BUDGET_DOMAIN     = 250;
@@ -761,7 +764,13 @@ export class ContextBuilder {
                 );
             }
 
-            const headerChars = [reflectionBlock, episodicBlock, domainBlock]
+            // Campanha 069 (09/10/2026): TODAS as preferências salvas, num bloco próprio — quem decide se uma se aplica
+            // ao pedido é o LLM. Antes, preferência só entrava com palavra em comum com a pergunta (regra A1 do
+            // planejador) e só era destacada pelo mesmo critério: "Vai chover amanhã?" não via "Clima padrão: <cidade>"
+            // e o modelo inventou a cidade. Corte só se não couber, declarado.
+            const prefsBlock = ContextBuilder.blocoDePreferencias(
+                this.memory.getPreferences().map(p => ({ nome: p.name, texto: p.content })), maxMemChars);
+            const headerChars = [prefsBlock, reflectionBlock, episodicBlock, domainBlock]
                 .filter(Boolean)
                 .reduce((sum, b) => sum + b.length + 5, 0);
             const nodesBudget = Math.max(this.MIN_NODES_CHARS, maxMemChars - headerChars);
@@ -827,7 +836,7 @@ export class ContextBuilder {
 
             if (ranked.length === 0) {
                 const fallback = this.memory.getContext(200);
-                const header = [reflectionBlock, episodicBlock, domainBlock].filter(Boolean).join('\n---\n');
+                const header = [prefsBlock, reflectionBlock, episodicBlock, domainBlock].filter(Boolean).join('\n---\n');
                 return header ? `${header}\n${fallback}` : fallback;
             }
 
@@ -835,7 +844,6 @@ export class ContextBuilder {
             const queryTokens = new Set(tokenize(query));
             const queryTokensArr = [...queryTokens];
 
-            const disambiguationEntries: string[] = [];
             const contextEntries: string[] = [];
 
             for (const n of ranked) {
@@ -857,26 +865,13 @@ export class ContextBuilder {
                 let entry = `${n.name}(${n.type}): ${epistemicPrefix}${summary}`;
                 if (n.relations.length > 0) entry += ` → ${n.relations.join(', ')}`;
 
-                // Preferências com match direto de termo da query vão para o bloco de desambiguação.
-                // Isso garante que preferências do usuário apareçam em destaque ANTES do contexto geral,
-                // evitando que o LLM use conhecimento de treino quando há preferência explícita.
-                if ((n.type === 'preference' || n.type === 'trait') && queryTokensArr.length > 0) {
-                    const haystack = `${n.name} ${summary}`.toLowerCase();
-                    const hasDirectMatch = queryTokensArr.some(t => haystack.includes(t));
-                    if (hasDirectMatch) {
-                        disambiguationEntries.push(summary);
-                        continue;
-                    }
-                }
+                // Preferências já estão inteiras no bloco de preferências (prefsBlock) — não se repetem aqui.
+                if (n.type === 'preference' || n.type === 'trait') continue;
                 contextEntries.push(entry);
             }
 
-            const disambiguationBlock = disambiguationEntries.length > 0
-                ? `[INSTRUCOES PERSONALIZADAS — APLICAR ANTES DE RESPONDER]\n${disambiguationEntries.map(e => `• ${e}`).join('\n')}`
-                : '';
-
             const detailsStr = contextEntries.length > 0 ? 'Contexto: ' + contextEntries.join('. ') : '';
-            const blocks = [disambiguationBlock, reflectionBlock, episodicBlock, domainBlock, detailsStr].filter(Boolean);
+            const blocks = [prefsBlock, reflectionBlock, episodicBlock, domainBlock, detailsStr].filter(Boolean);
             const result = blocks.join('\n---\n');
 
             log.info(`[BUDGET] memory block: ${estimateTokens(result)} tokens | blocks=${blocks.length} nodes=${ranked.length} chars=${result.length}/${this.MAX_MEMORY_CHARS} maxExpandedNodes=${maxNodes}`);
@@ -907,6 +902,31 @@ export class ContextBuilder {
             this._lastBuildMetadata = { hasHighRelevancePreference: false, hasEntityMatch: false, selectedCount: 0, topContentNodeType: null, domainClass: null, memoryUsed: false };
             return this.memory.getContext(200);
         }
+    }
+
+    /**
+     * Campanha 069 (09/10/2026) — o bloco com as preferências salvas do usuário, todas, para o LLM decidir qual se
+     * aplica ao pedido. Usado pelo bloco de memória do agente e pela classificação do pedido (GoalOrchestrator):
+     * uma só forma de apresentar. Se não couber em `orcamentoChars`, a divisão é a de shared/orcamentoDeTexto e o
+     * corte fica declarado em cada item cortado.
+     */
+    /** Cabeçalho do bloco de preferências — fonte única: o GoalExtractor o reconhece pelo mesmo texto. */
+    static readonly CABECALHO_PREFERENCIAS = '[PREFERÊNCIAS SALVAS DO USUÁRIO — aplique cada uma somente quando o pedido tratar do assunto dela; quando tratar, ela prevalece sobre o conhecimento geral]';
+
+    static blocoDePreferencias(prefs: Array<{ nome: string; texto: string }>, orcamentoChars: number): string {
+        const itens = prefs.map(p => ({ nome: (p.nome || '').trim(), texto: (p.texto || '').replace(/\s*\n\s*/g, ' ').trim() }))
+            .filter(p => p.texto.length > 0);
+        if (itens.length === 0) return '';
+        const cabecalho = ContextBuilder.CABECALHO_PREFERENCIAS;
+        const sobra = orcamentoChars - cabecalho.length - itens.reduce((t, p) => t + p.nome.length + 8, 0);
+        const limite = limiteComum(itens.map(p => p.texto.length), sobra);
+        const linhas = itens.map(p => {
+            const cortado = p.texto.length > limite;
+            const texto = cortado ? `${p.texto.slice(0, limite)} [cortado: ${limite} de ${p.texto.length} caracteres]` : p.texto;
+            return `• ${p.nome ? `${p.nome}: ` : ''}${texto}`;
+        });
+        log.info(`[PREFERENCIAS] ${itens.length} preferência(s) no contexto${Number.isFinite(limite) ? ` — cortadas para caber (limite ${limite} chars)` : ''}`);
+        return `${cabecalho}\n${linhas.join('\n')}`;
     }
 
     private getContextPlanner(): ContextPlanner {

@@ -365,7 +365,18 @@ export class MemoryManager {
 
     getIdentity(): import('./memoryTypes').MemoryNode | undefined { return graph.getNode(this.db, 'core_identity'); }
     setIdentity(name: string, content: string): void { this.addNode({ id: 'core_identity', type: 'identity', name, content }); }
-    getPreferences(): import('./memoryTypes').MemoryNode[] { return graph.getNodesByType(this.db, 'preference'); }
+    /**
+     * Preferências salvas do usuário que valem agora: `preference` e `trait` ATIVOS. Fonte única (campanha 069,
+     * 09/10/2026) para quem precisa delas — o bloco de memória do agente, a classificação do pedido e a resolução
+     * de parâmetro faltante. Antes, cada um escolhia "as relevantes" por coincidência de palavras, e "Vai chover
+     * amanhã?" não via "Clima padrão: <cidade>" (sem palavra em comum). Quem decide se uma preferência se aplica
+     * ao pedido é o LLM, que recebe todas.
+     */
+    getPreferences(): import('./memoryTypes').MemoryNode[] {
+        return this.db.prepare(
+            `SELECT * FROM memory_nodes WHERE type IN ('preference', 'trait') AND (lifecycle_state IS NULL OR lifecycle_state = 'ACTIVE') ORDER BY updated_at DESC, id`
+        ).all() as import('./memoryTypes').MemoryNode[];
+    }
     addPreference(name: string, content: string): void { this.addNode({ id: `pref_${name}`, type: 'preference', name, content }); }
 
     getContext(maxChars: number = 1500): string {

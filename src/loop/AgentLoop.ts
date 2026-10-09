@@ -1526,32 +1526,37 @@ export class AgentLoop {
                 return null;
             }
 
+            // Campanha 069 (09/10/2026): a evidência é (1) TODAS as preferências salvas, da fonte única
+            // (MemoryManager.getPreferences), e (2) os nós de memória mais próximos do PEDIDO do usuário mais a descrição
+            // do parâmetro. Antes a busca usava só "nome + descrição do parâmetro" ("city Nome da cidade") e descartava
+            // tudo abaixo de fusedScore 0,50 — a preferência "Clima padrão: <cidade>" podia nem chegar ao extrator. Quem
+            // decide se a evidência sustenta um valor é o LLM abaixo (que devolve null quando não sustenta), não um corte
+            // numérico de similaridade.
             const cleanDesc = (paramSchema?.description || '').replace(/[?!.,;:]/g, '');
-            const searchQuery = `${paramName} ${cleanDesc}`.trim();
+            const searchQuery = `${intentContext ?? ''} ${paramName} ${cleanDesc}`.trim();
 
+            const preferencias = this.memory.getPreferences();
             const retriever = new MultiLayerRetriever(this.memory.getDatabase());
-            const candidates = retriever.retrieve(searchQuery, []);
+            const idsDePreferencia = new Set(preferencias.map(p => p.id));
+            const candidatos = retriever.retrieve(searchQuery, []).filter(c => !idsDePreferencia.has(c.nodeId)).slice(0, 5);
 
-            if (candidates.length === 0) return null;
-
-            // Filter candidates with high relevance fusedScore (>= 0.50)
-            const viable = candidates.filter(c => c.fusedScore >= 0.50);
-            if (viable.length === 0) return null;
-
-            // Fetch memory node details from DB (ensuring confidence >= 0.60 and active state)
+            // Nós ativos e com confiança mínima (metadado objetivo do nó, não relevância).
             const db = this.memory.getDatabase();
-            const ph = viable.map(() => '?').join(',');
-            const rows = db.prepare(`
-                SELECT id, name, content, type, confidence 
-                FROM memory_nodes 
-                WHERE id IN (${ph}) 
+            const rows = candidatos.length === 0 ? [] : db.prepare(`
+                SELECT id, name, content, type, confidence
+                FROM memory_nodes
+                WHERE id IN (${candidatos.map(() => '?').join(',')})
                   AND (lifecycle_state IS NULL OR lifecycle_state = 'ACTIVE')
                   AND (confidence IS NULL OR confidence >= 0.60)
-            `).all(...viable.map(v => v.nodeId)) as Array<{ id: string; name: string; content: string; type: string; confidence: number }>;
+            `).all(...candidatos.map(v => v.nodeId)) as Array<{ id: string; name: string; content: string; type: string; confidence: number }>;
 
-            if (rows.length === 0) return null;
+            const evidencia = [
+                ...preferencias.map(p => `• [preferência salva] ${p.name}: ${p.content}`),
+                ...rows.map(r => `• ${r.name}: ${r.content}`),
+            ];
+            if (evidencia.length === 0) return null;
 
-            const evidenceText = rows.map(r => `• ${r.name}: ${r.content}`).join('\n');
+            const evidenceText = evidencia.join('\n');
 
             // Semantic Extraction via ProviderFactory (Semantic-First, Zero Regex)
             const promptMessages: LLMMessage[] = [

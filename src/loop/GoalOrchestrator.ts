@@ -26,7 +26,7 @@ import { GoalExecutionLoop } from './GoalExecutionLoop';
 import { avaliarGoal, KERNEL_ESCALATION_PREFIX } from './CognitiveKernelGate';
 import { ProviderFactory } from '../core/ProviderFactory';
 import { MemoryManager } from '../memory/MemoryManager';
-import { MultiLayerRetriever } from '../memory/MultiLayerRetriever';
+import { ContextBuilder } from './ContextBuilder';
 import { ReflectionMemory } from '../memory/ReflectionMemory';
 import { CaseMemory } from '../memory/CaseMemory';
 import { OperationalKnowledge } from '../memory/OperationalKnowledge';
@@ -251,23 +251,16 @@ export class GoalOrchestrator {
         // — tarde demais aqui).
         // Roda ANTES da classificação (não depois, como contextualize()) porque a pergunta de
         // clarificação retorna e encerra o turno antes de qualquer goal/planner ser criado.
+        // Campanha 069 (09/10/2026): todas as preferências ativas, da fonte única (MemoryManager.getPreferences) e no
+        // mesmo formato do bloco de memória do agente — antes, só as que a busca por palavra-chave achava (3 primeiras),
+        // e "Vai chover amanhã?" não achava "Clima padrão". Quem decide se alguma se aplica é o LLM classificador.
         try {
-            const retriever = new MultiLayerRetriever(this.memory.getDatabase());
-            const candidateIds = retriever.keywordSearch(message, 5).slice(0, 3).map(c => c.nodeId);
-            if (candidateIds.length > 0) {
-                const placeholders = candidateIds.map(() => '?').join(',');
-                const prefRows = this.memory.getDatabase().prepare(
-                    `SELECT content FROM memory_nodes WHERE id IN (${placeholders}) AND type IN ('preference', 'trait') AND (lifecycle_state IS NULL OR lifecycle_state = 'ACTIVE')`
-                ).all(...candidateIds) as Array<{ content: string }>;
-                const relevantPrefs = prefRows.filter(r => r.content && r.content.trim().length > 10);
-                if (relevantPrefs.length > 0) {
-                    const preferenceContext = {
-                        role: 'assistant',
-                        content: `[MEMÓRIA — preferências salvas do usuário relevantes a esta mensagem]:\n${relevantPrefs.map(r => `- ${r.content}`).join('\n')}`,
-                    };
-                    classifyMessages = [preferenceContext, ...(classifyMessages ?? [])];
-                    log.info(`[GoalOrchestrator] preference memory injected for classification: ${relevantPrefs.length} node(s)`);
-                }
+            const preferencias = this.memory.getPreferences();
+            const bloco = ContextBuilder.blocoDePreferencias(
+                preferencias.map(p => ({ nome: p.name, texto: p.content })), ContextBuilder.MAX_MEMORY_CHARS_COMPLETO);
+            if (bloco) {
+                classifyMessages = [{ role: 'assistant', content: bloco }, ...(classifyMessages ?? [])];
+                log.info(`[GoalOrchestrator] preference memory injected for classification: ${preferencias.length} node(s)`);
             }
         } catch (err) {
             log.warn('[GoalOrchestrator] preference memory search for classification failed:', String(err));

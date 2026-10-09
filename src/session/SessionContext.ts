@@ -177,7 +177,7 @@ export class SessionContext {
             systemPrompt,
             stateBlock,
             memoryBlock: memoryContext
-                ? `[MEMÓRIA — CONTEXTO PESSOAL DO USUÁRIO]\nCRÍTICO: Se o bloco abaixo contiver [INSTRUCOES PERSONALIZADAS], leia-as ANTES de qualquer outra coisa e aplique-as à resposta. Preferências do usuário SOBRESCREVEM o conhecimento geral do modelo sem exceção.\n${memoryContext}`
+                ? `[MEMÓRIA — CONTEXTO PESSOAL DO USUÁRIO]\nCRÍTICO: o bloco abaixo pode conter [PREFERÊNCIAS SALVAS DO USUÁRIO]. Leia-o ANTES de qualquer outra coisa: a preferência que trata do assunto do pedido SOBRESCREVE o conhecimento geral do modelo; as que não tratam do assunto não se aplicam.\n${memoryContext}`
                 : undefined,
             skillsBlock: skillsBlock ? `[HABILIDADES]\n${skillsBlock}` : undefined,
             checkpointBlock: checkpointSummary || undefined,

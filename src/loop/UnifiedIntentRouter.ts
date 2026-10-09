@@ -514,7 +514,15 @@ export class UnifiedIntentRouter {
     // (mesma responsabilidade que FAST_PATH_ALLOWED, em AgentLoop.ts, já valida de forma
     // estrutural depois — esta lista aqui é só o que o LLM tem permissão de DECLARAR, a
     // autorização final ainda passa pela allowlist e checagens de AgentLoop).
-    private static readonly KNOWN_TOOL_NAMES = new Set(['weather', 'current_time']);
+    //
+    // Campanha 069 (09/10/2026): cada atalho declara as categorias com que é COERENTE — validação estrutural da
+    // própria saída do LLM (o atalho escolhido pertence à categoria que ele mesmo escolheu?), não uma leitura do
+    // texto do usuário. Achado na navegação: 'Guarde isto: minha cidade padrão para a previsão do tempo é X' veio
+    // como memory_operation + tool=current_time, e o atalho da hora respondeu '🕐 01:37' sem gravar nada.
+    private static readonly KNOWN_TOOL_CATEGORIES: Record<string, IntentCategory[]> = {
+        weather: ['information'],
+        current_time: ['information', 'conversation'],
+    };
 
     private async llmClassify(input: string, context?: RouterContext): Promise<SemanticClassification> {
         const messages: LLMMessage[] = buildClassificationMessages(input, context);
@@ -536,7 +544,12 @@ export class UnifiedIntentRouter {
             const confidence = typeof parsed.confidence === 'number' ? Math.min(Math.max(parsed.confidence, 0.5), 0.95) : 0.7;
             // toolName só é aceito se pertencer ao conjunto conhecido — validação estrutural de
             // um valor que o LLM declarou, não uma segunda interpretação do texto do usuário.
-            const toolName = typeof parsed.toolName === 'string' && UnifiedIntentRouter.KNOWN_TOOL_NAMES.has(parsed.toolName) ? parsed.toolName : undefined;
+            const declarada = typeof parsed.toolName === 'string' ? parsed.toolName : undefined;
+            const categoriasDoAtalho = declarada ? UnifiedIntentRouter.KNOWN_TOOL_CATEGORIES[declarada] : undefined;
+            const toolName = categoriasDoAtalho && categoriasDoAtalho.includes(category) ? declarada : undefined;
+            if (categoriasDoAtalho && !toolName) {
+                log.info(`[UNIFIED-ROUTER] atalho '${declarada}' incoerente com a categoria '${category}' declarada pelo próprio modelo — ignorado (segue pelo fluxo normal)`);
+            }
             const toolParams = toolName && parsed.toolParams && typeof parsed.toolParams === 'object' ? parsed.toolParams : undefined;
             // topicSlug: mesma regra — validação estrutural de FORMATO do que o LLM declarou
             // (SkillLearner.recordPattern), nunca uma segunda interpretação do texto do usuário.

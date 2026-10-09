@@ -180,8 +180,12 @@ console.log('\n=== S231-9 — Fix presente estruturalmente: route() lê o cache 
 console.log('\n=== S231-10 — Fix presente estruturalmente: llmClassify() pode declarar toolName/toolParams, validados contra KNOWN_TOOL_NAMES ===');
 {
     const source = fs.readFileSync(path.join(process.cwd(), 'src', 'loop', 'UnifiedIntentRouter.ts'), 'utf-8');
-    assert(/KNOWN_TOOL_NAMES = new Set\(\['weather', 'current_time'\]\)/.test(source), 'KNOWN_TOOL_NAMES presente e restrito a weather/current_time');
-    assert(/UnifiedIntentRouter\.KNOWN_TOOL_NAMES\.has\(parsed\.toolName\)/.test(source), 'toolName do LLM é validado contra KNOWN_TOOL_NAMES antes de ser aceito — nunca confiado cru');
+    // Campanha 069 (09/10/2026): o conjunto virou mapa atalho → categorias coerentes (mesma restrição a
+    // weather/current_time, mais a coerência com a categoria que o próprio LLM declarou).
+    assert(/KNOWN_TOOL_CATEGORIES: Record<string, IntentCategory\[\]> = \{\s*weather: \['information'\],\s*current_time: \['information', 'conversation'\],\s*\}/.test(source),
+        'atalhos conhecidos restritos a weather/current_time, cada um com as categorias coerentes');
+    assert(/UnifiedIntentRouter\.KNOWN_TOOL_CATEGORIES\[declarada\]/.test(source) && /categoriasDoAtalho\.includes\(category\) \? declarada : undefined/.test(source),
+        'toolName do LLM é validado (conhecido E coerente com a categoria) antes de ser aceito — nunca confiado cru');
     assert(/toolBridge/.test(source) && /Known simple capabilities/.test(source), 'prompt de classificação inclui a ponte de tool (toolBridge) explicando quando declarar toolName');
     assert(/never when it also asks for comparison, summary, analysis/.test(source), 'prompt instrui explicitamente o LLM a NÃO declarar toolName quando há comparação/resumo/análise — a interpretação continua sendo do LLM, não de um veto determinístico');
 }

@@ -14,6 +14,7 @@ import { ProviderFactory, LLMMessage } from '../core/ProviderFactory';
 import { GoalClassification } from './GoalTypes';
 import { GOAL_LIMITS } from './GoalLimits';
 import { ChannelContext } from './agentLoopTypes';
+import { ContextBuilder } from './ContextBuilder';
 
 const log = createLogger('GoalExtractor');
 
@@ -198,10 +199,16 @@ export class GoalExtractor {
         // Informação Completa para Decidir (Sprint V2): a mensagem atual é o OBJETO da classificação — vai inteira
         // (antes: 300 caracteres; o `objective` escrito daqui alimentava replanejamento e revisão de risco). O contexto
         // recente pode ser trecho, mas o corte é declarado ao modelo.
+        // Campanha 069 (09/10/2026): o bloco de preferências salvas (injetado pelo GoalOrchestrator) vai INTEIRO — é a
+        // fonte que resolve o dado faltante; cortado em 300 chars, preferências sumiam. Reconhecido pelo cabeçalho
+        // constante (estrutural), não pelo conteúdo.
+        const ehBlocoDePreferencias = (m: { content: string }) => m.content.startsWith(ContextBuilder.CABECALHO_PREFERENCIAS);
         const conversationSnippet = recentMessages && recentMessages.length > 0
-            ? '\n\nContexto recente da conversa (últimas mensagens antes desta; cada uma em trecho de até 300 caracteres — o corte é do sistema):\n' +
+            ? '\n\nContexto recente da conversa (últimas mensagens antes desta; cada uma em trecho de até 300 caracteres — o corte é do sistema; o bloco de preferências salvas vai inteiro):\n' +
               recentMessages
-                  .map(m => `${m.role === 'assistant' ? 'Assistente' : 'Usuário'}: ${m.content.slice(0, 300)}`)
+                  .map(m => ehBlocoDePreferencias(m)
+                      ? `Memória: ${m.content}`
+                      : `${m.role === 'assistant' ? 'Assistente' : 'Usuário'}: ${m.content.slice(0, 300)}`)
                   .join('\n') +
               '\n\n'
             : '\n\n';
@@ -224,7 +231,7 @@ Regras:
 - Relatórios de erro técnico com código ou path específico são NUNCA ambíguos: o erro já identifica o problema
 - Se o contexto recente mostra que o usuário está respondendo a uma lista de opções ou confirmando uma escolha, is_goal=false
 - REGRA CRÍTICA — Follow-up com tópico estabelecido: se o contexto recente da conversa estabelece claramente o tópico (ex: conversa sobre preço de cripto, previsão de tempo, consulta de dados de um ativo), mensagens como "quero dados atuais", "tente novamente", "quero mais informações", "busque agora" NÃO são ambíguas — o assunto já está determinado pelo contexto. is_ambiguous=false nesses casos.
-- REGRA CRÍTICA — Preferência salva na memória resolve o dado faltante: se o contexto inclui uma linha "[MEMÓRIA — preferências salvas do usuário relevantes a esta mensagem]" com uma preferência que preenche exatamente o parâmetro que faltaria (ex: cidade padrão, formato preferido), NÃO marque como ambígua — is_ambiguous=false, e inclua o valor resolvido em "objective". Só marque is_ambiguous=true se a memória não cobrir o dado que falta.
+- REGRA CRÍTICA — Preferência salva na memória resolve o dado faltante: se o contexto inclui o bloco "${ContextBuilder.CABECALHO_PREFERENCIAS}" com uma preferência que preenche exatamente o parâmetro que faltaria (ex: cidade padrão, formato preferido), NÃO marque como ambígua — is_ambiguous=false, e inclua o valor resolvido em "objective". Só marque is_ambiguous=true se a memória não cobrir o dado que falta.
 - Exemplo: mensagem="envie um áudio com a previsão do tempo para amanhã" (sem cidade) + memória="Sempre que o usuário perguntar sobre previsão do tempo sem informar a cidade, considere Belo Horizonte como padrão" → is_ambiguous=false, objective="previsão do tempo para amanhã em Belo Horizonte, enviada como áudio"
 - Exemplos is_ambiguous=true: "essa versão não consigo editar" (qual arquivo?), "pode corrigir?" (o quê exatamente?)
 - Exemplos is_ambiguous=false: "criar apresentação sobre Python com 10 slides", "resumir o PDF que enviei"
