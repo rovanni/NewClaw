@@ -13,6 +13,9 @@ import { gravarAvaliacao, novaAvaliacaoId, versaoDoPrompt, INSTRUCAO_FALTOU, ler
 import type { CallTelemetry } from '../core/providerTypes';
 import { DECISION_PROMPT_MAX_CHARS } from '../core/providerTypes';
 import { limiteComum } from '../shared/orcamentoDeTexto';
+import { rodarEmSombra } from '../validation/sombra';
+import { estadoDoVeredito } from '../validation/motorPadrao';
+import { TIPO_SAIDA_CONTRA_EVIDENCIA, type EstadoDeGrounding } from '../validation/tipos/saidaContraEvidencia';
 const log = createLogger('Observervalidator');
 
 /**
@@ -486,6 +489,17 @@ export class ObserverValidator {
                 conteudo: { motivo: result.reason, sugestao: result.suggestedFix, saidaBruta: reg.saidaBruta, faltou: lerFaltou(reg.saidaBruta) },
             },
         });
+        // ADR-014 M3 — o mesmo julgamento pelo motor único, em sombra (só quando houve veredito real).
+        if (reg.desfecho === 'veredito' && !result.validationSkipped) {
+            const ferramentas = ferramentasDoTurno && ferramentasDoTurno.length > 0 ? ferramentasDoTurno : [{ tool: toolUsed, output: toolResult }];
+            rodarEmSombra({
+                providerFactory: this.providerFactory, tipo: 'qualidade_da_resposta',
+                entradas: { pedido: userMessage, resposta: finalResponse, intencao: intent, ferramentas: ferramentas.map((f, i) => `[${i + 1}] ferramenta=${f.tool}\n${f.output}`).join('\n\n') },
+                avaliadorAtual: 'validador_qualidade', avaliacaoIdAtual: avaliacaoId,
+                estadoAtual: result.approved ? 'aprovado' : 'reprovado', estadoDoMotor: estadoDoVeredito, msAtual: Date.now() - t0,
+                detalheAtual: { tipoDeFalhaAntigo: result.failureType },
+            });
+        }
         return { ...result, avaliacaoId };
     }
 
@@ -902,6 +916,7 @@ export class ObserverValidator {
             });
             this.maybeObserveExtendedEvidence(response, evidences, traceCtx, { state, claims: parsed });
             this.maybeObserveLightModel(response, evidences, traceCtx, { state, claims: parsed, elapsedMs: Date.now() - t0 });
+            this.maybeShadowMotor(response, blocoEvidencias, pedidoDoUsuario, traceCtx, { state, claims: parsed, elapsedMs: Date.now() - t0, avaliacaoId });
             return { state, claims: parsed, reason: ObserverValidator.describeGrounding(state, parsed), elapsedMs: Date.now() - t0, ...base };
         } catch (err) {
             // Timeout, abort, erro de rede, provedor/modelo indisponível — todos significam a
@@ -1000,6 +1015,30 @@ export class ObserverValidator {
     // com esse modelo e vira UMA linha `[GROUNDING-SHADOW-MODEL]` (estado, contagens, tempo dos dois).
     // Diferente da sombra de evidência (que amplia o que o juiz vê), aqui a ÚNICA variável é o modelo,
     // para a diferença ser atribuível a ele. O veredito real já foi devolvido; nada da sombra o altera.
+
+    /**
+     * ADR-014 M1 — o mesmo julgamento pelo motor único (tipo `saida_contra_evidencia`), em SOMBRA: com as MESMAS
+     * entradas (pedido, resposta inteira, o mesmo bloco de evidências), depois do veredito real, sem bloquear e sem
+     * mudar nada. Registra a comparação (`sombra_motor_comparada`) para o critério de troca do M2 (ADR-014 §5).
+     * Desligado por padrão (VALIDACAO_SOMBRA) — no servidor local, uma chamada a mais na fila do usuário.
+     */
+    private maybeShadowMotor(
+        response: string,
+        blocoEvidencias: string,
+        pedido: string,
+        traceCtx: GroundingTraceContext | undefined,
+        real: { state: GroundingState; claims: GroundedClaim[]; elapsedMs: number; avaliacaoId: string },
+    ): void {
+        if (!traceCtx || (traceCtx.phase ?? '').startsWith('shadow')) return; // sem recursão nas outras sombras
+        rodarEmSombra<EstadoDeGrounding>({
+            providerFactory: this.providerFactory, tipo: TIPO_SAIDA_CONTRA_EVIDENCIA,
+            entradas: { pedido, resposta: response, evidencias: blocoEvidencias },
+            contexto: { traceId: traceCtx.traceId, conversationId: traceCtx.conversationId, goalId: traceCtx.goalId, stepId: traceCtx.stepId, phase: traceCtx.phase ?? 'initial' },
+            avaliadorAtual: 'juiz_grounding', avaliacaoIdAtual: real.avaliacaoId,
+            estadoAtual: real.state, estadoDoMotor: (estado) => estado, msAtual: real.elapsedMs,
+            detalheAtual: { antigoContagem: ObserverValidator.countClaims(real.claims) },
+        });
+    }
 
     private maybeObserveLightModel(
         response: string,

@@ -21,6 +21,8 @@
 
 import { ProviderFactory, LLMMessage } from '../core/ProviderFactory';
 import { createLogger } from './AppLogger';
+import { rodarEmSombra } from '../validation/sombra';
+import { estadoDoVeredito } from '../validation/motorPadrao';
 
 const log = createLogger('ContentStubClassifier');
 
@@ -117,6 +119,13 @@ export function makeContentStubClassifier(providerFactory: ProviderFactory): Con
             }
 
             const reason = String(parsed.reason ?? (parsed.isStub ? 'classificado como stub' : 'classificado como conteúdo real'));
+            // ADR-014 — o mesmo julgamento pelo motor único, em sombra (aprovado = conteúdo real, pronto para entrega).
+            rodarEmSombra({
+                providerFactory, tipo: 'conteudo_molde',
+                entradas: { pedido, texto: content, ferramenta: toolName },
+                avaliadorAtual: 'validacao_conteudo_molde',
+                estadoAtual: parsed.isStub ? 'reprovado' : 'aprovado', estadoDoMotor: estadoDoVeredito,
+            });
             log.info(`[ContentStubClassifier] tool=${toolName} isStub=${parsed.isStub} reason="${reason.slice(0, 100)}"`);
             return { isStub: parsed.isStub, reason };
         } catch (err) {

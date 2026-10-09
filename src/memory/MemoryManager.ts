@@ -20,6 +20,7 @@ import { MemoryFacade, SqliteMemoryFacade } from './MemoryFacade';
 import { ConfidenceClassifier } from '../core/ConfidenceClassifier';
 
 import { initializeSchema } from './memorySchema';
+import { MultiLayerRetriever } from './MultiLayerRetriever';
 import * as conv from './conversationRepository';
 import * as graph from './graphRepository';
 import * as snap from './snapshotRepository';
@@ -377,6 +378,27 @@ export class MemoryManager {
             `SELECT * FROM memory_nodes WHERE type IN ('preference', 'trait') AND (lifecycle_state IS NULL OR lifecycle_state = 'ACTIVE') ORDER BY updated_at DESC, id`
         ).all() as import('./memoryTypes').MemoryNode[];
     }
+    /**
+     * Nós de memória ativos mais próximos de um texto (o pedido do usuário), sem as preferências — que já vêm inteiras
+     * de getPreferences(). Fonte única (ADR-015) para quem precisa da "memória do pedido": a validação de suficiência
+     * e a resolução de parâmetro do fast path. Ordem = a da busca; filtro só de metadado objetivo do nó (ativo e
+     * confiança mínima), nunca de relevância — quem decide se serve é o LLM que recebe.
+     */
+    memoriaProximaDoPedido(texto: string, limite = 5): Array<{ id: string; name: string; content: string }> {
+        const preferencias = new Set(this.getPreferences().map(p => p.id));
+        const candidatos = new MultiLayerRetriever(this.db).retrieve(texto, [])
+            .filter(c => !preferencias.has(c.nodeId)).slice(0, limite);
+        if (candidatos.length === 0) return [];
+        const linhas = this.db.prepare(`
+            SELECT id, name, content FROM memory_nodes
+            WHERE id IN (${candidatos.map(() => '?').join(',')})
+              AND (lifecycle_state IS NULL OR lifecycle_state = 'ACTIVE')
+              AND (confidence IS NULL OR confidence >= 0.60)
+        `).all(...candidatos.map(c => c.nodeId)) as Array<{ id: string; name: string; content: string }>;
+        const ordem = new Map(candidatos.map((c, i) => [c.nodeId, i]));
+        return linhas.sort((a, b) => (ordem.get(a.id) ?? 0) - (ordem.get(b.id) ?? 0));
+    }
+
     addPreference(name: string, content: string): void { this.addNode({ id: `pref_${name}`, type: 'preference', name, content }); }
 
     getContext(maxChars: number = 1500): string {

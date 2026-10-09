@@ -73,10 +73,16 @@ export class ValidationEngine {
         }
         secoes.push(`CHECKLIST — responda cada item:\n${d.checklist.map((c, i) => `${i + 1}. ${c}`).join('\n')}`);
         if (d.preVerificacoes?.includes('citacao_existe_na_fonte')) {
-            secoes.push('Para cada item marcado "sim" ou "nao", copie em "trecho" o TRECHO LITERAL da fonte de verdade que o decide — exatamente como está escrito lá. O sistema confere se o trecho existe.');
+            // ADR-015: de onde a citação pode vir é declarado pelo tipo (padrão: só as fontes de verdade).
+            const deOnde = (d.fontesDaCitacao ?? ['fonte_de_verdade']).map(p => TITULO_DA_SECAO[p].split(' (')[0]).join(' ou ');
+            secoes.push(`Para cada item marcado "sim" ou "nao", copie em "trecho" o TRECHO LITERAL que o decide, de: ${deOnde} — exatamente como está escrito lá. O sistema confere se o trecho existe.`);
         }
         secoes.push(`${INSTRUCAO_FALTOU}\n${INSTRUCAO_DIFICULDADE}`);
-        secoes.push('Responda APENAS com JSON:\n{"estado":"aprovado|reprovado","itens":[{"item":"...","confere":"sim|nao|sem_evidencia","evidencia":"(opcional)","trecho":"(opcional)"}],"confianca":0.0,"motivo":"curto","faltou":"(opcional)","dificuldade":"(opcional)"}');
+        // ADR-015: campos extras declarados pelo tipo — pedidos com a instrução do descritor, no mesmo JSON.
+        const extras = d.camposExtras ?? [];
+        if (extras.length) secoes.push(`CAMPOS ADICIONAIS DA RESPOSTA:\n${extras.map(c => `- "${c.nome}": ${c.instrucao}`).join('\n')}`);
+        const camposExtrasJson = extras.map(c => `,"${c.nome}":"..."`).join('');
+        secoes.push(`Responda APENAS com JSON:\n{"estado":"aprovado|reprovado","itens":[{"item":"...","confere":"sim|nao|sem_evidencia","evidencia":"(opcional)","trecho":"(opcional)"}],"confianca":0.0,"motivo":"curto","faltou":"(opcional)","dificuldade":"(opcional)"${camposExtrasJson}}`);
         return secoes.join('\n\n');
     }
 
@@ -107,7 +113,7 @@ export class ValidationEngine {
                 depois: {
                     desfecho, estado: v.estado, duracaoMs: Date.now() - t0,
                     fatos: { itens: v.itens.length, confianca: v.confianca, faltouInformado: !!v.faltou, dificuldadeInformada: !!v.dificuldade, naoAvaliavelPorque: v.naoAvaliavelPorque },
-                    conteudo: { saidaBruta, itens: v.itens, motivo: v.motivo, faltou: v.faltou, dificuldade: v.dificuldade },
+                    conteudo: { saidaBruta, itens: v.itens, motivo: v.motivo, faltou: v.faltou, dificuldade: v.dificuldade, extras: v.extras },
                 },
             });
             return { veredito: v, adaptado: (d.adaptador ? d.adaptador(v) : v) as T };
@@ -144,10 +150,11 @@ export class ValidationEngine {
         saidaBruta = resultado.content;
 
         // 5. Leitura estrutural e pré-verificações.
-        const lido = lerSaidaDoModelo(saidaBruta || '');
+        const lido = lerSaidaDoModelo(saidaBruta || '', (d.camposExtras ?? []).map(c => c.nome));
         if (!lido) return naoAvaliavel('saída do modelo sem a estrutura do contrato', 'saida_invalida');
         if (d.preVerificacoes?.includes('citacao_existe_na_fonte')) {
-            const fontes = d.entradas.filter(e => e.papel === 'fonte_de_verdade').map(e => entradas[e.nome] ?? '');
+            const papeisDaCitacao = d.fontesDaCitacao ?? ['fonte_de_verdade'];
+            const fontes = d.entradas.filter(e => papeisDaCitacao.includes(e.papel)).map(e => entradas[e.nome] ?? '');
             for (const it of lido.itens) {
                 if (it.confere === 'sim' || it.confere === 'nao') {
                     it.citacaoConfere = citacaoExiste(it.trecho ?? '', fontes);

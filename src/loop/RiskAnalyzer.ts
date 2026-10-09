@@ -30,6 +30,8 @@ import { resolvePath } from '../utils/crossPlatform';
 import { createHash } from 'crypto';
 import { gravarAvaliacao, novaAvaliacaoId, versaoDoPrompt, INSTRUCAO_FALTOU, lerFaltou } from '../shared/evaluatorFlightRecorder';
 import type { CallTelemetry } from '../core/providerTypes';
+import { rodarEmSombra } from '../validation/sombra';
+import { estadoDoVeredito } from '../validation/motorPadrao';
 
 const log = createLogger('RiskAnalyzer');
 
@@ -778,6 +780,19 @@ OU
 
             const detectedRisks: string[] = Array.isArray(parsed.risks) ? parsed.risks : [];
             if (sink) sink.detectedRisks = detectedRisks.length;
+
+            // ADR-014 M5 — a mesma revisão pelo motor único, em sombra (só validação: o plano está completo e correto?).
+            if (!shadow) {
+                const planoMantido = detectedRisks.length === 0 && !(Array.isArray(parsed.plan) && parsed.plan.length > 0);
+                rodarEmSombra({
+                    providerFactory: this.providerFactory, tipo: 'risco_do_plano',
+                    entradas: { pedido: goal.userIntent, plano: stepsStr, objetivo: goal.objective, ferramentas: this.toolRegistry.getEnabled().map(t => t.name).join(', ') },
+                    contexto: { goalId: goal.id },
+                    avaliadorAtual: 'analise_risco',
+                    estadoAtual: planoMantido ? 'aprovado' : 'reprovado', estadoDoMotor: estadoDoVeredito,
+                    detalheAtual: { riscosAntigos: detectedRisks.slice(0, 5) },
+                });
+            }
 
             if (!parsed.plan || !Array.isArray(parsed.plan) || parsed.plan.length === 0) {
                 if (sink) sink.outcome = 'confirmed';

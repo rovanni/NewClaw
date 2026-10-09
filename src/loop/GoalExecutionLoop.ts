@@ -22,6 +22,8 @@ import * as crypto from 'crypto';
 import { createLogger } from '../shared/AppLogger';
 import { gravarEfeito } from '../shared/evaluatorFlightRecorder';
 import { limiteComum } from '../shared/orcamentoDeTexto';
+import { rodarEmSombra } from '../validation/sombra';
+import { estadoDoVeredito } from '../validation/motorPadrao';
 import { DECISION_PROMPT_MAX_CHARS } from '../core/providerTypes';
 import { buildHostAppContextBlock, hostContextMode, appendHostBlock } from '../shared/hostAppContext';
 import { AgentLoop } from './AgentLoop';
@@ -4476,6 +4478,21 @@ OU
                 ` reason="${(parsed.reason ?? parsed.summary ?? '').slice(0, 100)}"` +
                 ` supporting_tools="${successToolsList.slice(0, 120)}"`
             );
+
+            // ADR-014 M6 — o mesmo julgamento pelo motor único, em sombra (as mesmas seções do prompt atual), comparado
+            // com o veredito do MODELO (antes das checagens estruturais que podem derrubá-lo).
+            rodarEmSombra({
+                providerFactory: this.providerFactory, tipo: 'conclusao_do_objetivo',
+                entradas: {
+                    pedido: goal.userIntent, alvo: validationTarget,
+                    resultados: `PASSOS EXECUTADOS:\n${stepsContext || '(nenhum)'}\n\nRESULTADOS DAS FERRAMENTAS:\n${attemptsContext || '(nenhum)'}`,
+                    artefatos: `${artifactBlock}${deliveredArtifactsBlock}`.trim() || undefined,
+                    contratos: `${progressBlock}${responseContractBlock}${abandonedDeliveryBlock}`.trim() || undefined,
+                },
+                contexto: { goalId: goal.id },
+                avaliadorAtual: 'validacao_conclusao_do_objetivo',
+                estadoAtual: parsed.achieved ? 'aprovado' : 'reprovado', estadoDoMotor: estadoDoVeredito,
+            });
 
             // C1/C5: verificação de evidência pós-LLM (anti-alucinação).
             // Se o LLM afirma achieved=true com claims observáveis ("foi apresentado",

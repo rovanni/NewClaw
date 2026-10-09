@@ -19,6 +19,8 @@ import { createLogger } from '../shared/AppLogger';
 import { ProviderFactory, LLMMessage } from '../core/ProviderFactory';
 import { PlanStep } from './GoalTypes';
 import { DECISION_PROMPT_MAX_CHARS } from '../core/providerTypes';
+import { rodarEmSombra } from '../validation/sombra';
+import { estadoDoVeredito } from '../validation/motorPadrao';
 
 const log = createLogger('StepSemanticValidator');
 
@@ -281,6 +283,21 @@ export class StepSemanticValidator {
                 ` result=${parsedResult} confidence=${confidence.toFixed(2)}` +
                 ` reason="${(parsed.reason ?? '').slice(0, 80)}"`
             );
+
+            // ADR-014 M4 — o mesmo julgamento pelo motor único, em sombra (as MESMAS entradas: passo, pedido, resultado
+            // íntegro, fatos da execução).
+            rodarEmSombra({
+                providerFactory: this.providerFactory, tipo: 'resultado_do_passo',
+                entradas: {
+                    pedido: goalIntent, resultado: toolOutput,
+                    passo: `Intenção do passo: ${step.description}\nFerramenta executada: ${step.toolName ?? 'agentloop'}`,
+                    fatos: facts ? describeFacts(facts).join('\n') : undefined,
+                },
+                contexto: { stepId: step.id },
+                avaliadorAtual: 'validacao_resultado_do_passo',
+                estadoAtual: parsedResult === 'relevant' ? 'aprovado' : parsedResult === 'mismatch' ? 'reprovado' : 'nao_avaliavel',
+                estadoDoMotor: estadoDoVeredito,
+            });
 
             return { result: parsedResult, confidence, reason: parsed.reason, usedFastPath: false };
         } catch (err) {

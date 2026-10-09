@@ -1,7 +1,10 @@
 # ADR-014 — Validador único com descritores de validação
 
 > **Status:** **aprovado** pelo operador (08/10/2026). **M0 implementado** (motor, contrato, modo de raciocínio,
-> `faltou`/`dificuldade`; nenhum validador migrado ainda — `src/validation/`, teste `S363`). Próximo: M1 (juiz em sombra).
+> `faltou`/`dificuldade` — `src/validation/`, teste `S363`). **09/10/2026 (prioridade 0):** primeiro tipo NOVO nascido
+> no motor, `suficiencia_do_pedido` (ADR-015, em produção); **M1–M6 em sombra** — os seis validadores atuais têm o seu
+> tipo no motor, rodando junto, sem decidir, com a comparação no gravador de voo (`VALIDACAO_SOMBRA`, teste `S369`).
+> **Pendente:** a TROCA de cada validador (M2…), pelo critério da §5, depois de um período de sombra em uso real.
 > **Data:** 08/10/2026
 > **Origem:** proposta do operador — *"ao invés de ter vários validadores diferentes, ter um padrão e apenas um
 > validador; ele recebe o tipo de validação e todos os dados necessários — entrada, saída, risco etc. Como o MCP:
@@ -205,3 +208,16 @@ observações `faltou` não apontam entrada obrigatória ausente.
   veredito; com o raciocínio desligado no provedor, 26 s e veredito válido. **Pendente (decisão do operador):** se os
   avaliadores atuais (antes da migração M1–M6) devem declarar `raciocinio: 'desligado'` — a qualidade dos vereditos
   sem raciocínio em casos longos continua não medida (ver "Riscos que permanecem").
+- **09/10/2026 — campanha prioridade 0 (juiz padronizado):**
+  - Tipo novo `suficiencia_do_pedido` (ADR-015) — o primeiro a nascer no motor, já decidindo em produção.
+  - Extensões genéricas do contrato: `fontesDaCitacao` (de quais papéis a citação pode vir) e `camposExtras`
+    (campos de texto a mais na saída, devolvidos em `VereditoPadrao.extras`).
+  - M1–M6 em SOMBRA: `saida_contra_evidencia` (juiz de grounding), `qualidade_da_resposta`, `resultado_do_passo`,
+    `risco_do_plano`, `conclusao_do_objetivo`, `conteudo_molde` (`src/validation/tipos/`). Um só jeito de rodar em
+    sombra: `src/validation/sombra.ts` (`rodarEmSombra`) — depois do veredito real, sem bloquear, com as MESMAS entradas,
+    comparação no gravador do validador atual (efeito `sombra_motor_comparada`). Ligado por `VALIDACAO_SOMBRA`.
+  - Primeira medição real (modelo local, 2 pedidos, todas as sombras): grounding concordou 3/4 — no desacordo o juiz
+    atual marcou "Amanhã é sábado, 10/10" como não avaliável (contra a própria regra: dia da semana de uma data não se
+    julga) e bloqueou a resposta; o motor validou, com todas as citações conferidas. Passo 2/2, conclusão 1/1
+    concordaram; risco 0/1 (o atual pediu passo de entrega numa pergunta respondida no chat; o motor aprovou).
+  - Custo: com todas as sombras ligadas num servidor de um pedido por vez, 144 s → 412 s. Por isso desligado por padrão.

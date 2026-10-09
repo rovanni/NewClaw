@@ -44,7 +44,6 @@ import { ReflectionMemory } from '../memory/ReflectionMemory';
 import { ProactiveRecovery } from './ProactiveRecovery';
 import type { WorkflowEngine } from './WorkflowEngine';
 import type { ContinuationContext, WorkflowStepResult, AuthDecision } from './WorkflowTypes';
-import { MultiLayerRetriever } from '../memory/MultiLayerRetriever';
 
 import {
     ToolResult, ToolExecutor, LoopMetrics, ChannelContext,
@@ -1536,19 +1535,8 @@ export class AgentLoop {
             const searchQuery = `${intentContext ?? ''} ${paramName} ${cleanDesc}`.trim();
 
             const preferencias = this.memory.getPreferences();
-            const retriever = new MultiLayerRetriever(this.memory.getDatabase());
-            const idsDePreferencia = new Set(preferencias.map(p => p.id));
-            const candidatos = retriever.retrieve(searchQuery, []).filter(c => !idsDePreferencia.has(c.nodeId)).slice(0, 5);
-
-            // Nós ativos e com confiança mínima (metadado objetivo do nó, não relevância).
-            const db = this.memory.getDatabase();
-            const rows = candidatos.length === 0 ? [] : db.prepare(`
-                SELECT id, name, content, type, confidence
-                FROM memory_nodes
-                WHERE id IN (${candidatos.map(() => '?').join(',')})
-                  AND (lifecycle_state IS NULL OR lifecycle_state = 'ACTIVE')
-                  AND (confidence IS NULL OR confidence >= 0.60)
-            `).all(...candidatos.map(v => v.nodeId)) as Array<{ id: string; name: string; content: string; type: string; confidence: number }>;
+            // ADR-015: a "memória do pedido" é a mesma consulta da validação de suficiência (fonte única).
+            const rows = this.memory.memoriaProximaDoPedido(searchQuery, 5);
 
             const evidencia = [
                 ...preferencias.map(p => `• [preferência salva] ${p.name}: ${p.content}`),

@@ -27,6 +27,9 @@ import { avaliarGoal, KERNEL_ESCALATION_PREFIX } from './CognitiveKernelGate';
 import { ProviderFactory } from '../core/ProviderFactory';
 import { MemoryManager } from '../memory/MemoryManager';
 import { ContextBuilder } from './ContextBuilder';
+import { criarMotorDeValidacao } from '../validation/motorPadrao';
+import type { ValidationEngine } from '../validation/ValidationEngine';
+import { TIPO_SUFICIENCIA_DO_PEDIDO, type DecisaoDeSuficiencia } from '../validation/tipos/suficienciaDoPedido';
 import { ReflectionMemory } from '../memory/ReflectionMemory';
 import { CaseMemory } from '../memory/CaseMemory';
 import { OperationalKnowledge } from '../memory/OperationalKnowledge';
@@ -60,9 +63,11 @@ interface RecentCompletedGoal {
 export class GoalOrchestrator {
     private readonly goalStore: GoalStore;
     private readonly extractor: GoalExtractor;
+    /** ADR-014/015: motor único de validação, com os tipos registrados em validation/motorPadrao. */
+    private readonly motorDeValidacao: ValidationEngine;
     private readonly executionLoop: GoalExecutionLoop;
     /** Tracks sessions waiting for clarification: sessionKey → { originalMessage, timestamp } */
-    private readonly pendingClarifications = new Map<string, { originalMessage: string; timestamp: number }>();
+    private readonly pendingClarifications = new Map<string, { originalMessage: string; timestamp: number; pergunta?: string }>();
     /**
      * Rastreia o último goal concluído (com sucesso ou falha) por sessão.
      * Usado para detectar mensagens de follow-up/clarificação enviadas logo após um goal completar.
@@ -80,6 +85,7 @@ export class GoalOrchestrator {
     ) {
         this.goalStore = goalStore;
         this.extractor = new GoalExtractor(providerFactory, agentLoop.getClassifierModel());
+        this.motorDeValidacao = criarMotorDeValidacao(providerFactory);
 
         const reflectionMemory = new ReflectionMemory(memory);
         const caseMemory = new CaseMemory(memory);
@@ -156,7 +162,11 @@ export class GoalOrchestrator {
             this.pendingClarifications.delete(sessionKey);
             if (Date.now() - pending.timestamp < CLARIFICATION_TTL_MS) {
                 log.info(`[GoalOrchestrator] [GOAL] clarification pending found — session=${sessionKey}`);
-                message = `${pending.originalMessage}\n\n[RESPOSTA DO USUÁRIO]: ${message}`;
+                // ADR-015: a resposta chega dizendo O QUE foi perguntado — sem isso o agente não sabia a que ela respondia
+                // (teste real 09/10: "Florianópolis" virou "a cidade já estava salva na memória" e o tempo nem foi consultado).
+                message = pending.pergunta
+                    ? `${pending.originalMessage}\n\n[ESCLARECIMENTO — o assistente perguntou: "${pending.pergunta}"; o usuário respondeu: "${message}". Atenda o pedido acima usando esta resposta.]`
+                    : `${pending.originalMessage}\n\n[RESPOSTA DO USUÁRIO]: ${message}`;
                 log.info(`[GoalOrchestrator] [GOAL] user response attached to existing goal context`);
                 log.info(`[GoalOrchestrator] [GOAL] resuming goal execution with combined context`);
             } else {
@@ -321,6 +331,20 @@ export class GoalOrchestrator {
             ` message="${message.slice(0, 80)}"`
         );
 
+        // ── ADR-015: suficiência do pedido — antes de qualquer ferramenta, nos DOIS caminhos (goal e agente) ──
+        // Falta um dado do usuário e nem a memória o tem → a pergunta é obrigatória; a resposta volta junto do pedido
+        // original (pendingClarifications). Quando este tipo decide, ele é a autoridade única de "perguntar ou não".
+        let suficienciaDecidiu = false;
+        if ((routerRequiresTools || routerRequiresGoal) && process.env.VALIDACAO_SUFICIENCIA !== 'off') {
+            const decisao = await this.verificarSuficiencia(message, recentMessages, conversationId);
+            if (decisao.acao !== 'sem_veredito') suficienciaDecidiu = true;
+            if (decisao.acao === 'perguntar') {
+                log.info(`[SUFICIENCIA] faltando=[${decisao.faltando.join(' | ')}] — pergunta ao usuário; pedido guardado para session=${sessionKey}`);
+                // Escrita pelo modelo no idioma do pedido; sem ela, os dados que faltam (o Core não emite texto de UI).
+                return this.guardarEsclarecimento(sessionKey, message, decisao.pergunta ?? decisao.faltando.join('? ') + '?');
+            }
+        }
+
         // P0.2 — Fail-open: GoalExtractor timeout ou conteúdo não-JSON (thinking recuperado).
         // Em vez de aceitar uma classificação arbitrária, roteamos para AgentLoop
         // que demonstrou resolver tarefas de criação sem GoalPlanner.
@@ -401,12 +425,13 @@ export class GoalOrchestrator {
         log.info(
             `[TOOL-ROUTING] intent="${message.slice(0, 80)}" isGoal=${classification.isGoal} isAmbiguous=${classification.isAmbiguous ?? false} reason=${classification.reason ?? 'none'} confidence=${classification.confidence}`
         );
-        if (classification.isAmbiguous) {
+        if (classification.isAmbiguous && suficienciaDecidiu) {
+            log.info(`[TOOL-ROUTING] isAmbiguous=true ignorado — a validação de suficiência (ADR-015) já decidiu que o pedido basta`);
+        } else if (classification.isAmbiguous) {
             log.info(`[TOOL-ROUTING] action=clarification_requested intent="${message.slice(0, 80)}"`);
-            this.pendingClarifications.set(sessionKey, { originalMessage: message, timestamp: Date.now() });
             log.info(`[GoalOrchestrator] goal ambiguous — clarification stored for session=${sessionKey}`);
-            return classification.clarificationQuestion
-                ?? 'Para ajudar melhor, pode dar mais detalhes sobre o que precisa exatamente?';
+            return this.guardarEsclarecimento(sessionKey, message, classification.clarificationQuestion
+                ?? 'Para ajudar melhor, pode dar mais detalhes sobre o que precisa exatamente?');
         }
 
         log.info(`[GoalOrchestrator] goal confidence=${classification.confidence} message="${message.slice(0, 80)}"`);
@@ -418,8 +443,7 @@ export class GoalOrchestrator {
         if (!evidenceFound) {
             log.warn(`[GoalOrchestrator] [PLANNER] objective inferred from data without explicit user request — proceeding with caution`);
             if (classification.confidence < 0.85) {
-                this.pendingClarifications.set(sessionKey, { originalMessage: message, timestamp: Date.now() });
-                return 'Recebi os dados, mas não ficou claro o que você gostaria que eu fizesse com eles. Pode me dizer?';
+                return this.guardarEsclarecimento(sessionKey, message, 'Recebi os dados, mas não ficou claro o que você gostaria que eu fizesse com eles. Pode me dizer?');
             }
         }
 
@@ -507,9 +531,8 @@ export class GoalOrchestrator {
             // a próxima mensagem do usuário reclassifica o texto combinado do zero, então
             // este goal específico (sem execução alguma) é abandonado, não reaproveitado.
             this.goalStore.setStatus(goal.id, 'abandoned');
-            this.pendingClarifications.set(sessionKey, { originalMessage: message, timestamp: Date.now() });
             log.info(`[GoalOrchestrator] [KERNEL-${gate.action.toUpperCase()}] goal=${goal.id} abandonado, aguardando contexto`);
-            return gate.message;
+            return this.guardarEsclarecimento(sessionKey, message, gate.message);
         }
 
         log.info(`[GoalOrchestrator] executing goal=${goal.id}`);
@@ -612,6 +635,46 @@ export class GoalOrchestrator {
      * - Se a mensagem pede pdf/pptx/docx/arquivo/slide → false (GoalExecutionLoop cuida)
      * - Se contém palavras de conteúdo textual puro → true (AgentLoop inline)
      */
+    /**
+     * ADR-015 — monta as entradas da validação `suficiencia_do_pedido` e a executa pelo motor único. Entradas inteiras
+     * (princípio Informação Completa para Decidir): o pedido, TODAS as preferências (fonte única), a memória próxima do
+     * pedido (fonte única), a conversa recente e as ferramentas com os dados que cada uma exige. Qualquer falha aqui
+     * vira `sem_veredito` — não bloqueia o pedido (ADR-015, Fase 2).
+     */
+    /** Guarda o pedido à espera do esclarecimento JUNTO com a pergunta feita (ver a resolução no início de process()). */
+    private guardarEsclarecimento(sessionKey: string, originalMessage: string, pergunta: string): string {
+        this.pendingClarifications.set(sessionKey, { originalMessage, timestamp: Date.now(), pergunta });
+        return pergunta;
+    }
+
+    private async verificarSuficiencia(
+        pedido: string,
+        recentMessages: Array<{ role: string; content: string }> | undefined,
+        conversationId: string,
+    ): Promise<DecisaoDeSuficiencia> {
+        try {
+            const preferencias = ContextBuilder.blocoDePreferencias(
+                this.memory.getPreferences().map(p => ({ nome: p.name, texto: p.content })), ContextBuilder.MAX_MEMORY_CHARS_COMPLETO);
+            const memoria = this.memory.memoriaProximaDoPedido(pedido, 5).map(n => `• ${n.name}: ${n.content}`).join('\n');
+            const conversa = (recentMessages ?? [])
+                .filter(m => m.role === 'user' || m.role === 'assistant')
+                .map(m => `${m.role === 'user' ? 'Usuário' : 'Assistente'}: ${m.content}`).join('\n');
+            const ferramentas = ToolRegistry.getEnabled().map(t => {
+                const schema = (t as unknown as { parameters?: { required?: string[]; properties?: Record<string, { description?: string }> } }).parameters;
+                const exige = (schema?.required ?? []).map(r => `${r}${schema?.properties?.[r]?.description ? ` (${schema.properties[r].description})` : ''}`);
+                return `- ${t.name}: ${(t.description || '').replace(/\s+/g, ' ').slice(0, 200)}${exige.length ? ` | exige: ${exige.join('; ')}` : ''}`;
+            }).join('\n');
+            const r = await this.motorDeValidacao.validar<DecisaoDeSuficiencia>(TIPO_SUFICIENCIA_DO_PEDIDO,
+                { pedido, preferencias, memoria, conversa, ferramentas }, { conversationId, phase: 'suficiencia' });
+            const d = r.adaptado;
+            log.info(`[SUFICIENCIA] acao=${d.acao} faltando=[${d.faltando.join(' | ')}] resolvidos=[${d.resolvidos.map(x => `${x.dado}=${x.valor ?? '?'}`).join(' | ')}]${d.motivo ? ` motivo="${d.motivo.slice(0, 120)}"` : ''}`);
+            return d;
+        } catch (err) {
+            log.warn(`[SUFICIENCIA] falhou — segue sem bloquear: ${String(err).slice(0, 160)}`);
+            return { acao: 'sem_veredito', faltando: [], resolvidos: [], motivo: String(err).slice(0, 160) };
+        }
+    }
+
     private isPlainTextGoal(message: string): boolean {
         const hasFileFormat = /\b(pdf|pptx|docx|xlsx|arquivo|documento|slide|apresenta[cç][aã]o|planilha|exportar|salvar\s+em)\b/i.test(message);
         if (hasFileFormat) return false;

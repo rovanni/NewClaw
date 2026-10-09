@@ -62,6 +62,8 @@ export interface VereditoPadrao {
     /** Por que o motor não chegou a um veredito do modelo (entrada ausente, orçamento, falha). */
     naoAvaliavelPorque?: string;
     avaliacaoId?: string;
+    /** Campos extras declarados pelo descritor (`camposExtras`), lidos da saída do modelo. ADR-015. */
+    extras?: Record<string, string>;
 }
 
 export interface DescritorDeValidacao<TAdaptado = VereditoPadrao> {
@@ -78,6 +80,17 @@ export interface DescritorDeValidacao<TAdaptado = VereditoPadrao> {
      */
     agregacao: 'modelo' | 'itens';
     preVerificacoes?: PreVerificacao[];
+    /**
+     * ADR-015: de quais papéis o trecho de `citacao_existe_na_fonte` pode vir. Padrão: só `fonte_de_verdade`. Um tipo
+     * em que o próprio objeto é fonte legítima (o pedido do usuário pode conter o dado) declara também `objeto`.
+     */
+    fontesDaCitacao?: PapelDaEntrada[];
+    /**
+     * ADR-015: campos de texto a mais na saída do modelo (ex.: a pergunta a fazer ao usuário). O motor os pede no
+     * formato JSON com a instrução declarada e os devolve em `VereditoPadrao.extras`. Genérico — o motor não sabe o
+     * que cada um significa.
+     */
+    camposExtras?: Array<{ nome: string; instrucao: string }>;
     raciocinio: ModoDeRaciocinio;
     /** Chave da configuração que escolhe o modelo (ex.: 'OBSERVER_MODEL'). Vazia/ausente = modelo padrão do provedor. */
     modeloConfig?: string;
@@ -104,8 +117,15 @@ export function validarDescritor(d: DescritorDeValidacao<unknown>): string[] {
         }
     }
     if (d.checklist.length === 0) erros.push('checklist vazio');
-    if (d.preVerificacoes?.includes('citacao_existe_na_fonte') && !d.entradas.some(e => e.papel === 'fonte_de_verdade')) {
-        erros.push('citacao_existe_na_fonte exige ao menos uma entrada fonte_de_verdade');
+    const papeisDaCitacao = d.fontesDaCitacao ?? ['fonte_de_verdade'];
+    if (d.preVerificacoes?.includes('citacao_existe_na_fonte') && !d.entradas.some(e => papeisDaCitacao.includes(e.papel))) {
+        erros.push('citacao_existe_na_fonte exige ao menos uma entrada com papel de fonte da citação');
+    }
+    const reservados = new Set(['estado', 'itens', 'confianca', 'motivo', 'faltou', 'dificuldade']);
+    for (const c of d.camposExtras ?? []) {
+        if (!/^[a-z][a-z0-9_]*$/.test(c.nome)) erros.push(`campo extra "${c.nome}" deve ser snake_case`);
+        if (reservados.has(c.nome)) erros.push(`campo extra "${c.nome}" colide com um campo do veredito padrão`);
+        if (!c.instrucao.trim()) erros.push(`campo extra "${c.nome}" sem instrução`);
     }
     return erros;
 }
@@ -139,7 +159,7 @@ const ESTADOS: ReadonlySet<string> = new Set(['aprovado', 'reprovado']);
  * Lê a saída do modelo. Estrutural: só existência, tipo e valores permitidos — o texto não é interpretado.
  * Devolve null quando a forma não confere (o motor trata como não avaliável; uma saída malformada nunca é "consertada").
  */
-export function lerSaidaDoModelo(saida: string): Omit<VereditoPadrao, 'estado'> & { estadoDoModelo?: 'aprovado' | 'reprovado' } | null {
+export function lerSaidaDoModelo(saida: string, nomesExtras: readonly string[] = []): Omit<VereditoPadrao, 'estado'> & { estadoDoModelo?: 'aprovado' | 'reprovado' } | null {
     const limpo = saida.replace(/```json\n?/gi, '').replace(/```\n?/g, '');
     const inicio = limpo.indexOf('{');
     const fim = limpo.lastIndexOf('}');
@@ -173,6 +193,9 @@ export function lerSaidaDoModelo(saida: string): Omit<VereditoPadrao, 'estado'> 
         motivo: texto(bruto.motivo, 1000),
         faltou: texto(bruto.faltou),
         dificuldade: texto(bruto.dificuldade),
+        extras: nomesExtras.length
+            ? Object.fromEntries(nomesExtras.map(n => [n, texto(bruto[n], 2000)]).filter(([, v]) => v !== undefined)) as Record<string, string>
+            : undefined,
     };
 }
 
