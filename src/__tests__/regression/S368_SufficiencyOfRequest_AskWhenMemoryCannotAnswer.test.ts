@@ -63,7 +63,7 @@ async function main(): Promise<void> {
         const motor = new ValidationEngine({} as any, criarRegistroPadrao());
         const p = motor.montarPrompt(descritorSuficienciaDoPedido as never, { pedido: 'Vai chover amanhã de manhã?', preferencias: PREF });
         assert(/"pergunta_ao_usuario"/.test(p) && /CAMPOS ADICIONAIS DA RESPOSTA/.test(p), 'o formato pede pergunta_ao_usuario, com a instrução do tipo');
-        assert(/TRECHO LITERAL que o decide, de: O QUE ESTÁ SENDO JULGADO ou FONTES DE VERDADE/.test(p), 'a citação pode vir do pedido ou das fontes');
+        assert(/trecho CURTO[^.]*que o decide, de: O QUE ESTÁ SENDO JULGADO ou FONTES DE VERDADE/.test(p), 'a citação pode vir do pedido ou das fontes');
         assert(/MESMO IDIOMA do pedido/.test(p), 'a pergunta ao usuário é escrita no idioma do pedido (o Core não emite texto fixo)');
         const ordem = ['CONTEXTO DO USUÁRIO', 'O QUE ESTÁ SENDO JULGADO', 'FONTES DE VERDADE'].map(s => p.indexOf(s));
         assert(ordem[0] === -1 && ordem[1] > 0 && ordem[2] > ordem[1], 'pedido como objeto, preferências como fonte de verdade');

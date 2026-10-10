@@ -165,7 +165,8 @@ console.log('\n=== S286.4 — AUDITORIA DE CÓDIGO: só os call sites com evidê
     // motor, que escala o orçamento de raciocínio SÓ para o tipo que declara `raciocinio: 'livre'` (hoje nenhum: todos
     // 'desligado', então não há raciocínio a orçar). O opt-in continua explícito e por tipo, nunca herdado por acidente.
     const engineSrc = readSrc('validation/ValidationEngine.ts');
-    assert(/reasoningIntensive:\s*d\.raciocinio === 'livre'/.test(engineSrc), 'o motor liga reasoningIntensive só para o tipo que declara raciocínio livre');
+    // ADR-016: o motor liga reasoningIntensive só no modo de raciocínio 'livre' (o que o descritor/perfil escolheu para a tentativa).
+    assert(/reasoningIntensive:\s*modos\[i\] === 'livre'/.test(engineSrc), 'o motor liga reasoningIntensive só na tentativa em modo de raciocínio livre');
     const observerOccurrences = (observerSrc.match(/reasoningIntensive:\s*true/g) || []).length;
     assert(observerOccurrences === 0, `ObserverValidator.ts não tem mais call sites próprios com reasoningIntensive — obtido: ${observerOccurrences}`, observerOccurrences);
 

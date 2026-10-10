@@ -12,7 +12,7 @@
  *
  * Execução: npx ts-node src/__tests__/regression/S374_VerdictReader_FindsTheVerdictInProse.test.ts
  */
-import { extrairObjetoDoVeredito, lerSaidaDoModelo } from '../../validation/contratoDeValidacao';
+import { extrairObjetoDoVeredito, lerSaidaDoModelo, citacaoExiste } from '../../validation/contratoDeValidacao';
 
 let passed = 0;
 let failed = 0;
@@ -46,6 +46,18 @@ console.log('\n=== S374-2 — lerSaidaDoModelo continua estrito sobre o conteúd
     assert(lerSaidaDoModelo('{"estado":"aprovado","itens":[{"confere":"sim"}]}') === null, 'item sem texto → nulo');
     const extras = lerSaidaDoModelo('Análise.\n{"estado":"reprovado","itens":[],"riscos":"a | b"}', ['riscos']);
     assert(extras?.extras?.riscos === 'a | b', 'campos extras declarados continuam sendo lidos', extras);
+}
+
+console.log('\n=== S374-3 — a citação é conferida só por forma tipográfica: o sinal de menos Unicode não reprova uma citação correta ===');
+{
+    const fonte = ['Variação 24h: -0,43% | Preço: US$ 1,18 (CoinGecko)\nCap. de mercado — **US$ 23,16M**'];
+    assert(citacaoExiste('Variação 24h: −0,43%', fonte), 'sinal de menos Unicode (−) vale como hífen');
+    assert(citacaoExiste('Cap. de mercado – US$ 23,16M', fonte), 'travessão/meia-risca valem como o traço da fonte; markdown ignorado');
+    assert(citacaoExiste('Preço:\u00A0US$ 1,18', fonte), 'espaço não separável vale como espaço');
+    assert(citacaoExiste('preço: us$ 1,18 (coingecko)', fonte), 'maiúsculas e minúsculas não importam');
+    assert(!citacaoExiste('Variação 24h: +0,43%', fonte), 'mas o SENTIDO conta: o sinal trocado não confere');
+    assert(!citacaoExiste('Preço: US$ 9,99', fonte), 'e um valor que não está na fonte não confere');
+    assert(!citacaoExiste('', fonte), 'citação vazia não confere');
 }
 
 console.log(`\n${'─'.repeat(60)}`);

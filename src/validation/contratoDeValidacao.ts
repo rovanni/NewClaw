@@ -245,7 +245,21 @@ export function agregarPorItens(itens: ItemJulgado[]): EstadoDoVeredito {
 
 // ── Pré-verificações determinísticas ─────────────────────────────────────────────────────────────
 
-const normalizar = (s: string): string => s.replace(/\*\*|`/g, '').replace(/[“”"']/g, '"').replace(/\s+/g, ' ').trim().toLowerCase();
+/**
+ * Normalização só TIPOGRÁFICA para conferir a citação — nunca de sentido: Unicode compatível (NFKC), marcas de markdown, aspas
+ * e apóstrofos de todos os tipos, traços/sinais de menos (– — − ‐), caracteres invisíveis e espaços especiais. Sem isso, um
+ * "−0,43%" com sinal de menos Unicode reprovava uma citação correta, e o modelo gastava minutos conferindo letra por letra
+ * (produção, 10/10/2026: 65 mil caracteres de raciocínio, 178 s, nenhum JSON).
+ */
+const normalizar = (s: string): string => s
+    .normalize('NFKC')
+    .replace(/[\u200B-\u200D\u2060\uFEFF\u00AD]/g, '')
+    .replace(/\*\*|`/g, '')
+    .replace(/[“”„‟«»"‘’‚‛']/g, '"')
+    .replace(/[‐‑‒–—―−]/g, '-')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
 
 /** O trecho citado existe literalmente nas fontes? Fragmentos separados por "…" conferidos um a um. */
 export function citacaoExiste(trecho: string, fontes: string[]): boolean {

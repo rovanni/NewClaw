@@ -244,3 +244,5 @@ observações `faltou` não apontam entrada obrigatória ausente.
   - Padronização conferida por auditoria dos sete descritores (divergências achadas: 4 chaves de modelo, política de
     falha dentro de cada consumidor, adaptador só em 3 tipos) e travada pelo teste `S373`.
   - Fora do ADR, consequência: `VALIDACAO_SOMBRA`, `src/validation/sombra.ts` e os testes S306/S307/S369 foram removidos.
+
+> **Atualização 10/10/2026:** o jeito de CHAMAR o modelo juiz (modo de raciocínio, fatias do orçamento, disjuntor) passou a ser descoberto/aprendido pelo motor — ver `ADR-016`.

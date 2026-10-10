@@ -150,7 +150,8 @@ console.log('\n=== S262-6 [funcional] — StepSemanticValidator.validate: fail-s
     const toolOutput = 'dados registrados no sistema para análise posterior, aguardando revisão da equipe responsável pelo acompanhamento do cronograma estabelecido pela coordenação técnica envolvida.';
     const validation = await validator.validate(step, toolOutput);
     assert(validation.result === 'unverifiable', 'FAIL-SOFT preservado: chatWithFallback falhando ainda produz result="unverifiable" (política do consumidor)', validation);
-    assert(calls.length === 1, 'chatWithFallback chamado 1x (slow path acionado, fast path inconclusivo)', calls);
+    // ADR-016: sem veredito no 1º modo de raciocínio, o motor tenta o outro modo (no máximo dois) — ambos dentro do orçamento.
+    assert(calls.length >= 1 && calls.length <= 2, 'chatWithFallback chamado pelo motor (slow path acionado, fast path inconclusivo; no máximo um por modo)', calls);
     assert((calls[0]?.modelOverride ?? '') === (process.env['OBSERVER_MODEL'] ?? ''), 'modelOverride = OBSERVER_MODEL, a chave única do juiz (issue 019: sem padrão embutido)', calls[0]);
 }
 

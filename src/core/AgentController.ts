@@ -5,9 +5,11 @@
  * Arquitetura multi-canal: Telegram ✅, Discord 🟡, Web
  */
 
+import * as path from 'path';
 import Database from 'better-sqlite3';
 import { ProviderFactory } from './ProviderFactory';
 import { ModelRegistryService } from './ModelRegistryService';
+import { perfilDoJuizDoProcesso } from '../validation/perfilDoJuiz';
 import { AgentLoop } from '../loop/AgentLoop';
 import type { ChannelContext } from '../loop/agentLoopTypes';
 import { MemoryManager } from '../memory/MemoryManager';
@@ -210,6 +212,15 @@ export class AgentController {
             customProviders: config.customProviders
         });
         this.modelRegistryService = new ModelRegistryService(this.providerFactory, () => this.config.customProviders || []);
+
+        // ADR-016 — o juiz descobre o que o provedor DECLARA de cada modelo (ex.: o Ollama devolve `capabilities`) e aprende
+        // pelo uso como o modelo se comporta como juiz; o aprendizado fica em disco, entre reinícios.
+        perfilDoJuizDoProcesso.persistirEm(path.join(process.cwd(), 'data', 'validation-judge-profile.json'));
+        perfilDoJuizDoProcesso.definirResolvedorDeCapacidades(async (modelo) => {
+            const catalogo = await this.modelRegistryService.getCatalog();
+            const info = catalogo.find(m => m.id === modelo);
+            return info ? { raciocinio: info.capabilities.includes('reasoning') } : undefined;
+        });
 
         this.skillLoader = new SkillLoader(config.skillsDir);
         this.skillLearner = new SkillLearner(this.db, config.skillsDir);

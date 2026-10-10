@@ -93,7 +93,7 @@ async function main(): Promise<void> {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { getBudgetAuxiliar } = require('../../shared/auxTimeout');
     const fJuiz = {
-        chatWithFallback: async (_m: unknown, _t: unknown, _p: unknown, _ms: unknown, _s: unknown, modelo?: string) => { modelosJuiz.push(modelo); return { status: 'success', content: '{"claims":[]}', attempts: [] }; },
+        chatWithFallback: async (_m: unknown, _t: unknown, _p: unknown, _ms: unknown, _s: unknown, modelo?: string) => { modelosJuiz.push(modelo); return { status: 'success', content: '{"estado":"aprovado","itens":[{"item":"x","confere":"sim"}]}', attempts: [] }; },
         getBudgetAuxiliar: (p: 'classificacao' | 'validacao') => getBudgetAuxiliar(p, null, null),
         modeloPermitidoPelaSoberania: (m: string) => pf.modeloPermitidoPelaSoberania(m),
     } as any;

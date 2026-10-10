@@ -6,6 +6,7 @@
 import type { ProviderFactory } from '../core/ProviderFactory';
 import { ValidationEngine } from './ValidationEngine';
 import { RegistroDeValidacoes } from './contratoDeValidacao';
+import { PerfilDoJuiz, perfilDoJuizDoProcesso } from './perfilDoJuiz';
 import { descritorSuficienciaDoPedido } from './tipos/suficienciaDoPedido';
 import { descritorSaidaContraEvidencia } from './tipos/saidaContraEvidencia';
 import { descritorQualidadeDaResposta, descritorResultadoDoPasso, descritorRiscoDoPlano, descritorConclusaoDoObjetivo, descritorConteudoMolde } from './tipos/demaisTipos';
@@ -21,7 +22,10 @@ export function criarRegistroPadrao(): RegistroDeValidacoes {
 }
 
 export function criarMotorDeValidacao(providerFactory: ProviderFactory): ValidationEngine {
-    return new ValidationEngine(providerFactory, criarRegistroPadrao());
+    // Em produção (perfil do processo ligado no boot) o aprendizado de como cada modelo se comporta como juiz é UM só, em
+    // disco, para todos os tipos e entre reinícios; fora disso (testes, CLI) cada motor aprende sozinho, sem tocar o disco.
+    const perfil = perfilDoJuizDoProcesso.persistente ? perfilDoJuizDoProcesso : new PerfilDoJuiz();
+    return new ValidationEngine(providerFactory, criarRegistroPadrao(), undefined, perfil);
 }
 
 // Uma instância por ProviderFactory: o motor é só dados (o registro) + a fábrica de provedores.
