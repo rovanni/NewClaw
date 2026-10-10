@@ -48,6 +48,9 @@ const { spawnSync } = require('child_process');
 // via node é o caminho padrão, sem shell, sem shim de plataforma.
 const tsNodeBin = require.resolve('ts-node/dist/bin.js');
 const PRELOAD = path.join(__dirname, 'regression-preload.cjs');
+// Todo teste roda na raiz do repositório, não no diretório de quem chamou o runner: o ts-node procura o tsconfig a partir do cwd e
+// vários testes leem arquivos por `process.cwd()` (S381-4).
+const RAIZ_DO_REPOSITORIO = path.join(__dirname, '..');
 const TIMEOUT_PADRAO_MS = 10 * 60 * 1000;
 /** A mensagem do assert() dos testes: "❌ FALHOU: <texto>". Estreito de propósito (ver o cabeçalho). */
 const MARCADOR_DE_FALHA = /FALHOU:/g;
@@ -88,7 +91,7 @@ function runOne(filePath, timeoutMs = TIMEOUT_PADRAO_MS) {
         NODE_OPTIONS: `${nodeOptionsOriginal} --require "${PRELOAD.replace(/\\/g, '/')}"`.trim(),
     };
     const t0 = process.hrtime.bigint();
-    const result = spawnSync(process.execPath, [tsNodeBin, filePath], { encoding: 'utf-8', env, timeout: timeoutMs, maxBuffer: 256 * 1024 * 1024 });
+    const result = spawnSync(process.execPath, [tsNodeBin, filePath], { encoding: 'utf-8', env, cwd: RAIZ_DO_REPOSITORIO, timeout: timeoutMs, maxBuffer: 256 * 1024 * 1024 });
     const durationMs = Math.round(Number(process.hrtime.bigint() - t0) / 1e6);
 
     let medicao = null;
@@ -260,7 +263,7 @@ function selfTest() {
     // Roda ESTE runner como um processo à parte, sobre uma pasta de fixtures (cenário controlado e isolado).
     const rodarRunner = (pasta, extra = []) => {
         const relatorio = path.join(pasta, '..', `relatorio-${path.basename(pasta)}.json`);
-        const r = spawnSync(process.execPath, [__filename, '--dir', pasta, '--report', relatorio, ...extra], { encoding: 'utf-8', maxBuffer: 64 * 1024 * 1024 });
+        const r = spawnSync(process.execPath, [__filename, '--dir', pasta, '--report', relatorio, ...extra], { encoding: 'utf-8', cwd: RAIZ_DO_REPOSITORIO, maxBuffer: 64 * 1024 * 1024 });
         let json = null;
         try { json = JSON.parse(fs.readFileSync(relatorio, 'utf-8')); } catch { /* sem relatório (ex.: zero testes) */ }
         return { code: r.status, out: (r.stdout || '') + (r.stderr || ''), json };

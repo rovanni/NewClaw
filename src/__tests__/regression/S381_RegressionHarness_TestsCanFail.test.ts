@@ -11,10 +11,12 @@
  * S381-2 — GUARDA ESTÁTICO: todo arquivo da suíte tem um mecanismo de saída que depende do resultado (nenhum teste novo pode
  *          nascer incapaz de falhar).
  * S381-3 — O RUNNER: o autoteste (pasta ausente, zero testes, timeout, exceção, exit != 0, "FALHOU:" com exit 0) passa.
+ * S381-4 — O CWD: o runner executa cada teste na raiz do repositório, qualquer que seja o diretório de quem o chamou.
  *
  * Execução: npx ts-node src/__tests__/regression/S381_RegressionHarness_TestsCanFail.test.ts
  */
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { spawnSync } from 'child_process';
 
@@ -73,6 +75,32 @@ console.log('\n=== S381-3 — o runner: o autoteste dos cenários controlados pa
 {
     const r = spawnSync(process.execPath, [path.join(process.cwd(), 'scripts', 'run-regression-tests.cjs'), '--selftest'], { encoding: 'utf-8', maxBuffer: 64 * 1024 * 1024 });
     assert(r.status === 0 && /SELFTEST OK/.test(r.stdout || ''), 'runner --selftest sai com 0 e diz SELFTEST OK', (r.stdout || '').slice(-400) + (r.stderr || '').slice(-400));
+}
+
+console.log('\n=== S381-4 — o runner não depende do diretório de quem o chama (cwd dos testes = raiz do repositório) ===');
+{
+    // Achado da auditoria (10/10/2026): `spawnSync` sem `cwd` fazia o teste filho herdar o diretório do chamador. Rodar o runner de
+    // outra pasta (um CI com `working-directory`, um terminal em `src/`) derrubava testes com erros de compilação enganosos, porque o
+    // ts-node procura o tsconfig a partir do cwd. O arquivo temporário abaixo se recusa a rodar fora da raiz do repositório.
+    const raiz = path.resolve(__dirname, '..', '..', '..');
+    const fixture = path.join(DIR, '__cwd__runner.negative.ts');
+    fs.writeFileSync(fixture,
+        `/// <reference types="node" />\n` +
+        `import * as fs from 'fs';\n` +
+        `const esperado = fs.realpathSync(${JSON.stringify(raiz)});\n` +
+        `const atual = fs.realpathSync(process.cwd());\n` +
+        `if (atual !== esperado) { console.error('FALHOU: o teste rodou em ' + atual + ' e não na raiz ' + esperado); process.exit(1); }\n` +
+        `console.log('cwd na raiz do repositório');\n`);
+    const anterior = process.cwd();
+    let r: { status: string; exitCode: number | null } | null = null;
+    try {
+        process.chdir(os.tmpdir());
+        r = runOne(fixture, 120_000);
+    } finally {
+        process.chdir(anterior);
+        try { fs.rmSync(fixture, { force: true }); } catch { /* arquivo temporário */ }
+    }
+    assert(r !== null && r.status === 'passed', 'chamado a partir de outro diretório, o teste filho ainda roda na raiz do repositório', r);
 }
 
 console.log(`\n${'─'.repeat(60)}`);
