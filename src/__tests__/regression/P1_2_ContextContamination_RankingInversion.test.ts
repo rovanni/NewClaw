@@ -19,8 +19,9 @@
  *   Nós com importance >= 0.8 mas qRel=0 entram → contaminam o budget
  *   Tier4 competitive fill: requires qRel > 0 MAS budget já esgotado
  *
- * ESTADO ATUAL: testes DEVEM FALHAR — demonstram o bug
- * ESTADO PÓS-FIX: devem passar
+ * ESTADO: o bug foi corrigido — os testes passam. Este arquivo nasceu como demonstração do bug (falhava de propósito) e, por isso, o
+ * resultado dele era só texto; desde 10/10/2026 uma falha sinaliza exit code 1 (guarda de regressão de verdade) e o bug presente
+ * imprime "FALHOU:".
  *
  * Execução: npx ts-node src/__tests__/regression/P1_2_ContextContamination_RankingInversion.test.ts
  */
@@ -43,7 +44,7 @@ function assert(condition: boolean, message: string): void {
 
 function assertFails(condition: boolean, message: string): void {
     if (!condition) {
-        console.log(`  🔴 BUG CONFIRMADO (esperado falhar): ${message}`);
+        console.error(`  🔴 FALHOU: bug presente — ${message}`);
         failed++;
     } else {
         console.log(`  ✅ BUG CORRIGIDO: ${message}`);
@@ -216,3 +217,6 @@ console.log(`\nFIX:`);
 console.log(`  Opção A: Quando rankingInverted=true, trocar o pior selected pelo best skipped`);
 console.log(`  Opção B: Reduzir preference budget para dar mais espaço ao competitive fill`);
 console.log(`  Opção C: Remover importance>=0.8 gate para nós tipo 'context' com qRel=0`);
+
+// Sinaliza a falha ao runner (exit code): sem isto o contador `failed` era só texto e o teste não conseguia falhar (auditoria 10/10/2026).
+if (failed > 0) process.exitCode = 1;

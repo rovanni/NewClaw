@@ -154,3 +154,6 @@ console.log(`  2. onArtifactDelivered callback — DELIVERY-GUARD → sentArtifa
 console.log(`  3. S10-PARTIAL — REMOVIDO em 17/08/2026 (conflava "agendado" com "enviado", ver S246)`);
 console.log(`  4. SessionManager.deliveredArtifacts — contexto cognitivo cross-goal para LLM`);
 console.log(`  5. ArtifactDeliveryRegistry — REMOVIDO (Strategy B, auditoria jun/2026)`);
+
+// Sinaliza a falha ao runner (exit code): sem isto o contador `failed` era só texto e o teste não conseguia falhar (auditoria 10/10/2026).
+if (failed > 0) process.exitCode = 1;
