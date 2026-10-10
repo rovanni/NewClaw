@@ -91,6 +91,10 @@ const GENERIC_CRITERIA_SUMMARY = 'Todos os critérios do checklist foram satisfe
 // chars íntegros. O usuário reperguntou duas vezes em 32 minutos.
 const ATTEMPT_OUTPUT_EVIDENCE_LIMIT = 300;
 const ATTEMPT_OUTPUT_DELIVERABLE_LIMIT = 8000;
+/** Orçamento (caracteres) dos resultados de ferramentas que o juiz de conclusão recebe: deixa folga para o resto do prompt (teto do motor: 60 mil). */
+const ORCAMENTO_RESULTADOS_PARA_O_JUIZ = 30_000;
+/** Orçamento (caracteres) do conteúdo dos artefatos em disco que o juiz de conclusão recebe, divididos entre eles. */
+const ORCAMENTO_ARTEFATOS_PARA_O_JUIZ = 16_000;
 
 /**
  * `ADR-011`: teto do erro de ferramenta guardado em `GoalAttempt.subToolFailures`. Erro de tool é
@@ -3306,6 +3310,37 @@ export class GoalExecutionLoop {
      * Se tudo não couber em `orcamentoChars`, a divisão é a de shared/orcamentoDeTexto (a mesma do juiz) e o corte
      * fica declarado no texto. Num goal retomado após reinício, só o trecho guardado existe — também declarado.
      */
+    /**
+     * S2 (10/10/2026) — o que o juiz de CONCLUSÃO recebe de resultados. Os juízes relataram, no campo "faltou", resultados
+     * "truncados": o registro do goal guarda só 300 caracteres da saída de uma ferramenta (e 200 do resultado do passo), e o juiz
+     * os recebia assim, sem aviso. Aqui: a saída completa desta execução quando existe (`saidasCompletas`), dividida pela mesma
+     * regra do resto do sistema (`limiteComum`), e QUALQUER corte declarado no texto — o do orçamento e o do registro
+     * (Informação Completa para Decidir: nunca cortar em silêncio).
+     */
+    static resultadosParaOJuiz(goal: Goal, state: GoalExecutionState, orcamentoChars: number): { passos: string; ferramentas: string } {
+        const sucessos = goal.attempts
+            .filter(a => a.result === 'success')
+            .map(a => {
+                const completa = state.saidasCompletas?.get(chaveDaSaida(a.planGeneration, a.planStepId));
+                return { a, texto: completa ?? a.output ?? '', soTrecho: completa === undefined };
+            });
+        const CABECALHO_POR_ITEM = 120;
+        const limite = limiteComum(sucessos.map(x => x.texto.length), orcamentoChars - sucessos.length * CABECALHO_POR_ITEM);
+        const descricaoDoPasso = (id: string | undefined): string => goal.currentPlan.find(p => p.id === id)?.description ?? '';
+        const ferramentas = sucessos.map(({ a, texto, soTrecho }) => {
+            const cortado = texto.length > limite;
+            const corpo = texto ? (cortado ? texto.slice(0, limite) : texto) : '(sem output)';
+            const notas = [
+                soTrecho && texto.length >= attemptOutputLimit(a.toolName) ? `só os primeiros ${texto.length} caracteres ficaram guardados — o resto não está disponível` : '',
+                cortado ? `cortado para caber: mostrando ${limite} de ${texto.length} caracteres` : '',
+            ].filter(Boolean);
+            const passo = descricaoDoPasso(a.planStepId);
+            return `- ${a.toolName}${passo ? ` (passo: ${passo.slice(0, 120)})` : ''}${notas.length ? ` [${notas.join('; ')}]` : ''}: ${corpo}`;
+        }).join('\n');
+        const passos = goal.currentPlan.filter(p => p.status === 'completed').map(p => `- ${p.description}`).join('\n');
+        return { passos, ferramentas };
+    }
+
     static secaoDoPlanoParaEtapa(goal: Goal, currentStep: PlanStep, state: GoalExecutionState, orcamentoChars: number): string {
         const geracao = goal.planGeneration ?? 0;
         // Último attempt com resultado de cada passo desta geração do plano (sem o passo atual).
@@ -4171,19 +4206,9 @@ export class GoalExecutionLoop {
         activeMilestone: string | undefined,
         state: GoalExecutionState,
     ): Promise<string | undefined> {
-        void state; // reservado para uso futuro (ex: progressModel) — não usado nesta versão mínima
-        const stepsContext = goal.currentPlan
-            .filter(s => s.status === 'completed')
-            .map(s => `- ${s.description}: ${s.result || '(sem output)'}`)
-            .join('\n');
-        const attemptsContext = goal.attempts
-            .filter(a => a.result === 'success')
-            // Excerto, não o texto inteiro: o output de um attempt 'agentloop' passou a ser
-            // guardado íntegro (é o entregável — ver ATTEMPT_OUTPUT_DELIVERABLE_LIMIT), mas o
-            // prompt do LLM precisa de evidência para julgar, não da resposta completa. Truncar
-            // aqui mantém este prompt idêntico ao que ele já recebia antes dessa mudança.
-            .map(a => `- ${a.toolName}: ${a.output?.slice(0, ATTEMPT_OUTPUT_EVIDENCE_LIMIT) || '(sem output)'}`)
-            .join('\n');
+        // S2 (10/10/2026): o juiz recebe os resultados INTEIROS desta execução (não 300/200 caracteres sem aviso); o corte, quando
+        // inevitável, é declarado. Mesma fonte do que a etapa do agente recebe (secaoDoPlanoParaEtapa).
+        const { passos: stepsContext, ferramentas: attemptsContext } = GoalExecutionLoop.resultadosParaOJuiz(goal, state, ORCAMENTO_RESULTADOS_PARA_O_JUIZ);
         const blockersContext = goal.blockers
             .map(b => `- ${b.kind}: ${b.description}`)
             .join('\n');
@@ -4266,19 +4291,8 @@ Se a intenção original pedia uma explicação condicional (ex: "se não conseg
             this.goalStore.update(goal.id, { successCriteria: criteriaEval.updated });
         }
 
-        const stepsContext = goal.currentPlan
-            .filter(s => s.status === 'completed')
-            .map(s => `- ${s.description}: ${s.result || '(sem output)'}`)
-            .join('\n');
-
-        const attemptsContext = goal.attempts
-            .filter(a => a.result === 'success')
-            // Excerto, não o texto inteiro: o output de um attempt 'agentloop' passou a ser
-            // guardado íntegro (é o entregável — ver ATTEMPT_OUTPUT_DELIVERABLE_LIMIT), mas o
-            // prompt do LLM precisa de evidência para julgar, não da resposta completa. Truncar
-            // aqui mantém este prompt idêntico ao que ele já recebia antes dessa mudança.
-            .map(a => `- ${a.toolName}: ${a.output?.slice(0, ATTEMPT_OUTPUT_EVIDENCE_LIMIT) || '(sem output)'}`)
-            .join('\n');
+        // S2 (10/10/2026): resultados INTEIROS desta execução, com qualquer corte declarado (ver resultadosParaOJuiz).
+        const { passos: stepsContext, ferramentas: attemptsContext } = GoalExecutionLoop.resultadosParaOJuiz(goal, state, ORCAMENTO_RESULTADOS_PARA_O_JUIZ);
 
         const validationTarget = activeMilestone
             ? `MARCO ATUAL A SER VALIDADO: ${activeMilestone}\n(Objetivo Global do Projeto: ${goal.objective})`
@@ -4288,21 +4302,30 @@ Se a intenção original pedia uma explicação condicional (ex: "se não conseg
         const writtenPaths = GoalExecutionLoop.producedArtifactPaths(goal.attempts);
         const artifactLines: string[] = [];
         const existingArtifactPaths: string[] = [];
+        // S2 (10/10/2026): os artefatos dividem um orçamento comum (mesma regra do resto do sistema) em vez de um corte fixo de 2000
+        // caracteres por arquivo, e o corte — quando houver — é declarado com os números ("o corte é do sistema, não do dado").
+        const lidos: Array<{ rawPath: string; filePath: string; content: string; hash: string }> = [];
         for (const rawPath of writtenPaths) {
             const { resolved: filePath } = resolvePath(rawPath);
             try {
                 const content = fs.readFileSync(filePath, 'utf-8');
-                const truncated = content.length > 2000 ? content.slice(0, 2000) + '\n...(truncado)' : content;
                 const hash = crypto.createHash('sha1').update(content).digest('hex').slice(0, 12);
-                log.info(
-                    `[VALIDATION-ARTIFACT] goal=${goal.id}` +
-                    ` path="${filePath}" chars=${content.length} hash=${hash} included=true`
-                );
-                artifactLines.push(`--- ARQUIVO: ${filePath} (${content.length} chars, hash=${hash}) ---\n${truncated}`);
-                existingArtifactPaths.push(rawPath); // formato bruto — mesma convenção de toolArgs.file_path/sentArtifacts
+                lidos.push({ rawPath, filePath, content, hash });
             } catch {
                 log.warn(`[VALIDATION-ARTIFACT] goal=${goal.id} path="${filePath}" included=false readable=false`);
             }
+        }
+        const limiteDosArtefatos = limiteComum(lidos.map(l => l.content.length), ORCAMENTO_ARTEFATOS_PARA_O_JUIZ - lidos.length * 200);
+        for (const { rawPath, filePath, content, hash } of lidos) {
+            const truncated = content.length > limiteDosArtefatos
+                ? `${content.slice(0, limiteDosArtefatos)}\n[… trecho: primeiros ${limiteDosArtefatos} de ${content.length} caracteres — o corte é do sistema, não do dado]`
+                : content;
+            log.info(
+                `[VALIDATION-ARTIFACT] goal=${goal.id}` +
+                ` path="${filePath}" chars=${content.length} hash=${hash} included=true`
+            );
+            artifactLines.push(`--- ARQUIVO: ${filePath} (${content.length} chars, hash=${hash}) ---\n${truncated}`);
+            existingArtifactPaths.push(rawPath); // formato bruto — mesma convenção de toolArgs.file_path/sentArtifacts
         }
         const artifactBlock = artifactLines.length > 0
             ? `\nCONTEÚDO REAL DOS ARTEFATOS EM DISCO:\n${artifactLines.join('\n\n')}`

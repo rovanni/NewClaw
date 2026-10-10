@@ -108,6 +108,8 @@ export interface GroundingTraceContext {
      * `[GROUNDING-TRACE]` (só o tamanho); o gravador de voo o grava com TRACE_CONTENT.
      */
     userRequest?: string;
+    /** S4: a janela de turnos recentes da conversa (sem a mensagem atual) — contexto para o juiz, nunca evidência. */
+    recentMessages?: Array<{ role: string; content: string }>;
     /**
      * `initial` = julgamento da resposta do turno; `partial-revalidation` = revalidação da resposta
      * parcial; `shadow-extended` = a execução em sombra com evidência ampliada (nunca vira decisão).
@@ -186,6 +188,10 @@ const KNOWN_GOOD_TOOLS: Array<{
 
 export class ObserverValidator {
     private providerFactory: ProviderFactory;
+    /** Quem sabe o que cada ferramenta faz (o registro de ferramentas do agente) — injetado, para o juiz explicar o resultado. */
+    private descreverFerramenta?: (nome: string) => string | undefined;
+
+    definirDescritorDeFerramentas(fn: (nome: string) => string | undefined): void { this.descreverFerramenta = fn; }
 
     constructor(providerFactory: ProviderFactory, observerModel: string = process.env.OBSERVER_MODEL || '') {
         this.providerFactory = providerFactory;
@@ -483,9 +489,16 @@ export class ObserverValidator {
         const blocoEvidencias = evidences
             .map(e => `[${e.id}] ferramenta=${e.tool}${e.input ? ` args=${e.input}` : ''}\n${e.output}`)
             .join('\n\n');
+        // S3: o que cada ferramenta usada FAZ (uma vez por ferramenta), em seção própria — contexto para entender o resultado, nunca evidência.
+        const blocoFerramentas = [...new Set(evidences.map(e => e.tool))]
+            .map(nome => ({ nome, descricao: this.descreverFerramenta?.(nome)?.trim() }))
+            .filter(f => f.descricao)
+            .map(f => `- ${f.nome}: ${f.descricao}`)
+            .join('\n');
         try {
             const r = await obterMotor(this.providerFactory).validar<DecisaoDeGrounding>(TIPO_SAIDA_CONTRA_EVIDENCIA, {
-                pedido: traceCtx?.userRequest?.trim() || undefined, resposta: response, evidencias: blocoEvidencias,
+                pedido: traceCtx?.userRequest?.trim() || undefined, resposta: response, evidencias: blocoEvidencias, ferramentas: blocoFerramentas || undefined,
+                conversa: ObserverValidator.conversaParaOJuiz(traceCtx?.recentMessages),
             }, { traceId: traceCtx?.traceId, conversationId: traceCtx?.conversationId, goalId: traceCtx?.goalId, stepId: traceCtx?.stepId, phase: traceCtx?.phase ?? 'initial', signal });
             if (r.orcamentoMs !== undefined) base = { ...base, budgetMs: r.orcamentoMs };
             if (r.semVeredito) {
@@ -511,6 +524,26 @@ export class ObserverValidator {
             emit('judge_error', { state: 'UNVALIDATED', judgeError: String(err).slice(0, 120) });
             return { state: 'UNVALIDATED', claims: [], reason: `juiz não concluiu: ${String(err).slice(0, 120)}`, elapsedMs: Date.now() - t0, ...base };
         }
+    }
+
+    /**
+     * S4 — a conversa recente como texto para o juiz. Mensagens INTEIRAS, da mais nova para a mais antiga, até o orçamento; o que
+     * não coube é DECLARADO ("N mensagens mais antigas omitidas") — nunca cortado em silêncio no meio de uma fala.
+     */
+    static conversaParaOJuiz(mensagens: Array<{ role: string; content: string }> | undefined, orcamentoChars = 8000): string | undefined {
+        const falas = (mensagens ?? [])
+            .filter(m => (m.role === 'user' || m.role === 'assistant') && m.content)
+            .map(m => `${m.role === 'user' ? 'Usuário' : 'Assistente'}: ${m.content}`);
+        if (falas.length === 0) return undefined;
+        const mantidas: string[] = [];
+        let total = 0;
+        for (let i = falas.length - 1; i >= 0; i--) {
+            if (mantidas.length > 0 && total + falas[i].length > orcamentoChars) break;
+            mantidas.unshift(falas[i]);
+            total += falas[i].length + 1;
+        }
+        const omitidas = falas.length - mantidas.length;
+        return (omitidas > 0 ? `[… ${omitidas} mensagens mais antigas omitidas pelo sistema para caber — o corte é do sistema, não da conversa]\n` : '') + mantidas.join('\n');
     }
 
     private static countClaims(claims: GroundedClaim[]): { SUPPORTED: number; NOT_SUPPORTED: number; NOT_EVALUABLE: number } {

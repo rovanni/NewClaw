@@ -318,13 +318,17 @@ console.log('\n=== S175-8 — o prompt do validador continua recebendo só um ex
     // O entregável íntegro fica no registro do goal, mas NÃO infla o prompt de validação: o
     // validador precisa de evidência para julgar, não da resposta inteira. Sem isso, o custo da
     // validação passaria a crescer com o tamanho da resposta.
-    const usosNoPrompt = (SOURCE.match(
-        /a\.output\?\.slice\(0, ATTEMPT_OUTPUT_EVIDENCE_LIMIT\) \|\| '\(sem output\)'/g
-    ) ?? []).length;
+    // S378-2 (10/10/2026): a decisão antiga (cortar em 300 caracteres, sem aviso) foi revertida de propósito — os juízes relatavam,
+    // no campo "faltou", resultados "truncados". O custo, porém, continua LIMITADO: os 2 prompts passam pela mesma função, que divide
+    // um orçamento comum (`limiteComum`) e declara o corte; o custo não cresce com o tamanho da resposta além desse teto.
+    const usosDaFuncao = (SOURCE.match(/GoalExecutionLoop\.resultadosParaOJuiz\(goal, state, ORCAMENTO_RESULTADOS_PARA_O_JUIZ\)/g) ?? []).length;
     assert(
-        usosNoPrompt === 2,
-        `os 2 prompts de LLM que listam attempts truncam no limite de evidência (encontrados: ${usosNoPrompt})`,
+        usosDaFuncao === 2,
+        `os 2 prompts de LLM que listam attempts usam a mesma função, com orçamento comum (encontrados: ${usosDaFuncao})`,
     );
+    assert(/const ORCAMENTO_RESULTADOS_PARA_O_JUIZ = 30_000/.test(SOURCE) && /limiteComum\(sucessos\.map/.test(SOURCE),
+        'o orçamento é um teto declarado, dividido entre os resultados');
+    assert(!/a\.output\?\.slice\(0, ATTEMPT_OUTPUT_EVIDENCE_LIMIT\)/.test(SOURCE), 'nenhum corte silencioso de 300 caracteres nos prompts dos juízes');
 }
 
 console.log(`\n${'─'.repeat(60)}`);

@@ -454,6 +454,9 @@ export interface TurnState {
     exigeFerramenta?: boolean;
 }
 
+/** S5: marca literal da linha em que a resposta parcial avisa o que NÃO foi confirmado (o resto da resposta é o que foi sustentado). */
+export const MARCA_DO_AVISO_PARCIAL = '⚠️';
+
 export class AgentLoop {
     private providerFactory: ProviderFactory;
     private readonly motorDeValidacao: ValidationEngine;
@@ -520,6 +523,7 @@ export class AgentLoop {
         this.classificationMemory = classificationMemory as ClassificationMemory;
         this.decisionMemory = decisionMemory as DecisionMemory;
         this.observer = new ObserverValidator(providerFactory);
+        this.observer.definirDescritorDeFerramentas(nome => this.tools.get(nome)?.description);
         this.reflectionMemory = new ReflectionMemory(memory);
         this.fsmHistoryStore = new FSMHistoryStore(memory);
     }
@@ -1157,7 +1161,7 @@ export class AgentLoop {
             const evidences = [...AgentLoop.evidencesFromTrace(trace), ...(channelContext?.priorStepEvidence ?? [])]
                 .map((e, i) => ({ ...e, id: `E${i + 1}` }));
             try {
-                const g = await this.observer.validateGrounding(response, evidences, signal, { traceId: trace.id, conversationId, phase: 'initial', userRequest: userText, ...channelContext?.goalTrace });
+                const g = await this.observer.validateGrounding(response, evidences, signal, { traceId: trace.id, conversationId, phase: 'initial', userRequest: userText, recentMessages: channelContext?.recentMessages, ...channelContext?.goalTrace });
                 // Gravador de voo (ADR-013): o que o turno fez com o veredito.
                 const efeitoDoJuiz = (efeito: string, detalhe?: Record<string, unknown>): void => gravarEfeito({
                     avaliacaoId: g.avaliacaoId, avaliador: 'validacao_saida_contra_evidencia', efeito, detalhe,
@@ -1195,10 +1199,11 @@ export class AgentLoop {
                     // há material para uma resposta parcial — cai direto no bloqueio de sempre.
                     const supportedClaims = g.claims.filter(c => c.verdict === 'SUPPORTED');
                     if (supportedClaims.length > 0) {
-                        const partial = await this.trySynthesizePartialResponse(userText, supportedClaims, evidences, signal);
+                        const naoConfirmadas = g.claims.filter((c): c is GroundedClaim & { verdict: 'NOT_SUPPORTED' | 'NOT_EVALUABLE' } => c.verdict !== 'SUPPORTED');
+                        const partial = await this.trySynthesizePartialResponse(userText, supportedClaims, evidences, signal, channelContext?.recentMessages, naoConfirmadas);
                         if (partial) {
                             log.info(`[${this.ts()}] [GROUNDING] resposta parcial (${supportedClaims.length}/${g.claims.length} afirmações sustentadas) revalidada e entregue`);
-                            efeitoDoJuiz('resposta_parcial_entregue', { estado: g.state, sustentadas: supportedClaims.length, total: g.claims.length, parcialChars: partial.length });
+                            efeitoDoJuiz('resposta_parcial_entregue', { estado: g.state, sustentadas: supportedClaims.length, total: g.claims.length, parcialChars: partial.length, comAviso: partial.includes(MARCA_DO_AVISO_PARCIAL) });
                             log.info(`[GROUNDING-TRACE] ${JSON.stringify({ v: 1, phase: 'decision', traceId: trace.id, conversationId, ...channelContext?.goalTrace, state: g.state, claimsTotal: g.claims.length, supported: supportedClaims.length, path: 'partial_delivered', partialChars: partial.length, evidenceSources: { turn: evidences.length - (channelContext?.priorStepEvidence?.length ?? 0), priorSteps: channelContext?.priorStepEvidence?.length ?? 0 }, ...(process.env.TRACE_CONTENT === 'true' ? { deliveredText: partial.slice(0, 3000) } : {}) })}`);
                             this.reflectionMemory.record({
                                 traceId: trace.id,
@@ -1259,9 +1264,14 @@ export class AgentLoop {
         supportedClaims: GroundedClaim[],
         evidences: EvidenceItem[],
         signal?: AbortSignal,
+        recentMessages?: Array<{ role: string; content: string }>,
+        /** S5: o que a resposta recusada afirmava e as fontes NÃO sustentaram — o usuário precisa saber que ficou de fora. */
+        unconfirmedClaims: Array<{ claim: string; verdict: 'NOT_SUPPORTED' | 'NOT_EVALUABLE' }> = [],
     ): Promise<string | null> {
         try {
             const factsList = supportedClaims.map(c => `- ${c.claim}`).join('\n');
+            const pendentes = unconfirmedClaims.slice(0, 8)
+                .map(c => `- ${c.claim.slice(0, 160)} (${c.verdict === 'NOT_SUPPORTED' ? 'as fontes dizem outra coisa' : 'as fontes não confirmam'})`).join('\n');
             // role: 'user', não 'system' — achado real (26/08/2026, produção): uma mensagem ÚNICA
             // com role:'system' (sem nenhuma mensagem 'user') fez o provider (Ollama) devolver
             // stream vazio (`done_reason="load"`, 0 chars) em vez de gerar texto, mesmo o modelo já
@@ -1279,7 +1289,12 @@ export class AgentLoop {
                     `Escreva uma resposta curta e direta usando SOMENTE esses fatos — não acrescente nenhum detalhe, nome, ` +
                     `número, data ou afirmação que não esteja explicitamente na lista acima, mesmo que pareça óbvio ou ` +
                     `provável. Se os fatos acima não permitem responder de forma minimamente útil ao usuário, responda ` +
-                    `apenas com a palavra "INSUFICIENTE" e nada mais.`,
+                    `apenas com a palavra "INSUFICIENTE" e nada mais.` +
+                    (pendentes
+                        ? `\n\nPontos da resposta anterior que NÃO foram confirmados (não os afirme na resposta):\n${pendentes}\n` +
+                          `Depois da resposta, numa linha À PARTE que comece com "${MARCA_DO_AVISO_PARCIAL}", diga em UMA frase curta, no idioma do usuário, ` +
+                          `que esses pontos não puderam ser confirmados nas fontes consultadas, citando-os de forma breve. Não afirme nada sobre eles.`
+                        : ''),
             }];
 
             const profile = this.profileRegistry.getProfileByCategory('execution');
@@ -1287,7 +1302,12 @@ export class AgentLoop {
             const result = await this.callLLMWithFallback(messages, [], profile, signal, 'aux-execution-profile');
             if (result.status !== 'success' || !result.content) return null;
 
-            const text = (extractText(result.content) || result.content).trim();
+            const bruto = (extractText(result.content) || result.content).trim();
+            // S5: o aviso do que ficou de fora vem numa linha marcada por NÓS (marca literal) — só o corpo é revalidado; o aviso é um
+            // juízo sobre o que NÃO foi confirmado, não uma afirmação de dado.
+            const iAviso = bruto.indexOf(MARCA_DO_AVISO_PARCIAL);
+            const text = (iAviso >= 0 ? bruto.slice(0, iAviso) : bruto).trim();
+            const avisoDoModelo = iAviso >= 0 ? bruto.slice(iAviso).trim() : '';
             // Sinal estrutural literal, tolerante só a formatação (aspas, negrito markdown,
             // pontuação final) que o próprio modelo costuma acrescentar mesmo seguindo a
             // instrução "responda apenas com a palavra X" — nunca uma interpretação de sentido.
@@ -1295,12 +1315,16 @@ export class AgentLoop {
             if (!text || text.length < 10 || isInsufficientSentinel) return null;
 
             // Sprint V3: a revalidação também julga com o pedido do usuário como contexto.
-            const revalidated = await this.observer.validateGrounding(text, evidences, signal, { phase: 'partial-revalidation', userRequest: userText });
+            const revalidated = await this.observer.validateGrounding(text, evidences, signal, { phase: 'partial-revalidation', userRequest: userText, recentMessages });
             if (revalidated.state !== 'VALIDATED' && revalidated.state !== 'NOT_APPLICABLE') {
                 log.warn(`[${this.ts()}] [GROUNDING] resposta parcial também não passou (estado=${revalidated.state}) — descartando`);
                 return null;
             }
-            return text;
+            // Sem o aviso do modelo, nunca silêncio: a marca e os pontos (que já estão no idioma da resposta) — melhor que entregar menos sem dizer.
+            const aviso = unconfirmedClaims.length === 0 ? '' : (avisoDoModelo.length > MARCA_DO_AVISO_PARCIAL.length + 5
+                ? avisoDoModelo
+                : `${MARCA_DO_AVISO_PARCIAL} ${unconfirmedClaims.slice(0, 5).map(c => c.claim.slice(0, 120)).join('; ')}`);
+            return aviso ? `${text}\n\n${aviso}` : text;
         } catch (err) {
             log.warn(`[${this.ts()}] [GROUNDING] síntese parcial falhou (non-fatal): ${errorMessage(err)}`);
             return null;

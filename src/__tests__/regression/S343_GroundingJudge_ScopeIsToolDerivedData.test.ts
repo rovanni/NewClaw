@@ -52,7 +52,7 @@ async function main(): Promise<void> {
         // Motor único (ADR-014): as regras de escopo da ADR-010/issue 065 são o CHECKLIST do descritor `saida_contra_evidencia`.
         assert(/texto que o assistente redigiu \(explicação,\s*conteúdo didático, conhecimento geral/.test(p), 'texto redigido, conteúdo didático e conhecimento geral ficam fora');
         // Sprint V3: o juiz RECEBE o pedido (seção de contexto); o que a resposta só repete dele continua fora.
-        assert(/o que a resposta só repete do pedido do usuário/.test(p) && /o que o assistente diz que fez ou vai fazer/.test(p), 'o que só repete o pedido e ações do assistente ficam fora');
+        assert(/o que a resposta só repete do que o USUÁRIO disse \(no pedido ou na conversa recente\)/.test(p) && /o que o assistente diz que fez ou vai fazer/.test(p), 'o que só repete o pedido e ações do assistente ficam fora');
         assert(/mesmo no meio de texto redigido/.test(p), 'salvaguarda: valor atribuído a ferramenta é julgado mesmo no meio de texto redigido (River/Clima)');
         assert(/Ausência de contradição NÃO é suporte/.test(p), 'regra crítica da ADR-010 preservada');
         assert(p.includes(AULA) && p.includes('Apresentação salva: aula.pptx (19 slides)'), 'resposta e evidência chegam inteiras');

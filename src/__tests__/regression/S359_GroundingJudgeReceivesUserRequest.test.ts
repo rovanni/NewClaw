@@ -50,7 +50,7 @@ async function main(): Promise<void> {
     assert(p.indexOf('CONTEXTO DO USUÁRIO') < p.indexOf('FONTES DE VERDADE'), 'o pedido fica fora do bloco de evidências');
     const blocoEvid = p.slice(p.indexOf('FONTES DE VERDADE'), p.indexOf('CHECKLIST'));
     assert(!blocoEvid.includes(PEDIDO) && !/\[U1\]|pedido_do_usuario/.test(blocoEvid), 'o pedido NÃO é evidência');
-    assert(/o que a resposta só repete do pedido do usuário/.test(p), 'a instrução aponta para o pedido recebido, em vez de pedir que o juiz adivinhe');
+    assert(/o que a resposta só repete do que o USUÁRIO disse \(no pedido ou na conversa recente\)/.test(p), 'a instrução aponta para o pedido recebido, em vez de pedir que o juiz adivinhe');
 
     console.log('\n=== S359-2 — sem pedido conhecido, o prompt declara a ausência ===');
     const p2: string[] = [];
@@ -69,7 +69,7 @@ async function main(): Promise<void> {
 
     console.log('\n=== S359-4 — a revalidação da resposta parcial também recebe o pedido ===');
     const src = fs.readFileSync(path.join(process.cwd(), 'src', 'loop', 'AgentLoop.ts'), 'utf-8');
-    assert(/validateGrounding\(text, evidences, signal, \{ phase: 'partial-revalidation', userRequest: userText \}\)/.test(src), 'AgentLoop passa userText na revalidação parcial');
+    assert(/validateGrounding\(text, evidences, signal, \{ phase: 'partial-revalidation', userRequest: userText(, recentMessages)? \}\)/.test(src), 'AgentLoop passa userText na revalidação parcial');
     assert(/validateGrounding\(response, evidences, signal, \{[^}]*userRequest: userText/.test(src), 'AgentLoop passa userText no julgamento inicial');
 
     console.log(`\n${'─'.repeat(60)}`);

@@ -148,3 +148,23 @@ e nenhum modelo é embutido na tela.
 
 **Pendente:** a pergunta explícita do juiz **dentro do assistente de configuração** (hoje o assistente aplica o modelo a tudo e a
 tela avisa/permite medir depois), e a medição automática do juiz escolhido.
+
+## Adendo 3 (10/10/2026) — o que uma pessoa teria no lugar do juiz (S378)
+
+**Pergunta do operador:** *"eu quero analisar como uma pessoa humana decide se está recebendo todas as informações necessárias"*.
+Método: cruzar o que o juiz recebe com o campo `faltou` (o próprio juiz diz o que lhe faltou). Das 55 avaliações gravadas, 10
+declararam falta de informação (3 das 19 de grounding). Lacunas encontradas e tratadas, todas no motor único ou em consumidores
+(nenhum juiz novo):
+
+| # | Lacuna | Correção |
+|---|---|---|
+| 1 | O juiz não sabia que dia é hoje (julgar "ATH em 26/01/2026") | `ValidationEngine.montarPrompt(…, agora)`: seção "CONTEXTO DO SISTEMA" em TODOS os tipos; relógio injetável; fuso da máquina; a versão do prompt é calculada sem a data |
+| 2 | O juiz de conclusão recebia a saída de cada ferramenta cortada em **300** caracteres e o resultado do passo em **200**, sem aviso, embora a execução já guardasse a saída completa (`saidasCompletas`) | `GoalExecutionLoop.resultadosParaOJuiz`: saída inteira dividida por `limiteComum`, cortes (do orçamento e do registro) declarados; artefatos em orçamento comum (16 mil) com corte declarado, no lugar de 2000 fixos |
+| 3 | O juiz de grounding via só nome, argumentos e saída da ferramenta | Entrada `ferramentas` (papel `contexto_da_execucao`): o que cada ferramenta usada faz — nunca fonte de citação; o checklist diz que não sustenta dado |
+| 4 | O juiz via só o pedido atual, não a conversa | Entrada `conversa` (contexto do usuário): mensagens inteiras, as mais antigas saem primeiro com a omissão declarada; o que o assistente disse antes não vira prova |
+| 5 | A resposta parcial (só o sustentado) era entregue em silêncio sobre o que ficou de fora | `trySynthesizePartialResponse` recebe o que não foi confirmado e pede ao modelo, no idioma do usuário, uma linha de aviso marcada por `⚠️`; só o corpo é revalidado; sem aviso do modelo, a marca e os pontos aparecem (nunca silêncio) |
+
+Verificação ao vivo (modelo barato): com a data no prompt o juiz conferiu "há cerca de 8 meses e meio" a partir de 26/01/2026
+contra 10/10/2026. **Não resolve** o caso do juiz que não conclui a tempo (UNVALIDATED não tem afirmações julgadas, logo não há
+resposta parcial): a política bloquear × entregar com aviso continua decisão do operador. Medição de efeito: comparar, no
+gravador de voo, a frequência de `faltou` antes (18% das avaliações) e depois destas mudanças.

@@ -53,16 +53,25 @@ export const descritorSaidaContraEvidencia: DescritorDeValidacao<DecisaoDeGround
     pergunta: 'Cada afirmação que a RESPOSTA apresenta como dado obtido das ferramentas é sustentada pelas EVIDÊNCIAS?',
     entradas: [
         { nome: 'pedido', rotulo: 'Pedido do usuário', papel: 'contexto_do_usuario', obrigatoria: false },
+        // S4 (10/10/2026): uma pessoa que audita a resposta leria a conversa; o juiz só via o pedido atual. Mostra o que o USUÁRIO já
+        // disse (e o que o assistente respondeu) — contexto, nunca evidência de dado das ferramentas. A janela já vem limitada por mensagens
+        // inteiras (as mais antigas saem primeiro, com a omissão DECLARADA — ver ObserverValidator.conversaParaOJuiz).
+        { nome: 'conversa', rotulo: 'Conversa recente (antes deste pedido) — NÃO é evidência de dado das ferramentas', papel: 'contexto_do_usuario', obrigatoria: false },
         { nome: 'resposta', rotulo: 'Resposta ao usuário', papel: 'objeto', obrigatoria: true },
         { nome: 'evidencias', rotulo: 'Evidências (saídas das ferramentas deste turno)', papel: 'fonte_de_verdade', obrigatoria: true },
+        // S3 (10/10/2026): o juiz via só nome, argumentos e saída; uma pessoa saberia o que a ferramenta faz e o que o resultado dela
+        // significa (ex.: o "atualizado" de uma gravação). É contexto para ENTENDER o resultado — nunca fonte da citação.
+        { nome: 'ferramentas', rotulo: 'Ferramentas usadas neste turno — o que cada uma faz (explica o resultado; NÃO é evidência de dado)', papel: 'contexto_da_execucao', obrigatoria: false },
     ],
     checklist: [
         'Liste como itens SOMENTE as afirmações que a resposta apresenta como DADO OBTIDO das evidências — valor, resultado, conteúdo lido, contagem, estado ou nome informado por uma ferramenta, mesmo no meio de texto redigido.',
-        'NÃO liste: texto que o assistente redigiu (explicação, conteúdo didático, conhecimento geral, opinião, recomendação, cortesia); o que a resposta só repete do pedido do usuário; o que o assistente diz que fez ou vai fazer; fato verificável por si só (ex.: o dia da semana de uma data, o resultado de um cálculo).',
+        'NÃO liste: texto que o assistente redigiu (explicação, conteúdo didático, conhecimento geral, opinião, recomendação, cortesia); o que a resposta só repete do que o USUÁRIO disse (no pedido ou na conversa recente); o que o assistente diz que fez ou vai fazer; fato verificável por si só (ex.: o dia da semana de uma data, o resultado de um cálculo).',
         'confere="sim" quando a evidência DETERMINA POSITIVAMENTE a afirmação — está nela, ou sai dela por transformação determinística (arredondamento, unidade declarada, reformatação, tradução, omissão de campos, conta aritmética com número explícito do contexto). Copie em "trecho" o texto LITERAL da evidência que a determina e escreva em "evidencia" os ids (E1, E2…) das evidências que a sustentam.',
         'confere="nao" quando a evidência determina que a afirmação é falsa — contradiz, atribui o valor a outro papel/entidade/momento, ou acrescenta item a uma lista que a evidência enumera e não contém. Copie em "trecho" o texto LITERAL da evidência que a contradiz e escreva em "evidencia" os ids (E1, E2…) das evidências envolvidas.',
         'confere="sem_evidencia" quando a evidência não determina a afirmação (não trata do assunto, é ambígua, conflitante, ou não enumera a dimensão de que a afirmação fala). Ausência de contradição NÃO é suporte.',
         'Se a resposta não tiver nenhuma afirmação apresentada como dado obtido, devolva "itens": [].',
+        'O que o ASSISTENTE disse em turnos anteriores da conversa não é evidência: um dado que só aparece aí, sem estar nas evidências deste turno, não é sustentado.',
+        'A descrição das ferramentas (quando houver) serve só para entender o que cada resultado significa; ela NÃO sustenta nenhuma afirmação sobre dados.',
     ],
     agregacao: 'itens',
     preVerificacoes: ['citacao_existe_na_fonte'],

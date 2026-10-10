@@ -20,6 +20,7 @@ import { DECISION_PROMPT_MAX_CHARS, type CallTelemetry } from '../core/providerT
 import { createLogger } from '../shared/AppLogger';
 import { combinarSinais, sinalDoTurno } from '../shared/turnCancellation';
 import { PerfilDoJuiz } from './perfilDoJuiz';
+import { descreverAgora } from '../shared/dataEHora';
 import { gravarAvaliacao, novaAvaliacaoId, versaoDoPrompt, INSTRUCAO_FALTOU, INSTRUCAO_DIFICULDADE, type ContextoAvaliacao } from '../shared/evaluatorFlightRecorder';
 import {
     RegistroDeValidacoes, lerSaidaDoModelo, agregarPorItens, citacaoExiste,
@@ -81,6 +82,8 @@ export class ValidationEngine {
         private readonly resolverModelo: (chave: string) => string | undefined = (chave) => process.env[chave],
         /** O que o motor aprendeu de como cada modelo se comporta como juiz (ADR-016). */
         private readonly perfil: PerfilDoJuiz = new PerfilDoJuiz(),
+        /** O relógio do motor (injetável nos testes): a data de hoje entra no prompt de TODOS os tipos. */
+        private readonly relogio: () => Date = () => new Date(),
     ) {}
 
     /** Modelo do juiz escolhido em tempo de execução (painel: `updateConfig`); vence a variável de ambiente. */
@@ -92,7 +95,7 @@ export class ValidationEngine {
     }
 
     /** Monta o prompt do tipo — exportado para teste e para o gravador (versão do modelo de prompt). */
-    montarPrompt(d: DescritorDeValidacao<unknown>, entradas: Record<string, string | undefined>): string {
+    montarPrompt(d: DescritorDeValidacao<unknown>, entradas: Record<string, string | undefined>, agora?: Date): string {
         const secoes: string[] = [`Você é um validador. PERGUNTA: ${d.pergunta}`];
         for (const papel of ORDEM_DAS_SECOES) {
             // O pedido do usuário ausente é DECLARADO ao modelo ("(não informado)"), nunca omitido em silêncio: sem a marca, o
@@ -106,6 +109,9 @@ export class ValidationEngine {
             }).join('\n\n');
             secoes.push(`${TITULO_DA_SECAO[papel]}:\n${corpo}`);
         }
+        // Uma pessoa sabe que dia é hoje; o juiz não sabia (relatado por ele no campo "faltou"). Só entra no prompt de verdade —
+        // a versão do prompt (gravador de voo) é calculada sem a data, para não mudar todo dia.
+        if (agora) secoes.push(`CONTEXTO DO SISTEMA (não é evidência):\nData e hora atuais: ${descreverAgora(agora)}. Use só para julgar datas relativas ("hoje", "há 3 dias") e a plausibilidade de datas.`);
         secoes.push(`CHECKLIST — responda cada item:\n${d.checklist.map((c, i) => `${i + 1}. ${c}`).join('\n')}`);
         if (d.preVerificacoes?.includes('citacao_existe_na_fonte')) {
             // ADR-015: de onde a citação pode vir é declarado pelo tipo (padrão: só as fontes de verdade).
@@ -171,7 +177,7 @@ export class ValidationEngine {
         }
 
         // 2–3. Prompt por seções e teto.
-        prompt = this.montarPrompt(d, entradas);
+        prompt = this.montarPrompt(d, entradas, this.relogio());
         if (prompt.length > DECISION_PROMPT_MAX_CHARS) {
             log.info(`[VALIDACAO] tipo=${d.tipo} prompt de ${prompt.length} chars excede ${DECISION_PROMPT_MAX_CHARS} — não avaliável`);
             return naoAvaliavel(`prompt de ${prompt.length} chars excede o teto de ${DECISION_PROMPT_MAX_CHARS}`, 'acima_do_teto');
