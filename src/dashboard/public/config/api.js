@@ -114,6 +114,20 @@ export async function getCloudCatalog() {
   } catch { return []; }
 }
 
+/** Candidatos a juiz: por modelo, o que o provedor declara, se a soberania permite e o que o motor mediu (best-effort). */
+export async function getJudgeCandidates() {
+  try {
+    const d = await json(f('/api/models/judge'));
+    return d.modelos || [];
+  } catch { return []; }
+}
+
+/** Mede UM modelo como juiz (uma conferência de teste). Lança em erro — a tela mostra o motivo. */
+export async function medirJuiz(model) {
+  const d = await json(f('/api/models/judge/medir', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model }) }));
+  return d.resultado;
+}
+
 export async function addCustomProvider({ label, baseUrl, apiKey, model, thinking }) {
   return json(f('/api/providers/custom', {
     method: 'POST',

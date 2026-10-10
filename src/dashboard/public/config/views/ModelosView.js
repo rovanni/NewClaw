@@ -1,7 +1,7 @@
 import { configStore, providersStore, logAcaoUI, activeChatModel } from '../state.js';
 import { showToast } from '../components/Toast.js';
-import { initDropdowns, updateDropdownModels } from '../components/ModelDropdown.js';
-import { addCustomProvider, removeCustomProvider, editCustomProvider, getCloudCatalog, testCustomProvider, getLocalModels, serveLocalModel, stopLocalModel, previewLocalCommand } from '../api.js';
+import { updateDropdownModels } from '../components/ModelDropdown.js';
+import { addCustomProvider, removeCustomProvider, editCustomProvider, getCloudCatalog, getJudgeCandidates, medirJuiz, testCustomProvider, getLocalModels, serveLocalModel, stopLocalModel, previewLocalCommand } from '../api.js';
 import { loadProviders, doSave, guideBox } from '../app.js';
 import { mountLocalModelWizard } from '../components/LocalModelWizard.js';
 import { mountConfigWizard } from '../components/ConfigWizard.js';
@@ -31,7 +31,9 @@ function getCategoryMeta() {
     { key: 'classifierModel', icon: '🔎', label: t('classifier_model_label'), internal: true, desc: t('ml_classifier_desc') },
     { key: 'plannerModel',  icon: '📋', label: 'GoalPlanner',       internal: true, desc: t('internal_planner_desc') },
     { key: 'riskModel',     icon: '🛡️', label: 'RiskAnalyzer',      internal: true, desc: t('internal_risk_desc') },
-    { key: 'observerModel', icon: '🔬', label: 'ObserverValidator', internal: true, desc: t('internal_observer_desc') },
+    // O juiz tem destaque próprio (grupo e explicação): é decisivo para o funcionamento e precisa ser rápido.
+    // A chave continua sendo a mesma (OBSERVER_MODEL) e ele segue "interno" no que toca a gravação (sem provider próprio).
+    { key: 'observerModel', icon: '⚖️', label: t('judge_label'), internal: true, judge: true, desc: t('judge_desc') },
   ];
 }
 
@@ -126,6 +128,15 @@ let registrySearch = '';
 let registryFilters = new Set();
 
 // Estado local do seletor de categoria em Routing — idem.
+// Candidatos a juiz (ADR-016): fatos do servidor — o que o provedor declara, o que a soberania permite, o que foi medido.
+let judgeCandidatos = [];
+let judgeMostrarTodos = false;
+
+async function carregarCandidatosAJuiz() {
+  judgeCandidatos = await getJudgeCandidates();
+  renderCategoryPicker();
+}
+
 let routingSelectedCategory = 'chat';
 let routingPendingModel = null;
 // Provider do modelo pendente — anda junto com routingPendingModel porque a escolha é o PAR
@@ -389,9 +400,16 @@ export function render(container) {
             <div class="cat-selector" id="rt-catSelector">
               ${categoryMeta.filter(c => !c.internal).map((c, i) => `<button type="button" class="cat-btn${i === 0 ? ' active' : ''}" data-cat="${c.key}"><span>${c.icon} ${c.label}</span><span class="cat-btn-model" id="rt-catmodel-${c.key}">—</span></button>`).join('')}
             </div>
+            <!-- O juiz: explicado em linguagem de leigo e sempre visível, porque a escolha dele é crucial (ver ADR-016). -->
+            <div class="cat-group-label">${t('ml_cat_group_judge')}</div>
+            <div class="form-hint" id="rt-judgeExplain" style="margin:0 0 8px;line-height:1.5;">${t('judge_explain')}</div>
+            <div class="cat-selector" id="rt-catSelectorJudge">
+              ${categoryMeta.filter(c => c.judge).map(c => `<button type="button" class="cat-btn" data-cat="${c.key}"><span>${c.icon} ${c.label}</span><span class="cat-btn-model" id="rt-catmodel-${c.key}">—</span></button>`).join('')}
+            </div>
+            <div class="form-hint" id="rt-judgeStatus" style="margin:6px 0 0;"></div>
             <div class="cat-group-label">${t('ml_cat_group_internal')} <span id="ml-internalBadge" style="display:none;padding:2px 8px;border-radius:10px;font-size:.72rem;font-weight:600;background:rgba(255,160,0,.15);color:#f59e0b;border:1px solid rgba(255,160,0,.3);">⚠️ ${t('internal_unconfigured_badge')}</span></div>
             <div class="cat-selector" id="rt-catSelectorInternal">
-              ${categoryMeta.filter(c => c.internal).map(c => `<button type="button" class="cat-btn" data-cat="${c.key}"><span>${c.icon} ${c.label}</span><span class="cat-btn-model" id="rt-catmodel-${c.key}">—</span></button>`).join('')}
+              ${categoryMeta.filter(c => c.internal && !c.judge).map(c => `<button type="button" class="cat-btn" data-cat="${c.key}"><span>${c.icon} ${c.label}</span><span class="cat-btn-model" id="rt-catmodel-${c.key}">—</span></button>`).join('')}
             </div>
             <div class="form-hint" id="rt-catDesc" style="margin:8px 0 4px;"></div>
 
@@ -417,6 +435,7 @@ export function render(container) {
                  (Sem crases neste comentário: ele vive dentro de um template literal.) -->
             <div class="form-hint" id="rt-applyHint" style="display:none;margin-top:6px;"></div>
 
+            <label id="rt-judgeShowAllWrap" class="form-hint" style="display:none;margin:6px 0;"><input type="checkbox" id="rt-judgeShowAll"> ${t('judge_show_all')}</label>
             <div class="model-table-wrap">
               <table class="model-table">
                 <thead>
@@ -428,32 +447,10 @@ export function render(container) {
           </div>
         </div>
 
-        <!-- Modelo Padrão + Classificador (Model Router) — volta pra "Escolher Modelo" (2026-07-25):
-             são config de roteamento ("modelo padrão" e motor do Model Router), não infraestrutura
-             de provider. Provider Padrão em si (qual backend usar) continua em Provedores. -->
-        <details class="cfg-details">
-          <summary>${t('default_model_classifier_title')}</summary>
-          <div class="cfg-details-body">
-            <div id="ml-ollamaSection">
-              <div class="form-group">
-                <label class="form-label">${t('main_ollama_model_label')} <span class="badge badge-cloud">cloud</span></label>
-                <div class="model-select-container" id="container-ollamaModel">
-                  <input type="text" class="model-select-input" autocomplete="off" id="ollamaModel" placeholder="glm-5.2:cloud">
-                  <svg class="msa" width="11" height="11" fill="#98a8c2" viewBox="0 0 16 16"><path d="M8 11L3 6h10z"/></svg>
-                  <div class="model-dropdown" id="dropdown-ollamaModel"></div>
-                </div>
-                <div class="form-hint">${t('main_ollama_model_hint')}</div>
-              </div>
-            </div>
-            <!-- O MODELO do classificador saiu daqui (2026-08-02): virou mais um slot no seletor
-                 acima, escolhido por clique como todos os outros. Só o ENDEREÇO continua aqui —
-                 é uma URL, não um modelo, e não faz sentido escolher numa lista de modelos. -->
-            <div class="form-group">
-              <label class="form-label">${t('classifier_server_label')}</label>
-              <input type="text" class="form-input" id="ml-classifierServer" placeholder="http://localhost:11434" style="max-width:320px;">
-            </div>
-          </div>
-        </details>
+        <!-- O "Modelo de fallback do Ollama" e o "Modelo Padrão & Classificador" saíram daqui (10/10/2026): eram um cartão recolhido,
+             no fim da página, com um campo de texto livre que o assistente e o "Usar para tudo" não atualizavam — o operador via um
+             modelo velho que nunca escolheu. O modelo padrão do Ollama agora ACOMPANHA o modelo de Chat (uma fonte só); o endereço do
+             classificador, que é infraestrutura, está em Provedores. -->
 
         <!-- Os campos de texto livre dos Modelos Internos foram REMOVIDOS (2026-08-02): os três
              agora são escolhidos no mesmo seletor das categorias, clicando na tabela. Manter os
@@ -493,6 +490,10 @@ export function render(container) {
                 <input type="checkbox" id="ml-allowCloudFallback"> ${t('ml_allow_cloud_fallback_label')}
               </label>
               <div class="form-hint">${t('ml_allow_cloud_fallback_hint')}</div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">${t('classifier_server_label')}</label>
+              <input type="text" class="form-input" id="ml-classifierServer" placeholder="http://localhost:11434" style="max-width:320px;">
             </div>
             <div class="form-group">
               <label class="form-label">${t('vision_server_label')}</label>
@@ -590,14 +591,12 @@ export function render(container) {
   // <option> e o browser ignoraria silenciosamente a atribuição, voltando pro primeiro item.
   el('ml-defaultProvider').value  = s.defaultProvider || 'ollama';
   if (el('ml-allowCloudFallback')) el('ml-allowCloudFallback').checked = !!s.allowCloudFallback;
-  el('ollamaModel').value         = s.ollamaModel || '';
   el('mr-localDir')  && (el('mr-localDir').value = s.localModelsDir || '');
   el('ml-classifierServer').value = r.classifierServer || '';
   el('ml-visionServer').value     = r.visionServer     || '';
   // plannerModel/riskModel/observerModel não têm mais input próprio — são escolhidos no seletor
   // de categorias, e renderCategoryPicker() já mostra o valor atual em cada botão.
 
-  toggleOllamaSection(s.defaultProvider);
   updatePipeline(r);
   updateEffectiveConfig(r, s.defaultProvider);
   updateProviderHints(s.defaultProvider);
@@ -610,9 +609,6 @@ export function render(container) {
   el('ml-defaultProvider').addEventListener('change', e => {
     applyDefaultProviderChange(e.target.value);
   });
-
-  // Ollama main model
-  el('ollamaModel').addEventListener('input', e => { cs.set('ollamaModel', e.target.value); updateOverview(); });
 
   // O modelo do classificador não tem mais campo próprio — é o slot 🔎 do seletor de categorias.
 
@@ -658,9 +654,7 @@ export function render(container) {
   });
 
   // Init model dropdowns (só os 2 campos que ainda são texto livre — o resto usa o seletor)
-  const ddIds = ['ollamaModel'];
   updateDropdownModels(providersStore.get('models') || []);
-  initDropdowns(ddIds);
 
   // ── Tabs ─────────────────────────────────────────────────────
   wireTabs(container);
@@ -681,6 +675,7 @@ export function render(container) {
   renderProviderGrid();
   renderModelTable();
   renderCategoryPicker();
+  carregarCandidatosAJuiz();
   updateOverview();
   wireProviderOverview();
   wireModelRegistry(container);
@@ -1500,7 +1495,7 @@ function renderProviderTestResult(r) {
  * installedIds !== null implica "modo cloud": a última coluna vira ação de instalar em vez de
  * status, e modelos já instalados ganham um badge "Instalado" em vez do botão — nunca escondidos.
  */
-function buildModelRows(models, { selectable = false, selectedId = null, currentId = null, installedIds = null, localFiles = false, runningFile = null, canServe = false } = {}) {
+function buildModelRows(models, { selectable = false, selectedId = null, currentId = null, installedIds = null, localFiles = false, runningFile = null, canServe = false, extraTags = null } = {}) {
   if (!models.length) {
     return `<tr><td colspan="${selectable ? 6 : 5}" class="empty" style="padding:20px;color:var(--text-soft);">${t('ml_none_found')}</td></tr>`;
   }
@@ -1545,7 +1540,7 @@ function buildModelRows(models, { selectable = false, selectedId = null, current
       ${selectable ? `<td class="model-radio-cell">${isSelected ? '🔘' : '⚪'}</td>` : ''}
       <td class="model-table-id">${esc(m.id)}${sizeBadge}${isCurrent ? ` <span class="model-current-badge">${t('ml_current_badge')}</span>` : ''}</td>
       <td><span class="badge badge-${m.provider === 'ollama' ? 'local' : 'cloud'}">${esc(m.provider)}</span></td>
-      <td>${(m.capabilities || []).map(c => `<span class="model-cap-tag">${capLabels[c] || c}</span>`).join(' ')}</td>
+      <td>${(m.capabilities || []).map(c => `<span class="model-cap-tag">${capLabels[c] || c}</span>`).join(' ')}${extraTags ? extraTags(m) : ''}</td>
       <td>${esc(formatContextWindow(m.contextWindow))}</td>
       <td>${lastCell}${optionsBtn}</td>
     </tr>`;
@@ -2078,7 +2073,51 @@ function renderCategoryPicker() {
   const catalog = providersStore.get('catalog') || [];
   // Filtra por compatibilidade usando as capabilities já calculadas no discovery — nunca lista
   // um modelo incompatível (ex: nomic-embed na categoria Visão).
-  const compatible = catalog.filter(m => !requiredCap || m.capabilities?.includes(requiredCap));
+  let compatible = catalog.filter(m => !requiredCap || m.capabilities?.includes(requiredCap));
+
+  // Juiz (ADR-016): a lista sai dos FATOS do servidor, como a de visão sai das capacidades — só que aqui nada é escondido por
+  // incapacidade técnica, e sim ORDENADO e ETIQUETADO pela velocidade MEDIDA (a capacidade declarada não separa: quase todo
+  // modelo declara raciocínio). Por padrão esconde só o que foi medido como lento e o que a soberania do operador não permite
+  // (quem roda só local não recebe sugestão de nuvem); o modelo ATUAL aparece sempre.
+  const ehJuiz = routingSelectedCategory === 'observerModel';
+  const fatoDoJuiz = new Map(judgeCandidatos.map(c => [c.id, c]));
+  if (ehJuiz) {
+    const mostrar = (m) => {
+      const c = fatoDoJuiz.get(m.id);
+      if (m.id === currentModel) return true;
+      if (c && !c.permitido) return false;
+      return judgeMostrarTodos || !c || c.classe !== 'lento';
+    };
+    const filtrado = compatible.filter(mostrar);
+    compatible = filtrado.length ? filtrado : compatible;
+    const ordem = { rapido: 0, sem_medicao: 1, lento: 2 };
+    compatible = [...compatible].sort((a, b) => (ordem[fatoDoJuiz.get(a.id)?.classe] ?? 1) - (ordem[fatoDoJuiz.get(b.id)?.classe] ?? 1));
+  }
+  const wrapTodos = document.getElementById('rt-judgeShowAllWrap');
+  if (wrapTodos) wrapTodos.style.display = ehJuiz ? '' : 'none';
+  const etiquetasDeJuiz = ehJuiz ? (m) => {
+    const c = fatoDoJuiz.get(m.id);
+    if (!c) return '';
+    const seg = c.medido && c.medido.sondagem ? ` ≈ ${Math.round(c.medido.sondagem.ms / 1000)} s` : '';
+    const rotulo = c.classe === 'rapido' ? t('judge_tag_fast') : c.classe === 'lento' ? t('judge_tag_slow') : t('judge_tag_unmeasured');
+    return ` <span class="model-cap-tag">${rotulo}${seg}</span> <button type="button" class="btn btn-ghost btn-sm" data-judge-measure="${esc(m.id)}">${t('judge_measure_btn')}</button>`;
+  } : null;
+
+  // Estado do juiz ATUAL, em palavras de leigo: medido > declarado > ainda sem dado (nunca um número inventado).
+  const statusEl = document.getElementById('rt-judgeStatus');
+  if (statusEl) {
+    const atual = fatoDoJuiz.get(r.observerModel || '');
+    const m = atual && atual.medido;
+    const seg = m && m.sondagem ? String(Math.round(m.sondagem.ms / 1000)) : '';
+    let texto = '';
+    if (!(r.observerModel || '').trim() || !atual) texto = '';
+    else if (m && m.disjuntorAberto) texto = t('judge_status_breaker');
+    else if (atual.classe === 'rapido') texto = t('judge_status_fast', { s: seg });
+    else if (atual.classe === 'lento') texto = t('judge_status_slow', { s: seg || '—' });
+    else texto = t('judge_status_none');
+    statusEl.textContent = texto;
+    statusEl.style.display = texto ? '' : 'none';
+  }
 
   const curEl = document.getElementById('rt-currentModel');
   if (curEl) curEl.textContent = currentModel || t('ml_routing_notconfigured');
@@ -2130,14 +2169,14 @@ function renderCategoryPicker() {
 
   const tbody = document.getElementById('rt-tbody');
   if (tbody) {
-    tbody.innerHTML = buildModelRows(compatible, { selectable: true, selectedId: routingPendingModel || currentModel, currentId: currentModel });
+    tbody.innerHTML = buildModelRows(compatible, { selectable: true, selectedId: routingPendingModel || currentModel, currentId: currentModel, extraTags: etiquetasDeJuiz });
   }
 }
 
 function wireCategoryPicker(container) {
   // Os dois grupos (tarefas e componentes internos) são um seletor só do ponto de vista da
   // seleção: escolher em um desmarca o outro, porque a tabela abaixo serve a um alvo por vez.
-  const allCatBtns = container.querySelectorAll('#rt-catSelector .cat-btn, #rt-catSelectorInternal .cat-btn');
+  const allCatBtns = container.querySelectorAll('#rt-catSelector .cat-btn, #rt-catSelectorJudge .cat-btn, #rt-catSelectorInternal .cat-btn');
   allCatBtns.forEach(btn => {
     btn.addEventListener('click', () => {
       allCatBtns.forEach(b => b.classList.toggle('active', b === btn));
@@ -2145,17 +2184,40 @@ function wireCategoryPicker(container) {
       routingPendingModel = null;
       routingPendingProvider = '';
       renderCategoryPicker();
+      if (routingSelectedCategory === 'observerModel') carregarCandidatosAJuiz();
     });
+  });
+  document.getElementById('rt-judgeShowAll')?.addEventListener('change', e => {
+    judgeMostrarTodos = !!e.target.checked;
+    renderCategoryPicker();
   });
 
   // Delegação de evento — sobrevive a innerHTML sendo trocado a cada renderCategoryPicker().
   document.getElementById('rt-tbody')?.addEventListener('click', e => {
+    if (e.target.closest('[data-judge-measure]')) return; // o botão Medir tem o próprio tratamento (abaixo)
     const tr = e.target.closest('tr[data-model-id]');
     if (!tr) { logAcaoUI('selecionar-modelo', 'ignorado — clique fora de uma linha'); return; }
     routingPendingModel = tr.dataset.modelId;
     routingPendingProvider = tr.dataset.modelProvider || '';
     logAcaoUI('selecionar-modelo', 'selecionado', `${routingPendingModel} (${routingPendingProvider || 'provedor desconhecido'})`);
     renderCategoryPicker();
+  });
+
+  // Medir a velocidade de um modelo como juiz: UMA conferência de teste, a pedido (ADR-016).
+  document.getElementById('rt-tbody')?.addEventListener('click', async e => {
+    const btn = e.target.closest('[data-judge-measure]');
+    if (!btn) return;
+    const modelo = btn.dataset.judgeMeasure;
+    btn.disabled = true;
+    btn.textContent = t('judge_measuring');
+    try {
+      const res = await medirJuiz(modelo);
+      const seg = String(Math.round(res.ms / 1000));
+      showToast(res.classe === 'rapido' ? t('judge_measure_ok', { model: modelo, s: seg }) : t('judge_measure_slow', { model: modelo, s: seg }), res.classe === 'rapido' ? 'success' : 'warn');
+    } catch (err) {
+      showToast(t('judge_measure_error', { model: modelo, erro: String(err && err.message || err) }), 'warn');
+    }
+    await carregarCandidatosAJuiz();
   });
 
   // ── "Usar para tudo" ──────────────────────────────────────────────────────
@@ -2192,6 +2254,7 @@ function wireCategoryPicker(container) {
       }
     }
     cs.set('modelRouter', mr);
+    acompanharPadraoDoOllama(model, provider);
 
     const btn = e.currentTarget;
     btn.disabled = true;
@@ -2203,6 +2266,8 @@ function wireCategoryPicker(container) {
     showToast(skipped.length
       ? t('ml_routing_applied_all_partial', { model, skipped: skipped.join(', ') })
       : t('ml_routing_applied_all', { model }), 'success');
+    // O juiz acompanha "usar para tudo" (decisão do operador, 08/10), mas um modelo que pensa muito é lento como juiz: avisa, sem trocar.
+    if (info?.capabilities?.includes('reasoning')) showToast(t('judge_applyall_warn', { model }), 'warn');
   });
 
   document.getElementById('rt-applyBtn')?.addEventListener('click', async e => {
@@ -2239,6 +2304,7 @@ function wireCategoryPicker(container) {
       if (sel) sel.value = mr[`provider_${routingSelectedCategory}`] || '';
     }
     cs.set('modelRouter', mr);
+    if (routingSelectedCategory === 'chat') acompanharPadraoDoOllama(routingPendingModel, routingPendingProvider);
     updateProviderHints(cs.get('defaultProvider'));
     // Aplicar grava direto em disco (mesmo caminho do botão Salvar global) — clicar Aplicar e
     // precisar clicar num Salvar separado depois, em outro lugar da página, pra essa mudança
@@ -2284,6 +2350,7 @@ export function aplicarModeloATudo(modelo, { visao = 'se_o_catalogo_disser' } = 
   mr.provider_vision = '';
   ['classifierModel', 'plannerModel', 'riskModel', 'observerModel'].forEach(k => { mr[k] = valor; });
   cs.set('modelRouter', mr);
+  acompanharPadraoDoOllama(valor, '');
   ['chat', 'code', 'vision', 'light', 'analysis', 'execution'].forEach(cat => {
     const sel = document.getElementById(`ml-prov-${cat}`);
     if (sel) sel.value = '';
@@ -2587,7 +2654,6 @@ export function applyDefaultProviderChange(prov) {
     }
     const select = document.getElementById('ml-defaultProvider');
     if (select) select.value = prov;
-    toggleOllamaSection(prov);
     updateProviderHints(prov);
     updateEffectiveConfig(cs.get('modelRouter') || {}, prov);
     updateOverview();
@@ -2657,9 +2723,14 @@ function stopEditingCustomProvider() {
     if (cancelBtn) cancelBtn.style.display = 'none';
 }
 
-function toggleOllamaSection(provider) {
-  const s = document.getElementById('ml-ollamaSection');
-  if (s) s.style.display = provider === 'ollama' ? 'block' : 'none';
+/**
+ * O "modelo padrão do Ollama" (OLLAMA_MODEL: o que o provedor usa quando uma chamada não pede modelo) não é uma escolha à parte:
+ * é o modelo da conversa quando ele vem do Ollama. Uma fonte só — acompanha o Chat em TODOS os caminhos que o definem (seletor,
+ * "Usar para tudo", assistente). Antes era um campo escondido que nenhum deles atualizava e ficava com um modelo velho.
+ */
+function acompanharPadraoDoOllama(modelo, provedor) {
+  const def = configStore.get('defaultProvider') || 'ollama';
+  if (modelo && (provedor || def) === 'ollama') configStore.set('ollamaModel', modelo);
 }
 
 function updatePipeline(r) {

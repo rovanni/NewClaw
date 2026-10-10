@@ -119,19 +119,20 @@ console.log('\n=== S275-4 — ConfigWizard fica fora: seleção em andamento ≠
     );
 }
 
-console.log('\n=== S275-5 — o campo do Ollama é rotulado como fallback, com explicação ===');
+console.log('\n=== S275-5 — o modelo padrão do Ollama não é mais um campo escondido: acompanha o Chat (10/10/2026) ===');
 {
-    for (const [lang, valor] of [['pt-BR', 'Modelo de fallback do Ollama'], ['en-US', 'Ollama Fallback Model'], ['es-ES', 'Modelo de reserva de Ollama']] as const) {
-        assert(SHARED.includes(`main_ollama_model_label: "${valor}"`), `${lang}: rótulo diz "fallback"/"reserva", não "principal"/"main"`);
-    }
-    const n = (SHARED.match(/main_ollama_model_hint:/g) ?? []).length;
-    assert(n === 3, `'main_ollama_model_hint' presente nos 3 idiomas (encontradas: ${n})`);
-    assert(
-        /<div class="form-hint">\$\{t\('main_ollama_model_hint'\)\}<\/div>/.test(MODELOS),
-        'o hint é renderizado logo abaixo do campo #ollamaModel',
-    );
-    const hintPt = SHARED.slice(SHARED.indexOf('main_ollama_model_hint:'), SHARED.indexOf('main_ollama_model_hint:') + 200);
-    assert(/Model Router/.test(hintPt), 'o hint (pt-BR) menciona o Model Router como quem normalmente decide o modelo');
+    // Antes: um cartão recolhido, no fim da página, com texto livre ("Modelo de fallback do Ollama"). O assistente e o
+    // "Usar para tudo" não o atualizavam, e o operador via um modelo velho que nunca escolheu.
+    assert(!/id="ollamaModel"/.test(MODELOS) && !/id="ml-ollamaSection"/.test(MODELOS), 'o campo de texto livre e o cartão separado não existem mais');
+    assert(/function acompanharPadraoDoOllama\(/.test(MODELOS), 'há UM ponto que mantém o padrão do Ollama igual ao modelo de Chat');
+    const usos = (MODELOS.match(/acompanharPadraoDoOllama\(/g) ?? []).length;
+    assert(usos >= 4, `e ele é chamado nos três caminhos que definem o Chat: seletor, "Usar para tudo" e assistente (${usos - 1} chamadas)`);
+    assert(!/main_ollama_model_(label|hint)|default_model_classifier_title/.test(SHARED), 'os textos do campo removido saíram dos três idiomas (sem chave morta)');
+    assert(/id="ml-classifierServer"/.test(MODELOS), 'o endereço do classificador (infraestrutura) continua configurável, agora em Provedores');
+    const estado = fs.readFileSync(path.join(process.cwd(), 'src/dashboard/public/config/state.js'), 'utf-8');
+    assert(/ollamaModel: '',/.test(estado), 'o estado inicial da tela não embute nome de modelo (issue 068)');
+    const avancado = fs.readFileSync(path.join(process.cwd(), 'src/dashboard/public/config/views/AvancadoView.js'), 'utf-8');
+    assert(!/ollamaModel:\s*'/.test(avancado), '"Restaurar padrões" não grava um modelo fixo no código (gravava glm-5.2:cloud)');
 }
 
 console.log(failed === 0 ? `\n✅ S275 passou (${passed} asserções)` : `\n❌ S275: ${failed} falha(s)`);

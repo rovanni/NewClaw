@@ -21,6 +21,9 @@ import {
     shouldAttemptNative,
 } from '../../core/DirectoryPickerService';
 import { LOCAL_MODEL_EXTENSIONS } from '../../shared/localModelFile';
+import { perfilDoJuizDoProcesso } from '../../validation/perfilDoJuiz';
+import { medirVelocidadeDoJuiz } from '../../validation/sondagemDoJuiz';
+import { obterMotor } from '../../validation/motorPadrao';
 
 const log = createLogger('ModelsRoute');
 
@@ -347,6 +350,56 @@ export function createModelsRouter(ctx: DashboardContext): Router {
             const forceRefresh = req.query.refresh === 'true';
             const models = await ctx.modelRegistryService.getCatalog(forceRefresh);
             res.json({ success: true, models, health: ctx.modelRegistryService.getLastHealth() });
+        } catch (err) {
+            res.status(500).json({ success: false, error: errorMessage(err) });
+        }
+    });
+
+    /**
+     * Candidatos a JUIZ — GET /api/models/judge (ADR-016). O juiz confere cada resposta antes de ela chegar ao usuário e é
+     * chamado várias vezes por conversa: precisa ser rápido. Esta rota junta, por modelo do catálogo, só FATOS: o que o provedor
+     * declara (informativo — hoje quase todo modelo declara raciocínio, então NÃO separa rápido de lento), se a soberania do
+     * operador permite usá-lo (quem roda só local não recebe sugestão de nuvem) e o que o motor MEDIU dele como juiz. A
+     * classe (rápido | lento | sem_medicao) sai só da medição padronizada. Nenhum nome de modelo no código.
+     */
+    router.get('/judge', async (_req: Request, res: Response) => {
+        if (!ctx.modelRegistryService) return res.json({ success: true, modelos: [] });
+        try {
+            const catalogo = await ctx.modelRegistryService.getCatalog();
+            const modelos = catalogo
+                .filter(m => m.capabilities.includes('chat'))
+                .map(m => ({
+                    id: m.id,
+                    provider: m.provider,
+                    declaraRaciocinio: m.capabilities.includes('reasoning'),
+                    permitido: ctx.providerFactory ? ctx.providerFactory.modeloPermitidoPelaSoberania(m.id) : true,
+                    classe: perfilDoJuizDoProcesso.classeDoJuiz(m.id),
+                    medido: perfilDoJuizDoProcesso.desempenho(m.id) ?? null,
+                }));
+            res.json({ success: true, modelos });
+        } catch (err) {
+            res.status(500).json({ success: false, error: errorMessage(err) });
+        }
+    });
+
+    /**
+     * Mede a velocidade de UM modelo como juiz — POST /api/models/judge/medir { model }. Uma conferência real, sempre o mesmo
+     * caso pequeno (ver sondagemDoJuiz.ts). É uma chamada ao modelo que o operador pediu: um clique, um modelo por vez.
+     */
+    const medindo = new Set<string>();
+    router.post('/judge/medir', modelsFsRateLimit, async (req: Request, res: Response) => {
+        const modelo = typeof req.body?.model === 'string' ? req.body.model.trim() : '';
+        if (!modelo || !ctx.modelRegistryService || !ctx.providerFactory) return res.status(400).json({ success: false, error: 'modelo ausente' });
+        try {
+            const catalogo = await ctx.modelRegistryService.getCatalog();
+            if (!catalogo.some(m => m.id === modelo)) return res.status(404).json({ success: false, error: 'modelo fora do catálogo' });
+            if (!ctx.providerFactory.modeloPermitidoPelaSoberania(modelo)) return res.status(403).json({ success: false, error: 'modelo de nuvem não autorizado nesta instalação' });
+            if (medindo.has(modelo)) return res.status(409).json({ success: false, error: 'já está sendo medido' });
+            medindo.add(modelo);
+            try {
+                const resultado = await medirVelocidadeDoJuiz(obterMotor(ctx.providerFactory), perfilDoJuizDoProcesso, modelo);
+                res.json({ success: true, resultado });
+            } finally { medindo.delete(modelo); }
         } catch (err) {
             res.status(500).json({ success: false, error: errorMessage(err) });
         }

@@ -29,7 +29,22 @@ interface EstatisticaDoModo {
     ultimaFalha?: number;
 }
 
-type PerfilDoModelo = Record<ModoDoJuiz, EstatisticaDoModo>;
+/** Medição padronizada pedida pelo operador na tela (sempre o MESMO caso pequeno): comparável entre modelos, ao contrário do tempo de uso. */
+export interface Sondagem {
+    /** Quanto o juiz levou para responder ao caso padrão (ms). */
+    ms: number;
+    /** Chegou a um veredito? */
+    ok: boolean;
+    /** Quando foi medido (epoch ms). */
+    em: number;
+}
+
+interface PerfilDoModelo extends Record<ModoDoJuiz, EstatisticaDoModo> {
+    sondagem?: Sondagem;
+}
+
+/** Acima disto, para um caso pequeno e padronizado, o modelo é lento demais para ser juiz (cada resposta passa por ele). */
+export const LIMITE_JUIZ_RAPIDO_MS = 15_000;
 
 const novoModo = (): EstatisticaDoModo => ({ n: 0, ok: 0, falhasSeguidas: 0 });
 const novoPerfil = (): PerfilDoModelo => ({ livre: novoModo(), desligado: novoModo() });
@@ -85,6 +100,7 @@ export class PerfilDoJuiz {
             for (const [chave, p] of Object.entries(bruto)) {
                 const perfil = novoPerfil();
                 for (const m of MODOS) if (p?.[m]) perfil[m] = { ...novoModo(), ...p[m] };
+                if (p?.sondagem && typeof p.sondagem.ms === 'number') perfil.sondagem = p.sondagem;
                 this.porModelo.set(chave, perfil);
             }
         } catch { /* arquivo ilegível: começa do zero */ }
@@ -141,6 +157,42 @@ export class PerfilDoJuiz {
             s.falhasSeguidas++;
             s.ultimaFalha = this.agora();
         }
+        this.salvar();
+    }
+
+    /**
+     * O que se MEDIU deste modelo como juiz, para a tela de escolha: tempo típico do melhor modo (o que funcionou) e quantas
+     * vezes foi testado. Sem nenhuma chamada registrada devolve `undefined` — a tela não inventa número.
+     */
+    desempenho(chave: string): { msTipico?: number; amostras: number; sucessos: number; disjuntorAberto: boolean; sondagem?: Sondagem; classe: 'rapido' | 'lento' | 'sem_medicao' } | undefined {
+        if (!this.porModelo.has(chave)) return undefined;
+        const p = this.perfil(chave);
+        const amostras = MODOS.reduce((a, m) => a + p[m].n, 0);
+        if (amostras === 0 && !p.sondagem) return undefined;
+        const tempos = MODOS.map(m => p[m].msOk).filter((v): v is number => v !== undefined);
+        return {
+            msTipico: tempos.length ? Math.min(...tempos) : undefined,
+            amostras,
+            sucessos: MODOS.reduce((a, m) => a + p[m].ok, 0),
+            disjuntorAberto: this.estadoDoDisjuntor(chave).aberto,
+            sondagem: p.sondagem,
+            classe: this.classeDoJuiz(chave),
+        };
+    }
+
+    /**
+     * Rápido ou lento COMO JUIZ — decidido só pela medição padronizada (a capacidade que o provedor declara não separa: hoje
+     * quase todo modelo declara raciocínio, inclusive os que respondem em 2 s). Modelo que vem falhando em todos os modos é lento.
+     */
+    classeDoJuiz(chave: string): 'rapido' | 'lento' | 'sem_medicao' {
+        if (this.estadoDoDisjuntor(chave).aberto) return 'lento';
+        const s = this.porModelo.get(chave)?.sondagem;
+        if (!s) return 'sem_medicao';
+        return s.ok && s.ms <= LIMITE_JUIZ_RAPIDO_MS ? 'rapido' : 'lento';
+    }
+
+    registrarSondagem(chave: string, ok: boolean, ms: number): void {
+        this.perfil(chave).sondagem = { ms: Math.round(ms), ok, em: this.agora() };
         this.salvar();
     }
 

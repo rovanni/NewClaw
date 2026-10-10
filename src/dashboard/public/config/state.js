@@ -128,7 +128,7 @@ export const configStore = new Store({
   memoryWindowSize: 20,
   systemPrompt: '',
   ollamaUrl: 'http://localhost:11434',
-  ollamaModel: 'glm-5.2:cloud',
+  ollamaModel: '',   // issue 068: o código não escolhe modelo — acompanha o modelo de Chat que o operador escolheu
   ollamaApiKey: '',
   telegramAllowedUserIds: '',
   modelRouter: {

@@ -153,12 +153,17 @@ async function main() {
         const ini = MV.indexOf('export function aplicarModeloATudo');
         const fim = MV.slice(ini).search(/\r?\n\}\r?\n/);
         const corpo = MV.slice(ini, ini + fim).replace('export function', 'function') + '\n}';
+        // O padrão do Ollama acompanha o Chat (10/10/2026): a função auxiliar do módulo vai junto para a avaliação isolada.
+        const iniAux = MV.indexOf('function acompanharPadraoDoOllama');
+        const aux = MV.slice(iniAux, iniAux + MV.slice(iniAux).search(/\r?\n\}\r?\n/)) + '\n}';
+        let ultimo: Record<string, any> = {};
         const rodar = (catalogo: any[], visao?: string) => {
             const estado: Record<string, any> = { modelRouter: {} };
             const cs = { get: (k: string) => estado[k], set: (k: string, v: any) => { estado[k] = v; } };
             const ps = { get: () => catalogo };
-            const fn = new Function('configStore', 'providersStore', 'document', `${corpo}; return aplicarModeloATudo;`)(cs, ps, { getElementById: () => null });
+            const fn = new Function('configStore', 'providersStore', 'document', `${aux}; ${corpo}; return aplicarModeloATudo;`)(cs, ps, { getElementById: () => null });
             fn('swift-1.5-iq3_xxs', visao ? { visao } : undefined);
+            ultimo = estado;
             return estado.modelRouter;
         };
         const semCatalogo: any[] = [];
@@ -166,6 +171,8 @@ async function main() {
         assert(rodar(semCatalogo, 'mesmo_modelo').vision === 'swift-1.5-iq3_xxs', '"sim": visão aponta para o modelo, mesmo sem catálogo');
         assert(rodar(comVisao, 'nao').vision === '', '"não": visão fica vazia, mesmo que o catálogo diga que lê imagens');
         assert(rodar(comVisao).vision === 'swift-1.5-iq3_xxs' && rodar(semCatalogo).vision === '', '"automático": segue o catálogo');
+        rodar(semCatalogo);
+        assert(ultimo.ollamaModel === 'swift-1.5-iq3_xxs', 'o modelo padrão do Ollama acompanha o modelo aplicado a tudo (não fica um modelo velho escondido)', ultimo.ollamaModel);
         const mr = rodar(semCatalogo, 'nao');
         assert(['chat', 'code', 'light', 'analysis', 'execution', 'classifierModel', 'plannerModel', 'riskModel', 'observerModel'].every(k => mr[k] === 'swift-1.5-iq3_xxs'),
             'o Model ID vale para tudo (issue 071 continua valendo)');

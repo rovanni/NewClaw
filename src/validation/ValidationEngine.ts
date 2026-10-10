@@ -63,6 +63,8 @@ export interface ResultadoDaValidacao<T> {
 
 export interface OpcoesDaChamada extends ContextoAvaliacao {
     signal?: AbortSignal;
+    /** Modelo desta chamada, no lugar do modelo do juiz configurado (usado pela medição de velocidade na tela). */
+    modelo?: string;
 }
 
 /** Corte declarado — o modelo precisa distinguir "o dado acaba aqui" de "o sistema cortou aqui". */
@@ -125,7 +127,7 @@ export class ValidationEngine {
         const t0 = Date.now();
         const avaliacaoId = novaAvaliacaoId();
         const telemetria: CallTelemetry = { attempts: [] };
-        const modelo = this.modeloDoJuiz ?? this.resolverModelo(CHAVE_DO_MODELO_DO_JUIZ) ?? '';
+        const modelo = opcoes.modelo ?? this.modeloDoJuiz ?? this.resolverModelo(CHAVE_DO_MODELO_DO_JUIZ) ?? '';
         let prompt = '';
         let saidaBruta: string | undefined;
         const modosTentados: string[] = [];

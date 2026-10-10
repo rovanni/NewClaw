@@ -116,3 +116,35 @@ do trabalho — a "correção estrutural pendente" já registrada em `auxTimeout
 reais do registro do juiz (`orcamentoMs` × `duracaoMs`) e, se fizer sentido, aprender a taxa por modelo no perfil.
 Modelo que se perde raciocinando num prompt grande, ainda desconhecido, pode gastar o orçamento esticado uma vez antes de o
 disjuntor passar a protegê-lo. A política para "sem veredito" (bloquear × entregar com aviso) segue como está, decisão do operador.
+
+## Adendo 2 (10/10/2026) — o juiz na tela: explicado, medido e escolhido como a visão
+
+**Evidência:** 13 de 15 falhas de grounding vieram de um modelo de raciocínio longo que virou juiz sem o operador perceber: o
+assistente aplica o modelo escolhido a tudo, e a tela chamava o juiz de "ObserverValidator", sem dizer o que ele faz nem que
+precisa ser rápido. Pedido do operador: tratar o juiz como a visão (categoria própria, lista filtrada) e explicar, ao usuário, que o
+NewClaw tem um juiz que o ajuda a errar menos.
+
+**Achado que mudou o desenho:** a capacidade que o provedor declara **não separa** rápido de lento — o Ollama declara `thinking`
+para todos os modelos atuais, inclusive o que respondeu em 2 s (`gemma4:cloud`, 22/22 sem falha). Então "rápido" não pode sair
+da capacidade declarada (o primeiro desenho do S377 falhou nos dados reais) e nem do tempo de uso (mistura prompts pequenos e
+enormes). Sai de uma **medição padronizada**.
+
+**Decisão:**
+- **Grupo próprio "O juiz do NewClaw"** na aba Escolher Modelo (parte normal, não avançada), com a explicação em linguagem de
+  leigo sempre visível, nos três idiomas. O planejador, o analisador de risco e o classificador seguem como componentes internos.
+- **Botão Medir** por modelo: `POST /api/models/judge/medir` faz UMA conferência real, sempre o mesmo caso pequeno e de gabarito
+  conhecido (`validation/sondagemDoJuiz.ts`), e grava o tempo no perfil (`sondagem`). Classe: `rapido` (aprovou o caso verdadeiro
+  em ≤ 15 s), `lento` (mais que isso, não aprovou, ou disjuntor aberto no uso real) ou `sem_medicao` — nunca um número inventado.
+- **Lista filtrada como a de visão:** por padrão esconde o medido como lento e o que a soberania não permite (quem roda só
+  local não recebe sugestão de nuvem); ordena rápidos → sem medição → lentos; o modelo atual aparece sempre. `GET /api/models/judge`
+  junta só fatos (declarado, permitido, medido). Nenhum nome de modelo no código.
+- **"Usar para tudo"** continua valendo para o juiz (decisão de 08/10), mas avisa quando ele fica com um modelo que pensa muito.
+
+**Junto, o "Modelo padrão do Ollama":** era um cartão recolhido no fim da página, com texto livre ("Modelo de fallback do Ollama")
+que o assistente e o "Usar para tudo" não atualizavam — o operador via um modelo velho que nunca escolheu. E o "Restaurar padrões"
+da aba Avançado gravava um `glm-5.2:cloud` fixo no código (issue 068). Agora o padrão do Ollama **acompanha o modelo de Chat**
+(um ponto: `acompanharPadraoDoOllama`), o campo e o cartão saíram, o endereço do classificador (infraestrutura) está em Provedores,
+e nenhum modelo é embutido na tela.
+
+**Pendente:** a pergunta explícita do juiz **dentro do assistente de configuração** (hoje o assistente aplica o modelo a tudo e a
+tela avisa/permite medir depois), e a medição automática do juiz escolhido.

@@ -51,7 +51,6 @@ export function render(container) {
       maxIterations: 5,
       memoryWindowSize: 20,
       systemPrompt: '',
-      ollamaModel: 'glm-5.2:cloud',
       telegramAllowedUserIds: '',
     });
     document.getElementById('av-systemPrompt').value = '';
