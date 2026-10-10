@@ -19,6 +19,7 @@ import { createLogger } from '../shared/AppLogger';
 import type { ProviderFactory } from '../core/ProviderFactory';
 import { PlanStep } from './GoalTypes';
 import { obterMotor } from '../validation/motorPadrao';
+import { descreverArgumentos } from '../shared/argumentosDaChamada';
 import type { DecisaoDoPasso } from '../validation/tipos/demaisTipos';
 
 const log = createLogger('StepSemanticValidator');
@@ -220,6 +221,7 @@ export class StepSemanticValidator {
                 pedido: goalIntent,
                 resultado: toolOutput,
                 passo: `Intenção do passo: ${step.description}\nFerramenta executada: ${step.toolName ?? 'agentloop'}`,
+                argumentos: descreverArgumentos(step.toolArgs),
                 fatos: facts ? describeFacts(facts).join('\n') : undefined,
             }, { stepId: step.id, phase: 'passo' });
             const confidence = Math.max(0, Math.min(1, adaptado.confidence));

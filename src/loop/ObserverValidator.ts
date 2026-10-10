@@ -261,7 +261,7 @@ export class ObserverValidator {
         finalResponse: string,
         signal?: AbortSignal,
         /** Sprint V6: todas as ferramentas do turno. Sem isto, só `toolUsed`/`toolResult` (a última). */
-        ferramentasDoTurno?: Array<{ tool: string; output: string }>,
+        ferramentasDoTurno?: Array<{ tool: string; input?: string; output: string }>,
     ): Promise<ValidationResult> {
         // Try deterministic check first — avoids LLM entirely for obvious cases
         const deterministic = this.deterministicCheck(toolUsed, toolResult, finalResponse);
@@ -287,7 +287,7 @@ export class ObserverValidator {
         try {
             const { adaptado: d, veredito, semVeredito } = await obterMotor(this.providerFactory).validar<DecisaoDeQualidade>('qualidade_da_resposta', {
                 pedido: userMessage, resposta: finalResponse, intencao: intent,
-                ferramentas: ferramentas.map((f, i) => `[${i + 1}] ferramenta=${f.tool}\n${f.output}`).join('\n\n'),
+                ferramentas: ferramentas.map((f, i) => `[${i + 1}] ferramenta=${f.tool}${f.input ? ` args=${f.input}` : ''}\n${f.output}`).join('\n\n'),
             }, { phase: 'qualidade', signal });
             const elapsed = Date.now() - startTime;
 
@@ -336,7 +336,7 @@ export class ObserverValidator {
         finalResponse: string,
         signal?: AbortSignal,
         /** Sprint V6: todas as ferramentas do turno, para o julgamento de qualidade (o cheque determinístico usa a última). */
-        ferramentasDoTurno?: Array<{ tool: string; output: string }>,
+        ferramentasDoTurno?: Array<{ tool: string; input?: string; output: string }>,
     ): Promise<ResponseCommit> {
         const t0 = Date.now();
 

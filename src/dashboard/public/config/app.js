@@ -51,6 +51,7 @@ const VIEW_MAP = {
   avancado:    'AvancadoView',
   atualizacao: 'AtualizacaoView',
   backup:      'BackupView',
+  validadores: 'ValidadoresView',
   desenvolvedor: 'DesenvolvedorView',
 };
 

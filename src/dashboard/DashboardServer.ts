@@ -36,6 +36,7 @@ import { createMemoryRouter } from './routes/memory';
 import { createConversationsRouter } from './routes/conversations';
 import { createSystemRouter } from './routes/system';
 import { createMaintenanceRouter } from './routes/maintenance';
+import { createValidatorsRouter } from './routes/validators';
 import { createIntegrationsRouter } from './routes/integrations';
 import { DashboardContext } from './routes/types';
 import { isUnsafeExposedBoot } from './hostSafety';
@@ -122,6 +123,7 @@ export class DashboardServer {
         this.app.use('/api/conversations', createConversationsRouter(ctx));
         this.app.use('/api/system', createSystemRouter(ctx));
         this.app.use('/api/maintenance', createMaintenanceRouter());
+        this.app.use('/api/validators', createValidatorsRouter());
         this.app.use('/api/integrations', createIntegrationsRouter(ctx));
     }
 

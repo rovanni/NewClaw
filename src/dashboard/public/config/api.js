@@ -128,6 +128,11 @@ export async function medirJuiz(model) {
   return d.resultado;
 }
 
+/** O que cada juiz relatou de si mesmo (faltou/dificuldade) — tela Validadores. */
+export async function getValidatorReports() {
+  return json(f('/api/validators/reports'));
+}
+
 export async function addCustomProvider({ label, baseUrl, apiKey, model, thinking }) {
   return json(f('/api/providers/custom', {
     method: 'POST',

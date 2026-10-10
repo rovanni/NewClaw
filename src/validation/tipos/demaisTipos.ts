@@ -38,7 +38,7 @@ export const descritorQualidadeDaResposta: DescritorDeValidacao<DecisaoDeQualida
     entradas: [
         { nome: 'pedido', rotulo: 'Pedido do usuário', papel: 'contexto_do_usuario', obrigatoria: true },
         { nome: 'resposta', rotulo: 'Resposta final ao usuário', papel: 'objeto', obrigatoria: true },
-        { nome: 'ferramentas', rotulo: 'Ferramentas executadas neste turno e seus resultados', papel: 'fonte_de_verdade', obrigatoria: false },
+        { nome: 'ferramentas', rotulo: 'Ferramentas executadas neste turno, os argumentos da chamada (args=…) e seus resultados', papel: 'fonte_de_verdade', obrigatoria: false },
         { nome: 'intencao', rotulo: 'Intenção identificada', papel: 'contexto_da_execucao', obrigatoria: false },
     ],
     checklist: [
@@ -80,6 +80,9 @@ export const descritorResultadoDoPasso: DescritorDeValidacao<DecisaoDoPasso> = {
         { nome: 'pedido', rotulo: 'Pedido do usuário', papel: 'contexto_do_usuario', obrigatoria: false },
         { nome: 'resultado', rotulo: 'Resultado da ferramenta (íntegro)', papel: 'objeto', obrigatoria: true },
         { nome: 'passo', rotulo: 'Intenção do passo e ferramenta executada', papel: 'contexto_da_execucao', obrigatoria: true },
+        // Sprint A (10/10/2026): o resultado de uma gravação diz só "atualizado"; o CONTEÚDO está nos argumentos da chamada — que uma
+        // pessoa auditando o passo veria. É o que foi PEDIDO à ferramenta, não o que ela devolveu.
+        { nome: 'argumentos', rotulo: 'Argumentos da chamada da ferramenta (o que foi pedido a ela — não é o resultado)', papel: 'contexto_da_execucao', obrigatoria: false },
         { nome: 'fatos', rotulo: 'Fatos da execução', papel: 'contexto_da_execucao', obrigatoria: false },
     ],
     checklist: [

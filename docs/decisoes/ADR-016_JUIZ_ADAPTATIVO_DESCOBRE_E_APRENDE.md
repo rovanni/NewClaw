@@ -168,3 +168,20 @@ Verificação ao vivo (modelo barato): com a data no prompt o juiz conferiu "há
 contra 10/10/2026. **Não resolve** o caso do juiz que não conclui a tempo (UNVALIDATED não tem afirmações julgadas, logo não há
 resposta parcial): a política bloquear × entregar com aviso continua decisão do operador. Medição de efeito: comparar, no
 gravador de voo, a frequência de `faltou` antes (18% das avaliações) e depois destas mudanças.
+
+## Adendo 4 (10/10/2026) — argumentos para todos os juízes e a tela "Validadores" (S379, S380)
+
+**Sprint A (S379) — argumentos da chamada.** Os juízes de qualidade e de resultado do passo viam só a SAÍDA da ferramenta
+("atualizado") e relataram (`faltou`) que não conseguiam conferir o conteúdo gravado, que estava nos ARGUMENTOS. Só o juiz de
+grounding os recebia. Agora os três recebem, num formato único (`shared/argumentosDaChamada.descreverArgumentos`; valores de
+texto gigantes são cortados POR VALOR, com os números declarados): qualidade (`args=…` em cada ferramenta do turno, nos três
+caminhos que a julgam) e resultado do passo (entrada `argumentos`, contexto da execução, separada do resultado julgado).
+
+**Sprint B (S380) — tela "Validadores".** Item de menu próprio no painel (`GET /api/validators/reports`): o resumo por juiz
+(avaliações, quantas trouxeram `faltou`/`dificuldade`, porcentagem — a medida de que as melhorias funcionam) e os relatos POR
+EXTENSO, agrupados pelo que é fato (qual juiz, qual campo, quando) com filtro de texto. Decisões:
+- o gravador passou a gravar SEMPRE o texto de `faltou`/`dificuldade` nos fatos (antes só com `TRACE_CONTENT=true`, então a tela
+  ficaria vazia em instalações comuns); registros antigos são lidos do conteúdo e, quando só há o sinal sem texto, contados à parte;
+- **sem agrupar por tema por regra:** agrupar por tema é interpretar o texto, e isso é do modelo ("Determinismo valida / LLM
+  interpreta"). Verificação de sanidade: o filtro "truncad" devolve os 7 relatos que o agrupamento manual por tema havia listado.
+  Agrupar por tema com o modelo (botão sob demanda) fica como opção, por ser um uso novo do LLM — decisão do operador.

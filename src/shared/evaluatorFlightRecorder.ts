@@ -112,7 +112,7 @@ export function versaoDoPrompt(modelo: string): string {
     return createHash('sha1').update(modelo).digest('hex').slice(0, 8);
 }
 
-function pastaAvaliadores(): string | null {
+export function pastaAvaliadores(): string | null {
     const logFile = process.env.LOG_FILE;
     if (!logFile) return null;
     return path.join(path.dirname(logFile), 'avaliadores');

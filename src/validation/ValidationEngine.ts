@@ -159,7 +159,7 @@ export class ValidationEngine {
                 telemetria,
                 depois: {
                     desfecho, estado: v.estado, duracaoMs: Date.now() - t0,
-                    fatos: { itens: v.itens.length, confianca: v.confianca, faltouInformado: !!v.faltou, dificuldadeInformada: !!v.dificuldade, naoAvaliavelPorque: v.naoAvaliavelPorque },
+                    fatos: { itens: v.itens.length, confianca: v.confianca, faltouInformado: !!v.faltou, dificuldadeInformada: !!v.dificuldade, naoAvaliavelPorque: v.naoAvaliavelPorque, faltou: v.faltou, dificuldade: v.dificuldade },
                     conteudo: { saidaBruta, itens: v.itens, motivo: v.motivo, faltou: v.faltou, dificuldade: v.dificuldade, extras: v.extras },
                 },
             });

@@ -68,7 +68,7 @@ async function main(): Promise<void> {
 
     console.log('\n=== S362-4 — o AgentLoop passa as ferramentas do turno ===');
     const src = fs.readFileSync(path.join(process.cwd(), 'src', 'loop', 'AgentLoop.ts'), 'utf-8');
-    assert(/validateResponseCommit\([\s\S]{0,400}AgentLoop\.evidencesFromTrace\(trace\)\.map\(e => \(\{ tool: e\.tool, output: e\.output \}\)\)/.test(src), 'validateResponseCommit recebe evidencesFromTrace(trace)');
+    assert(/validateResponseCommit\([\s\S]{0,400}AgentLoop\.evidencesFromTrace\(trace\)\.map\(e => \(\{ tool: e\.tool, (input: descreverArgumentos\(e\.input\), )?output: e\.output \}\)\)/.test(src), 'validateResponseCommit recebe evidencesFromTrace(trace)');
 
     console.log(`\n${'─'.repeat(60)}`);
     console.log(`S362 RESULTADO: ✅ ${passed} passou | ❌ ${failed} falhou`);

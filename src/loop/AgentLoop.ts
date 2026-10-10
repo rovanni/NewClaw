@@ -35,6 +35,7 @@ import { DecisionMemory } from '../memory/DecisionMemory';
 import { traceManager, ExecutionTrace } from '../core/ExecutionTrace';
 import { AgentFSM, AgentFSMEvent, type AgentFSMState } from './AgentFSM';
 import { FSMHistoryStore } from './FSMHistoryStore';
+import { descreverArgumentos } from '../shared/argumentosDaChamada';
 import { ToolRegistry, DIRECT_DELIVERABLE_TOOLS } from '../core/ToolRegistry';
 import { isReadOnlyExecCommand } from '../tools/exec_command';
 import { SkillLoader } from '../skills/SkillLoader';
@@ -749,7 +750,9 @@ export class AgentLoop {
         messages: LLMMessage[],
         traceId?: string,
         conversationId?: string,
-        finalResponse?: string
+        finalResponse?: string,
+        /** Sprint A (10/10/2026): os argumentos da chamada — o conteúdo gravado, o que foi pedido à ferramenta — para o juiz de qualidade. */
+        toolInput?: unknown,
     ): Promise<void> {
         try {
             // AbortController tied to the 60 s timeout.
@@ -762,7 +765,8 @@ export class AgentLoop {
             let validation: import('./ObserverValidator').ValidationResult;
             try {
                 validation = await this.observer.validate(
-                    userText, intent, toolName, toolOutput, finalResponse ?? '', abortCtrl.signal
+                    userText, intent, toolName, toolOutput, finalResponse ?? '', abortCtrl.signal,
+                    [{ tool: toolName, input: descreverArgumentos(toolInput), output: toolOutput }],
                 );
             } finally {
                 clearTimeout(timeoutHandle);
@@ -1084,7 +1088,7 @@ export class AgentLoop {
                     response,
                     signal,
                     // Sprint V6: o julgamento de qualidade vê todas as ferramentas do turno, não só a última.
-                    AgentLoop.evidencesFromTrace(trace).map(e => ({ tool: e.tool, output: e.output })),
+                    AgentLoop.evidencesFromTrace(trace).map(e => ({ tool: e.tool, input: descreverArgumentos(e.input), output: e.output })),
                 ),
                 new Promise<ResponseCommit>(resolve =>
                     setTimeout(
@@ -2647,7 +2651,7 @@ export class AgentLoop {
 
                 if (result.success && !isReadOnlyExecCommand(toolName, atomicData.action?.input as Record<string, unknown> || {})) {
                     this.getTurnState(conversationId).lastToolExecution = { toolName, toolOutput: result.output, intent: intentDecision.intent, category: intentDecision.category };
-                    void this.tryValidateTool(userText, intentDecision.intent, intentDecision.category, toolName, result.output, loopMessages, trace.id, conversationId);
+                    void this.tryValidateTool(userText, intentDecision.intent, intentDecision.category, toolName, result.output, loopMessages, trace.id, conversationId, undefined, atomicData.action?.input);
                 }
 
                 move('TOOL_COMPLETED', { step: stepCount, tool: toolName, success: result.success });
@@ -3105,7 +3109,7 @@ export class AgentLoop {
 
         if (result.success && !ToolRegistry.isTerminalDelivery(toolName) && !isReadOnlyExecCommand(toolName, toolCall.arguments)) {
             this.getTurnState(conversationId).lastToolExecution = { toolName, toolOutput: result.output, intent: intentDecision.intent, category: intentDecision.category };
-            void this.tryValidateTool(userText, intentDecision.intent, intentDecision.category, toolName, result.output, loopMessages, trace.id, conversationId);
+            void this.tryValidateTool(userText, intentDecision.intent, intentDecision.category, toolName, result.output, loopMessages, trace.id, conversationId, undefined, toolCall.arguments);
         }
         if (toolName === 'send_audio' && result.success) {
             channelContext?.deliveryTracking?.onArtifactDelivered?.('__send_audio_delivered__');
