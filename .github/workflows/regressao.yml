@@ -14,6 +14,11 @@ on:
 permissions:
   contents: read
 
+# Mesmo shell nos dois sistemas: os comandos abaixo rodam idênticos em Linux e Windows (Git Bash no windows-latest).
+defaults:
+  run:
+    shell: bash
+
 concurrency:
   group: regressao-${{ github.ref }}
   cancel-in-progress: true
