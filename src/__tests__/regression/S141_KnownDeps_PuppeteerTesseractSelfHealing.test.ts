@@ -65,6 +65,14 @@ import { Goal, PlanStep } from '../../loop/GoalTypes';
 import { ToolResult } from '../../loop/agentLoopTypes';
 import { resolveInstallCommand } from '../../loop/planning/resolveInstallCommand';
 import { OperationalKnowledge, currentPlatform } from '../../memory/OperationalKnowledge';
+
+/**
+ * Auditoria da suíte (10/10/2026): os casos 17b–17d assumiam "o pandoc não tem comando de instalação NESTA plataforma" — verdade no Windows
+ * (e no macOS), falso em Linux (`sudo apt install pandoc -y`), onde o teste falhava por premissa e não por defeito. A lógica testada
+ * ("dependência CONHECIDA sem comando resolvido para esta plataforma aciona a pesquisa em DEVELOPER") vale em qualquer sistema; só a
+ * dependência-exemplo muda: em Linux, o único registro de KNOWN_DEPS sem comando é o edge-tts.
+ */
+const DEP_SEM_COMANDO_NESTA_PLATAFORMA = currentPlatform() === 'linux' ? 'edge-tts' : 'pandoc';
 import { permissionRegistry } from '../../core/PermissionRegistry';
 import { OperationalMode } from '../../core/CapabilityMode';
 
@@ -434,12 +442,12 @@ function main(): void {
             const evaluatorSemOK = new GoalEvaluator();
             const goal = makeGoal();
             const step = makeStep('exec_command');
-            const result = makeFailure('bash: pandoc: command not found');
+            const result = makeFailure(`bash: ${DEP_SEM_COMANDO_NESTA_PLATAFORMA}: command not found`);
             const cycle = evaluatorSemOK.evaluate(goal, step, result);
-            assert(cycle.outcome === 'blocked', `pandoc (conhecido, SEM comando pra esta plataforma) em DEVELOPER: aciona Pesquisa, outcome=blocked (veio: ${cycle.outcome})`, cycle);
+            assert(cycle.outcome === 'blocked', `${DEP_SEM_COMANDO_NESTA_PLATAFORMA} (conhecido, SEM comando pra esta plataforma) em DEVELOPER: aciona Pesquisa, outcome=blocked (veio: ${cycle.outcome})`, cycle);
             assert(
                 (cycle.blocker?.suggestedActions ?? []).some(a => a.includes('web_search')),
-                'blocker sugere pesquisa via web_search, mesmo pandoc já tendo entrada em KNOWN_DEPS',
+                'blocker sugere pesquisa via web_search, mesmo a dependência já tendo entrada em KNOWN_DEPS',
                 cycle.blocker?.suggestedActions
             );
         } finally {
@@ -456,10 +464,10 @@ function main(): void {
             const evaluatorSemOK = new GoalEvaluator();
             const goal = makeGoal();
             const step = makeStep('exec_command');
-            const result = makeFailure('bash: pandoc: command not found');
+            const result = makeFailure(`bash: ${DEP_SEM_COMANDO_NESTA_PLATAFORMA}: command not found`);
             const cycle = evaluatorSemOK.evaluate(goal, step, result);
-            assert(cycle.outcome === 'needs_dependency', `pandoc em modo SAFE: continua needs_dependency, comportamento anterior preservado (veio: ${cycle.outcome})`, cycle);
-            assert(cycle.depInfo?.name === 'pandoc', 'depInfo continua vindo de KNOWN_DEPS em modo SAFE', cycle.depInfo);
+            assert(cycle.outcome === 'needs_dependency', `${DEP_SEM_COMANDO_NESTA_PLATAFORMA} em modo SAFE: continua needs_dependency, comportamento anterior preservado (veio: ${cycle.outcome})`, cycle);
+            assert(cycle.depInfo?.name === DEP_SEM_COMANDO_NESTA_PLATAFORMA, 'depInfo continua vindo de KNOWN_DEPS em modo SAFE', cycle.depInfo);
         } finally {
             permissionRegistry.setMode(modeBefore, 'test-s141-17c-restore');
         }
@@ -475,7 +483,7 @@ function main(): void {
             const goal = makeGoal();
             goal.replanBudget = 0;
             const step = makeStep('exec_command');
-            const result = makeFailure('bash: pandoc: command not found');
+            const result = makeFailure(`bash: ${DEP_SEM_COMANDO_NESTA_PLATAFORMA}: command not found`);
             const cycle = evaluatorSemOK.evaluate(goal, step, result);
             assert(
                 !(cycle.blocker?.suggestedActions ?? []).some(a => a.includes('web_search')),

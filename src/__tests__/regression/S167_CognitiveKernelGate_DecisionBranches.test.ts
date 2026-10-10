@@ -33,10 +33,24 @@ import type { Goal } from '../../loop/GoalTypes';
 process.env.COGNITIVE_KERNEL_ENABLED = 'true';
 process.env.COGNITIVE_KERNEL_APPLY_DECISION = 'true';
 
+// Pacote OPCIONAL: só existe com o repositório irmão (`file:../newclaw-kernel-adapter`, não publicado). Em um clone limpo — ou no CI — ele
+// não está instalado e o NewClaw compila e roda sem ele (S203). Este teste cobre o comportamento COM o pacote; sem ele não há o que
+// executar. Auditoria da suíte (10/10/2026): a ausência virava FALHA em qualquer clone limpo (visto em Linux, na VPS). Agora é IGNORADO
+// explícito e com motivo (`SKIP:` + exit 77 — o runner contabiliza à parte, nunca como aprovado). Quem tem o repositório irmão exige
+// o teste com NC_EXIGIR_ADAPTADOR=1: aí a ausência volta a ser falha.
+function adaptadorInstalado(): boolean {
+    try { require.resolve('newclaw-kernel-adapter'); return true; } catch { return false; }
+}
+if (!adaptadorInstalado() && process.env.NC_EXIGIR_ADAPTADOR !== '1') {
+    console.log('SKIP: pacote opcional "newclaw-kernel-adapter" ausente (repositório irmão não instalado) — o NewClaw compila e roda sem ele (S203); este teste só vale com ele');
+    process.exit(77);
+}
+
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const gateModule = require('../../loop/CognitiveKernelGate') as typeof import('../../loop/CognitiveKernelGate');
 // eslint-disable-next-line @typescript-eslint/no-var-requires
-const adapterModule = require('newclaw-kernel-adapter') as typeof import('newclaw-kernel-adapter');
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const adapterModule = require('newclaw-kernel-adapter') as any;   // sem `typeof import(...)`: o tipo do pacote opcional não existe em um clone limpo
 
 let passed = 0;
 let failed = 0;

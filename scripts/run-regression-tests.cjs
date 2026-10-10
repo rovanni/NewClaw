@@ -14,6 +14,10 @@
  *    é `--allow-empty`.
  *  - Todo teste descoberto tem de ter resultado contabilizado (descobertos == executados).
  *  - Teste que fica pendurado é morto por TIMEOUT (padrão 10 min, `--timeout`) e conta como falha.
+ *  - IGNORADO é um estado explícito e contabilizado, nunca um verde: o teste que não pode rodar neste ambiente (ex.: depende do pacote
+ *    opcional `newclaw-kernel-adapter`, que só existe com o repositório irmão) imprime `SKIP: <motivo>` e sai com 77. Sem o motivo, 77
+ *    é FALHA. Ignorado não conta como aprovado e aparece em "IGNORADOS" no resumo e no relatório; `--strict-skips` transforma
+ *    qualquer ignorado em falha (para quem tem todas as dependências opcionais).
  *  - Teste que sai com 0 MAS imprimiu "FALHOU:" (a mensagem do assert() dos testes) é INCONSISTENTE e conta como falha: o limite
  *    documentado acima (teste que detecta falha e não chama process.exit(1)) deixa de ser um falso verde silencioso. O marcador é
  *    estreito de propósito ("FALHOU:" em maiúsculas, com dois-pontos): não casa com linhas de resumo como "❌ Falhou: 0".
@@ -28,6 +32,7 @@
  *   node scripts/run-regression-tests.cjs --timeout 120000        → timeout por teste, em ms
  *   node scripts/run-regression-tests.cjs --dir <pasta>           → outra pasta de testes (usado pelo autoteste)
  *   node scripts/run-regression-tests.cjs --allow-empty           → zero testes não é falha (exceção explícita)
+ *   node scripts/run-regression-tests.cjs --strict-skips          → qualquer teste IGNORADO conta como falha
  *   node scripts/run-regression-tests.cjs --selftest              → prova (fixtures descartáveis) que o harness detecta tudo isso
  */
 const fs = require('fs');
@@ -46,14 +51,18 @@ const PRELOAD = path.join(__dirname, 'regression-preload.cjs');
 const TIMEOUT_PADRAO_MS = 10 * 60 * 1000;
 /** A mensagem do assert() dos testes: "❌ FALHOU: <texto>". Estreito de propósito (ver o cabeçalho). */
 const MARCADOR_DE_FALHA = /FALHOU:/g;
+/** Código de saída de um teste IGNORADO (convenção do automake: 77 = "skipped"). Só vale acompanhado de uma linha `SKIP: <motivo>`. */
+const CODIGO_DE_TESTE_IGNORADO = 77;
+const LINHA_DE_MOTIVO = /^SKIP:\s*(.+)$/m;
 
 function lerArgumentos(argv) {
-    const opcoes = { selftest: false, allowEmpty: false, dir: null, report: null, filter: null, timeoutMs: TIMEOUT_PADRAO_MS };
+    const opcoes = { selftest: false, allowEmpty: false, strictSkips: false, dir: null, report: null, filter: null, timeoutMs: TIMEOUT_PADRAO_MS };
     for (let i = 0; i < argv.length; i++) {
         const a = argv[i];
         const valor = () => (a.includes('=') ? a.slice(a.indexOf('=') + 1) : argv[++i]);
         if (a === '--selftest') opcoes.selftest = true;
         else if (a === '--allow-empty') opcoes.allowEmpty = true;
+        else if (a === '--strict-skips') opcoes.strictSkips = true;
         else if (a === '--dir' || a.startsWith('--dir=')) opcoes.dir = valor();
         else if (a === '--report' || a.startsWith('--report=')) opcoes.report = valor();
         else if (a === '--filter' || a.startsWith('--filter=')) opcoes.filter = valor();
@@ -89,12 +98,14 @@ function runOne(filePath, timeoutMs = TIMEOUT_PADRAO_MS) {
     const stdout = result.stdout || '';
     const stderr = result.stderr || '';
     const marcadores = ((stdout + '\n' + stderr).match(MARCADOR_DE_FALHA) || []).length;
+    const motivoIgnorado = ((stdout + '\n' + stderr).match(LINHA_DE_MOTIVO) || [])[1] || null;
     const timedOut = result.error != null && result.error.code === 'ETIMEDOUT';
     const crashed = result.error != null && !timedOut;
     const exitCode = timedOut || crashed ? null : result.status;
     let status;
     if (timedOut) status = 'timeout';
     else if (crashed) status = 'crashed';
+    else if (exitCode === CODIGO_DE_TESTE_IGNORADO && motivoIgnorado) status = 'skipped';
     else if (exitCode !== 0) status = 'failed';
     else if (marcadores > 0) status = 'inconsistent';
     else status = 'passed';
@@ -110,6 +121,7 @@ function runOne(filePath, timeoutMs = TIMEOUT_PADRAO_MS) {
         startupMs: medicao && medicao.primeiraSaidaMs != null ? Math.round(Math.min(medicao.primeiraSaidaMs, durationMs)) : null,
         rssMB: medicao ? medicao.rssMB : null,
         failMarkers: marcadores,
+        motivoIgnorado: status === 'skipped' ? motivoIgnorado : null,
         stdout,
         stderr,
     };
@@ -135,6 +147,8 @@ function runSuite(files, timeoutMs) {
         const inicio = r.startupMs != null ? ` (início ${segundos(r.startupMs)})` : '';
         if (r.ok) {
             console.log(`  OK   ${label}  ${segundos(r.durationMs)}${inicio}`);
+        } else if (r.status === 'skipped') {
+            console.log(`  SKIP ${label}  ${segundos(r.durationMs)} (IGNORADO: ${r.motivoIgnorado})`);
         } else {
             const motivo = r.timedOut ? `TIMEOUT após ${segundos(r.durationMs)}` :
                 r.status === 'inconsistent' ? `INCONSISTENTE: exit 0, mas imprimiu "FALHOU:" ${r.failMarkers}x` :
@@ -152,7 +166,10 @@ function montarRelatorio(results, descobertos, duracaoTotalMs, opcoes) {
     // O relatório precisa dizer EXATAMENTE o que foi testado: o commit completo, se a árvore estava limpa (e, se não, quais
     // arquivos diferiam) e a versão do próprio runner — para nunca misturar resultados de versões diferentes.
     const git = (args) => { try { return require('child_process').execFileSync('git', args, { cwd: path.join(__dirname, '..'), encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch { return null; } };
-    const commit = git(['rev-parse', 'HEAD']);
+    // Sem .git (ex.: a árvore foi enviada com \`git archive\`), o commit testado vem de NC_COMMIT_TESTADO — o relatório nunca fica sem dizer
+    // o que foi testado (a primeira execução em Linux saiu com commit nulo). \`arvoreLimpa\` só é afirmado quando o git pode conferir.
+    const commitDoGit = git(['rev-parse', 'HEAD']);
+    const commit = commitDoGit || process.env.NC_COMMIT_TESTADO || null;
     const sujos = (git(['status', '--porcelain']) || '').split('\n').filter(Boolean);
     const versaoDoRunner = require('crypto').createHash('sha1')
         .update(fs.readFileSync(__filename)).update(fs.readFileSync(PRELOAD)).digest('hex').slice(0, 12);
@@ -163,7 +180,7 @@ function montarRelatorio(results, descobertos, duracaoTotalMs, opcoes) {
         no: process.version,
         plataforma: `${process.platform}-${process.arch}`,
         commit,
-        arvoreLimpa: commit ? sujos.length === 0 : null,
+        arvoreLimpa: commitDoGit ? sujos.length === 0 : null,
         arquivosAlterados: sujos.slice(0, 40),
         comando: `node scripts/run-regression-tests.cjs ${process.argv.slice(2).join(' ')}`.trim(),
         timeoutPorTesteMs: opcoes.timeoutMs,
@@ -174,14 +191,14 @@ function montarRelatorio(results, descobertos, duracaoTotalMs, opcoes) {
             falhos: contar('failed') + contar('crashed'),
             inconsistentes: contar('inconsistent'),
             timeouts: contar('timeout'),
-            ignorados: 0,
+            ignorados: contar('skipped'),
             pendentes: 0,
         },
         duracaoTotalMs,
         testes: results.map((r) => ({
             arquivo: path.basename(r.file), status: r.status, exitCode: r.exitCode, duracaoMs: r.durationMs,
             inicioMs: r.startupMs, corpoMs: r.startupMs != null ? r.durationMs - r.startupMs : null,
-            memoriaMB: r.rssMB, marcadoresDeFalha: r.failMarkers,
+            memoriaMB: r.rssMB, marcadoresDeFalha: r.failMarkers, motivoIgnorado: r.motivoIgnorado,
         })),
     };
 }
@@ -205,6 +222,12 @@ function executar(opcoes) {
     const t = relatorio.totais;
 
     console.log('');
+    const ignorados = results.filter((r) => r.status === 'skipped');
+    if (ignorados.length) {
+        console.log(`IGNORADOS (${ignorados.length}) — NÃO contam como aprovados:`);
+        for (const r of ignorados) console.log(`  ${path.basename(r.file)}: ${r.motivoIgnorado}`);
+        console.log('');
+    }
     const lentos = [...results].sort((a, b) => b.durationMs - a.durationMs).slice(0, 10);
     console.log('Mais lentos:');
     for (const r of lentos) console.log(`  ${segundos(r.durationMs).padStart(7)}  ${path.basename(r.file)}`);
@@ -218,7 +241,8 @@ function executar(opcoes) {
     }
     const integro = t.executados === t.descobertos;
     if (!integro) console.error(`INTEGRIDADE: ${t.descobertos} descobertos, ${t.executados} executados — o resultado não é confiável.`);
-    const ruim = t.falhos + t.inconsistentes + t.timeouts > 0 || !integro;
+    const ruim = t.falhos + t.inconsistentes + t.timeouts > 0 || !integro || (opcoes.strictSkips && t.ignorados > 0);
+    if (opcoes.strictSkips && t.ignorados > 0) console.error(`--strict-skips: ${t.ignorados} teste(s) ignorado(s) contam como FALHA.`);
     return { relatorio, exitCode: ruim ? 1 : 0 };
 }
 
@@ -281,7 +305,7 @@ function selfTest() {
             verifica(lento.inicioMs != null && lento.inicioMs <= lento.duracaoMs && lento.corpoMs >= 700, 'a divisão início × corpo deveria atribuir os ~900 ms ao corpo', lento);
             const t = m.json.totais;
             verifica(t.descobertos === 8 && t.executados === 8 && t.aprovados === 4 && t.falhos === 2 && t.inconsistentes === 1 && t.timeouts === 1, 'os totais do relatório deveriam fechar com o que foi executado', t);
-            verifica(t.aprovados + t.falhos + t.inconsistentes + t.timeouts === t.executados, 'todo teste executado tem exatamente um resultado');
+            verifica(t.aprovados + t.falhos + t.inconsistentes + t.timeouts + t.ignorados === t.executados, 'todo teste executado tem exatamente um resultado');
         }
 
         // ── Cenário 2: tudo passa → exit 0 e relatório íntegro ──────────────────────────────────────────────────────
@@ -305,6 +329,24 @@ function selfTest() {
         verifica(rAusente.code === 1, 'pasta ausente deveria sair com exit 1 (antes: "Nada a rodar", exit 0)');
         verifica(rFiltro.code === 1, 'filtro que não casa nada deveria sair com exit 1');
 
+        // ── Cenário 4: IGNORADO é um estado explícito, contabilizado, e nunca um verde ───────────────────────────────
+        const ign = path.join(tmpDir, 'ignorados');
+        escrever(ign, 'a_pass.test.ts', `console.log('ok'); process.exit(0);
+`);
+        escrever(ign, 'b_skip_com_motivo.test.ts', `console.log('SKIP: pacote opcional ausente'); process.exit(77);
+`);
+        const rIgn = rodarRunner(ign);
+        const rIgnEstrito = rodarRunner(ign, ['--strict-skips']);
+        const semMotivo = path.join(tmpDir, 'sem_motivo');
+        escrever(semMotivo, 'a_77_sem_motivo.test.ts', `console.log('sem motivo'); process.exit(77);
+`);
+        const rSemMotivo = rodarRunner(semMotivo);
+        const tIgn = rIgn.json && rIgn.json.totais;
+        verifica(rIgn.code === 0 && tIgn && tIgn.ignorados === 1 && tIgn.aprovados === 1 && tIgn.executados === 2, 'ignorado com motivo: não derruba a suíte, mas conta à parte (1 aprovado + 1 ignorado)', tIgn);
+        verifica(rIgn.json && rIgn.json.testes.find((t) => t.arquivo === 'b_skip_com_motivo.test.ts').motivoIgnorado === 'pacote opcional ausente', 'o relatório guarda o motivo do ignorado');
+        verifica(/IGNORADOS \(1\)/.test(rIgn.out),'o resumo lista os ignorados com o motivo (não ficam escondidos)');
+        verifica(rIgnEstrito.code === 1, '--strict-skips: um ignorado conta como falha', rIgnEstrito.code);
+        verifica(rSemMotivo.code === 1 && rSemMotivo.json && rSemMotivo.json.totais.falhos === 1 && rSemMotivo.json.totais.ignorados === 0, 'exit 77 SEM a linha "SKIP: motivo" é FALHA (não dá para ignorar em silêncio)', rSemMotivo.json && rSemMotivo.json.totais);
         // ── Evidência: cada cenário controlado, o que se esperava e o que o processo PRINCIPAL do runner fez ─────────────
         const stt = (nome) => (m.json && m.json.testes.find((t) => t.arquivo === nome)) || {};
         const linhas = [
@@ -318,6 +360,9 @@ function selfTest() {
             ['exit 0 mas imprimiu "FALHOU:"', 'status inconsistent', `status ${stt('d_fail_silent_continue.test.ts').status}`, stt('d_fail_silent_continue.test.ts').status === 'inconsistent'],
             ['resumo "Falhou: 0" (sem falso positivo)', 'status passed', `status ${stt('g_summary_zero_failures.test.ts').status}`, stt('g_summary_zero_failures.test.ts').status === 'passed'],
             ['suíte mista: o processo principal propaga a falha', 'exit 1', `exit ${m.code}`, m.code === 1],
+            ['ignorado COM motivo (SKIP: + exit 77)', 'exit 0, 1 aprovado + 1 ignorado', `exit ${rIgn.code}, ${tIgn ? tIgn.aprovados : '?'} aprovado + ${tIgn ? tIgn.ignorados : '?'} ignorado`, rIgn.code === 0 && tIgn && tIgn.ignorados === 1 && tIgn.aprovados === 1],
+            ['ignorado + --strict-skips', 'exit 1', `exit ${rIgnEstrito.code}`, rIgnEstrito.code === 1],
+            ['exit 77 sem motivo (SKIP ausente)', 'exit 1 (falha)', `exit ${rSemMotivo.code}`, rSemMotivo.code === 1],
             ['suíte toda verde', 'exit 0, 2/2', `exit ${v.code}, ${v.json ? v.json.totais.aprovados : '?'}/${v.json ? v.json.totais.descobertos : '?'}`, v.code === 0 && v.json && v.json.totais.aprovados === 2],
         ];
         console.log('EVIDÊNCIA DO AUTOTESTE (cada cenário roda o runner como processo à parte sobre fixtures descartáveis):');

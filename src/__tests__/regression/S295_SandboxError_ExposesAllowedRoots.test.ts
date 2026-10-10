@@ -25,10 +25,17 @@ function assert(cond: boolean, msg: string, detail?: unknown): void {
     else { console.error(`  FALHOU: ${msg}`, detail ?? ''); failed++; }
 }
 
-// Caminho absoluto fora de qualquer raiz permitida, portável (raiz do sistema de arquivos).
-const outside = path.parse(os.homedir()).root === path.parse(process.cwd()).root
-    ? path.join(path.parse(os.homedir()).root, 'nao_existe_fora_do_sandbox', 'pasta')
-    : path.join(path.parse(process.cwd()).root, 'nao_existe_fora_do_sandbox', 'pasta');
+// Caminho absoluto fora de qualquer raiz permitida.
+// Auditoria da suíte (10/10/2026): a versão "portável" anterior (raiz + nome) só era rejeitada no Windows (a letra da unidade impede o
+// candidato relativo). Em POSIX, `resolvePath` tenta DE PROPÓSITO "/x" também como `<workspace>/x` (compatibilidade com caminhos de
+// outras máquinas — ver o comentário em utils/crossPlatform.ts), então "/nao_existe/..." é aceito e o teste falhava em Linux por premissa.
+// Em POSIX o caminho que de fato foge das raízes sobe além da raiz do sistema de arquivos: "/../../…/x" normaliza para "/x" (fora das
+// raízes) e a versão relativa ao workspace também sai do sandbox.
+const outside = process.platform === 'win32'
+    ? (path.parse(os.homedir()).root === path.parse(process.cwd()).root
+        ? path.join(path.parse(os.homedir()).root, 'nao_existe_fora_do_sandbox', 'pasta')
+        : path.join(path.parse(process.cwd()).root, 'nao_existe_fora_do_sandbox', 'pasta'))
+    : '/' + '../'.repeat(24) + 'nao_existe_fora_do_sandbox/pasta';
 
 console.log('\n=== S295.1 — erro de sandbox expõe raízes permitidas e a alternativa ===');
 {
