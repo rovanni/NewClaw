@@ -1,6 +1,6 @@
 /// <reference types="node" />
 /**
- * Testes de SkillDiscovery — executa com: npx ts-node src/skills/__tests__/SkillDiscovery.test.ts
+ * Testes de SkillDiscovery — executa com: npx ts-node src/__tests__/regression/S383_SkillDiscovery_CapabilityInferenceAndMatching.test.ts (movido de src/skills/__tests__/ em 10/10/2026: nenhum script o executava)
  *
  * Cobre os 5 casos definidos na Sprint 3.7A:
  *   Caso 1: "Criar slides HTML"                → pptx-generator descoberta
@@ -14,8 +14,8 @@ import {
     normalizeToken,
     inferCapabilities,
     discoverSkills,
-} from '../SkillDiscovery';
-import type { Skill } from '../SkillLoader';
+} from '../../skills/SkillDiscovery';
+import type { Skill } from '../../skills/SkillLoader';
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
 
