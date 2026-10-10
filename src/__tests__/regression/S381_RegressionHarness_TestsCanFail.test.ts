@@ -31,21 +31,9 @@ function assert(c: boolean, m: string, d?: unknown): void {
 
 const DIR = path.join(process.cwd(), 'src', '__tests__', 'regression');
 
-/**
- * Operador de mutação: no helper de asserção (`function assert(c…)`), a condição passa a ser sempre falsa — toda asserção do arquivo
- * reprova. Devolve null se o arquivo não tiver o formato `if (<param>)` que o operador conhece.
- */
-function mutarHelper(origem: string): string | null {
-    const m = origem.match(/(?:^|\n)(?:export\s+)?(?:async\s+)?function\s+(?:assert\w*|check)\s*\(\s*(\w+)\s*(?::[^,)]+)?[,)]/);
-    if (!m) return null;
-    const antes = origem.indexOf(m[0]);
-    const corpo = origem.slice(antes);
-    const alvo = new RegExp(`if\\s*\\(\\s*${m[1]}\\s*\\)`);
-    const achou = alvo.exec(corpo);
-    if (!achou || achou.index > 700) return null;
-    const pos = antes + achou.index;
-    return origem.slice(0, pos) + origem.slice(pos).replace(alvo, 'if (false)');
-}
+// O operador de mutação é UM só (scripts/mutacao-de-asserts.cjs), compartilhado com a auditoria dinâmica de todos os arquivos.
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const { mutarHelper } = require(path.join(process.cwd(), 'scripts', 'mutacao-de-asserts.cjs')) as { mutarHelper: (origem: string) => string | null };
 
 async function main(): Promise<void> {
 
