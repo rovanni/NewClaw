@@ -84,11 +84,13 @@ async function main(): Promise<void> {
     finally { global.fetch = original; }
     assert(modelos3.includes('gemma3:12b') && r3?.status === 'success', 'reserva local → local é permitida sem opção nenhuma');
 
-    console.log('\n=== S364-5 — a pergunta única de soberania, e o juiz em sombra obedece a ela ===');
+    console.log('\n=== S364-5 — a pergunta única de soberania, e o juiz de grounding usa só o modelo local escolhido ===');
+    // AUDITORIA DA SUÍTE (10/10/2026): este trecho também cobria o juiz em SOMBRA (GROUNDING_SHADOW_MODEL, S307), removido do produto
+    // na migração ao motor único (ADR-014, cec5d5a) — nada mais lê essa variável, então a metade "sombra" da asserção era vazia
+    // (passava com qualquer valor). Ficou a metade que ainda protege: a chamada ÚNICA do juiz sai com o modelo local do operador.
     const pf = fabrica('glm-5.2:cloud');
     assert(pf.modeloPermitidoPelaSoberania('gemma4:cloud') === false && pf.modeloPermitidoPelaSoberania('gemma3:12b') === true, 'padrão local: modelo de nuvem não é permitido; modelo baixado é');
-    const shadowOrig = process.env.GROUNDING_SHADOW_MODEL;
-    process.env.GROUNDING_SHADOW_MODEL = 'gemma4:cloud';
+    const MODELO_LOCAL_DO_JUIZ = 'gemma-4-12B-it-Q4_K_M.gguf';
     const modelosJuiz: Array<string | undefined> = [];
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { getBudgetAuxiliar } = require('../../shared/auxTimeout');
@@ -97,9 +99,8 @@ async function main(): Promise<void> {
         getBudgetAuxiliar: (p: 'classificacao' | 'validacao') => getBudgetAuxiliar(p, null, null),
         modeloPermitidoPelaSoberania: (m: string) => pf.modeloPermitidoPelaSoberania(m),
     } as any;
-    await quiet(async () => { await new ObserverValidator(fJuiz, 'gemma-4-12B-it-Q4_K_M.gguf').validateGrounding('Faz 18 °C.', [{ id: 'E1', tool: 'weather', output: '18 °C' }], undefined, { phase: 'initial' }); await new Promise(r => setTimeout(r, 50)); });
-    if (shadowOrig === undefined) delete process.env.GROUNDING_SHADOW_MODEL; else process.env.GROUNDING_SHADOW_MODEL = shadowOrig;
-    assert(modelosJuiz.length === 1 && !modelosJuiz.includes('gemma4:cloud'), `só o juiz real rodou; a sombra na nuvem não (${JSON.stringify(modelosJuiz)})`);
+    await quiet(async () => { await new ObserverValidator(fJuiz, MODELO_LOCAL_DO_JUIZ).validateGrounding('Faz 18 °C.', [{ id: 'E1', tool: 'weather', output: '18 °C' }], undefined, { phase: 'initial' }); await new Promise(r => setTimeout(r, 50)); });
+    assert(modelosJuiz.length === 1 && modelosJuiz[0] === MODELO_LOCAL_DO_JUIZ, `uma única chamada de juiz, com o modelo local escolhido (${JSON.stringify(modelosJuiz)})`);
 
     console.log('\n=== S364-6 — o classificador de domínio lê o modelo a cada chamada ===');
     let modeloAtual = 'glm-5.3:cloud';
