@@ -48,25 +48,23 @@ interface MockAttempt {
     planGeneration?: number;
 }
 
-const DIRECT_DELIVERABLE_TOOLS: readonly string[] = ['weather', 'crypto_analysis'];
-const GENERIC_CRITERIA_SUMMARY = 'Todos os critérios do checklist foram satisfeitos.';
+import { GoalExecutionLoop } from '../../loop/GoalExecutionLoop';
 
-/** Réplica exata do pickBestAvailableContent() corrigido — o find() já filtra por segurança. */
+/**
+ * Auditoria da suíte (10/10/2026): este teste carregava uma RÉPLICA de `pickBestAvailableContent()` (inclusive a lista de ferramentas
+ * de entrega direta, copiada à mão). Agora chama o método REAL de `GoalExecutionLoop`: ele só lê `goal.attempts` e
+ * `goal.planGeneration` (não usa `this`), então roda sem instanciar o loop e sem alterar a arquitetura (é `private`: acesso por cast).
+ * Se a regra de produção mudar — a lista de ferramentas seguras, a geração do plano, o resumo genérico —, o resultado muda aqui.
+ */
+const metodoReal = (GoalExecutionLoop.prototype as unknown as {
+    pickBestAvailableContent: (goal: unknown, fallbackText: string | undefined) => string | undefined;
+}).pickBestAvailableContent;
 function pickBestAvailableContent(
     attempts: MockAttempt[],
     currentGeneration: number,
     fallbackText: string | undefined,
 ): string | undefined {
-    const lastSuccess = [...attempts].reverse()
-        .find(a => a.result === 'success' && (a.planGeneration ?? 0) === currentGeneration
-            && (a.toolName === 'agentloop' || DIRECT_DELIVERABLE_TOOLS.includes(a.toolName)));
-    const lastSuccessIsSafeToDeliverRaw = !!lastSuccess && (
-        lastSuccess.toolName === 'agentloop' ||
-        DIRECT_DELIVERABLE_TOOLS.includes(lastSuccess.toolName)
-    );
-    const hasGenericSummary = fallbackText === GENERIC_CRITERIA_SUMMARY;
-    return (lastSuccessIsSafeToDeliverRaw ? (lastSuccess?.output || undefined) : undefined)
-        ?? (!hasGenericSummary ? fallbackText : undefined);
+    return metodoReal.call({}, { attempts, planGeneration: currentGeneration }, fallbackText);
 }
 
 // ── Cenário 1: reproduz o incidente exato (agentloop, depois memory_write) ─────────────

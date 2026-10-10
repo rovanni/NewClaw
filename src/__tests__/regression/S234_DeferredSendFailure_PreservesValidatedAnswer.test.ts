@@ -58,6 +58,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import { GoalExecutionLoop } from '../../loop/GoalExecutionLoop';
 
 let passed = 0;
 let failed = 0;
@@ -67,25 +68,29 @@ function assert(condition: boolean, message: string, detail?: unknown): void {
 }
 
 const SOURCE = fs.readFileSync(path.join(process.cwd(), 'src', 'loop', 'GoalExecutionLoop.ts'), 'utf-8');
-const GENERIC_CRITERIA_SUMMARY = 'Todos os critérios do checklist foram satisfeitos.';
-const DIRECT_DELIVERABLE_TOOLS: readonly string[] = ['weather', 'crypto_analysis'];
+const GENERIC_CRITERIA_SUMMARY = 'Todos os critérios do checklist foram satisfeitos.';   // valor da constante (não exportada) de GoalExecutionLoop
 
-/** Reprodução de `pickBestAvailableContent()` (fidelidade garantida por S234-3 sobre o source real). */
+/**
+ * Auditoria da suíte (10/10/2026): `pickBestAvailableContent()` era uma RÉPLICA, com a lista de ferramentas de entrega direta copiada à
+ * mão. Agora chama o método REAL de `GoalExecutionLoop` (só lê `goal.attempts`/`planGeneration`; não usa `this`; é `private`: acesso por
+ * cast, sem alterar a arquitetura). Se a regra de produção mudar, o resultado muda aqui.
+ */
+const metodoReal = (GoalExecutionLoop.prototype as unknown as {
+    pickBestAvailableContent: (goal: unknown, fallbackText: string | undefined) => string | undefined;
+}).pickBestAvailableContent;
 function pickBestAvailableContent(
     lastSuccessOutput: string | undefined,
     lastSuccessToolName: string | undefined,
     fallbackText: string | undefined,
 ): string | undefined {
-    const lastSuccessIsSafeToDeliverRaw = lastSuccessOutput !== undefined && (
-        lastSuccessToolName === 'agentloop' ||
-        (lastSuccessToolName !== undefined && DIRECT_DELIVERABLE_TOOLS.includes(lastSuccessToolName))
-    );
-    const hasGenericSummary = fallbackText === GENERIC_CRITERIA_SUMMARY;
-    return (lastSuccessIsSafeToDeliverRaw ? (lastSuccessOutput || undefined) : undefined)
-        ?? (!hasGenericSummary ? fallbackText : undefined);
+    const attempts = lastSuccessOutput === undefined ? [] : [{ toolName: lastSuccessToolName, result: 'success', output: lastSuccessOutput }];
+    return metodoReal.call({}, { attempts }, fallbackText);
 }
 
-/** Reprodução da composição de `sendErr` em `runValidationAchievedPhase()`. */
+/**
+ * ESPECIFICAÇÃO (não é a produção): a composição de `sendErr` em `runValidationAchievedPhase()` está INLINE num método assíncrono grande,
+ * sem ponto de entrada próprio — este helper descreve o formato esperado e S234-3 confere, no código real, que ele existe.
+ */
 function computeSendErr(
     bestContent: string | undefined,
     failedSends: number,

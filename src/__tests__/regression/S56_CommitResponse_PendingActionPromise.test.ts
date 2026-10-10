@@ -36,6 +36,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import { AgentLoop } from '../../loop/AgentLoop';
 
 let passed = 0;
 let failed = 0;
@@ -48,12 +49,11 @@ function assert(condition: boolean, message: string): void {
 const agentLoopPath = path.join(process.cwd(), 'src', 'loop', 'AgentLoop.ts');
 const agentLoopSource = fs.readFileSync(agentLoopPath, 'utf-8');
 
-// Reproduz os regexes exatos do patch, isolados do resto do AgentLoop (mesmo padrão dos
-// testes anteriores — a classe real não pode ser instanciada fora do runtime completo).
+// Auditoria da suíte (10/10/2026): este teste carregava uma CÓPIA dos regexes ("a classe real não pode ser instanciada"). Um método
+// ESTÁTICO não precisa de instância: chama-se o de produção, por cast (é `private static`, sem alterar a arquitetura). Se o regex
+// real mudar, este teste muda de resultado — a cópia nunca mudaria.
 function looksLikePendingActionPromise(text: string): boolean {
-    return /\best(ou|á)\s+\w+ndo\b[^.!?]{0,40}\b(agora|neste\s+momento)\b/i.test(text)
-        || /\b(te\s+|lhe\s+)?(envio|mando)\s+em\s+(instantes|breve|seguida)\b/i.test(text)
-        || /\bj[aá]\s+j[aá](?![a-zà-ÿ])/i.test(text);
+    return (AgentLoop as unknown as { looksLikePendingActionPromise: (t: string) => boolean }).looksLikePendingActionPromise(text);
 }
 
 async function main(): Promise<void> {
@@ -71,7 +71,7 @@ console.log('\n=== S56-1 — AgentLoop.ts: guard de pending-action-promise exist
     assert(guardIdx > -1 && bypassIdx > -1 && guardIdx < bypassIdx, 'checagem roda ANTES da saída "sem tool executada" (portão do motor único)');
 }
 
-console.log('\n=== S56-2 — reprodução isolada: frase real do incidente é detectada ===');
+console.log('\n=== S56-2 — a função REAL de produção detecta a frase real do incidente ===');
 {
     const realResponse = 'Entendido. Vou refazer a estrutura da sua aula de Excel agora mesmo, aplicando rigorosamente a regra ' +
         'de no máximo 10 linhas por slide.\n\nPara que o material fique completo, vou dividir cada tópico em duas partes...' +

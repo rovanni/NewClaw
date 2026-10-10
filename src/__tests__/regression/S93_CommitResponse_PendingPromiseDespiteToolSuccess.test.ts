@@ -43,6 +43,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import { AgentLoop } from '../../loop/AgentLoop';
 
 let passed = 0;
 let failed = 0;
@@ -54,17 +55,14 @@ function assert(condition: boolean, message: string, detail?: unknown): void {
 const agentLoopPath = path.join(process.cwd(), 'src', 'loop', 'AgentLoop.ts');
 const agentLoopSource = fs.readFileSync(agentLoopPath, 'utf-8');
 
-// Mesmos regexes exatos dos helpers reais — reproduzidos isolados, mesmo padrão de S56, porque
-// a classe real não pode ser instanciada fora do runtime completo (ProviderFactory,
-// MemoryManager, SkillLearner, SkillLoader, ...).
-function looksLikePendingActionPromise(text: string): boolean {
-    return /\best(ou|á)\s+\w+ndo\b[^.!?]{0,40}\b(agora|neste\s+momento)\b/i.test(text)
-        || /\b(te\s+|lhe\s+)?(envio|mando)\s+em\s+(instantes|breve|seguida)\b/i.test(text)
-        || /\bj[aá]\s+j[aá](?![a-zà-ÿ])/i.test(text);
-}
-function looksLikeUnfulfilledFuturePromise(text: string): boolean {
-    return /\bvou\s+\w+[^.!?]{0,40}\b(agora|neste\s+momento)\b/i.test(text);
-}
+// Auditoria da suíte (10/10/2026): antes eram CÓPIAS dos regexes ("a classe real não pode ser instanciada"). São métodos ESTÁTICOS:
+// chama-se o de produção, por cast (`private static`, sem alterar a arquitetura). Se o regex real mudar, este teste acompanha.
+const real = AgentLoop as unknown as {
+    looksLikePendingActionPromise: (t: string) => boolean;
+    looksLikeUnfulfilledFuturePromise: (t: string) => boolean;
+};
+function looksLikePendingActionPromise(text: string): boolean { return real.looksLikePendingActionPromise(text); }
+function looksLikeUnfulfilledFuturePromise(text: string): boolean { return real.looksLikeUnfulfilledFuturePromise(text); }
 
 async function main(): Promise<void> {
 

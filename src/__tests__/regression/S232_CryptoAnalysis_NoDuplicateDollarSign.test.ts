@@ -22,11 +22,18 @@
  * `formatCurrency()` deixar de prefixar `$` internamente (quebraria os outros call-sites que já
  * dependem disso sem prefixo externo).
  *
+ *
+ * Auditoria da suíte (10/10/2026): a parte "comportamental" deste teste nunca executava o `detail()` — formatava com uma CÓPIA de
+ * `formatCurrency()` e concatenava dentro do próprio teste; passaria mesmo se a produção voltasse a duplicar o "$". Agora o caminho
+ * PÚBLICO real (`CryptoAnalysisTool.execute({ type: 'detail' })`) roda sobre uma resposta simulada da CoinGecko (`fetch` trocado, sem
+ * rede), e a saída entregue ao usuário é conferida. O guarda estático que sobra (S232-2) cobre o único caso que a saída não mostra.
+ *
  * Execução: npx ts-node src/__tests__/regression/S232_CryptoAnalysis_NoDuplicateDollarSign.test.ts
  */
 
 import * as fs from 'fs';
 import * as path from 'path';
+import { CryptoAnalysisTool } from '../../tools/crypto_analysis';
 
 let passed = 0;
 let failed = 0;
@@ -39,81 +46,67 @@ const SOURCE = fs.readFileSync(
     path.join(process.cwd(), 'src', 'tools', 'crypto_analysis.ts'), 'utf-8'
 );
 
-/** Reprodução exata de `formatCurrency()` — fidelidade garantida por S232-2 sobre o source real. */
-function formatCurrency(value: number | null | undefined): string {
-    if (!value) return 'N/A';
-    if (value >= 1e12) return `$${(value / 1e12).toFixed(2)}T`;
-    if (value >= 1e9) return `$${(value / 1e9).toFixed(2)}B`;
-    if (value >= 1e6) return `$${(value / 1e6).toFixed(2)}M`;
-    return `$${value.toLocaleString()}`;
+/** Troca o `fetch` global por respostas fixas da CoinGecko, por id de moeda. Cada cenário usa um id próprio (o cache da ferramenta é por URL). */
+function simularCoinGecko(moedas: Record<string, { name: string; symbol: string; market_data?: Record<string, unknown> }>): void {
+    (globalThis as { fetch: unknown }).fetch = async (url: string) => {
+        const id = /\/coins\/([^?/]+)\?/.exec(String(url))?.[1] ?? '';
+        const corpo = moedas[id];
+        if (!corpo) return { ok: false, status: 404, json: async () => ({}) };
+        return { ok: true, status: 200, json: async () => corpo };
+    };
 }
 
-console.log('\n=== S232-1 — reprodução do incidente: Market Cap / Volume 24h sem $ duplicado ===');
-{
-    // Valores reais do incidente (Bitcoin, 14/08/2026): market_cap≈1.26e12, volume≈19.83e9.
-    const marketCapUsd = 1_260_000_000_000;
-    const volumeUsd = 19_830_000_000;
-
-    const marketCapLine = `Market Cap: ${formatCurrency(marketCapUsd)}`;
-    const volumeLine = `Volume 24h: ${formatCurrency(volumeUsd)}`;
-
-    assert(marketCapLine === 'Market Cap: $1.26T', 'Market Cap sem $ duplicado', marketCapLine);
-    assert(volumeLine === 'Volume 24h: $19.83B', 'Volume 24h sem $ duplicado', volumeLine);
-    assert(!marketCapLine.includes('$$'), 'Market Cap nunca contém "$$"');
-    assert(!volumeLine.includes('$$'), 'Volume 24h nunca contém "$$"');
+async function detalhe(id: string): Promise<string> {
+    const r = await new CryptoAnalysisTool().execute({ type: 'detail', symbol: id });
+    if (!r.success) throw new Error(`detail falhou: ${r.error}`);
+    return r.output;
 }
 
-console.log('\n=== S232-2 — formatCurrency() continua prefixando $ internamente (contrato preservado) ===');
-{
-    assert(formatCurrency(1_260_000_000_000) === '$1.26T', 'formatCurrency prefixa $ para valores ≥1e12');
-    assert(formatCurrency(19_830_000_000) === '$19.83B', 'formatCurrency prefixa $ para valores ≥1e9');
-    assert(formatCurrency(5_000_000) === '$5.00M', 'formatCurrency prefixa $ para valores ≥1e6');
-    assert(formatCurrency(0) === 'N/A', 'formatCurrency devolve N/A para valor ausente/zero, sem $ solto');
-    assert(formatCurrency(undefined) === 'N/A', 'formatCurrency devolve N/A para undefined, sem $ solto');
+async function main(): Promise<void> {
+    const fetchOriginal = (globalThis as { fetch: unknown }).fetch;
+    try {
+        simularCoinGecko({
+            'moeda-grande': { name: 'Moeda Grande', symbol: 'mg', market_data: { current_price: { usd: 98765 }, market_cap: { usd: 1_260_000_000_000 }, total_volume: { usd: 19_830_000_000 } } },
+            'moeda-media': { name: 'Moeda Media', symbol: 'mm', market_data: { current_price: { usd: 2 }, market_cap: { usd: 5_000_000 }, total_volume: { usd: 1_500_000_000 } } },
+            'moeda-vazia': { name: 'Moeda Vazia', symbol: 'mv', market_data: { current_price: { usd: 1 }, market_cap: { usd: 0 } } },
+        });
 
-    const fnMatch = SOURCE.match(/private formatCurrency\(value: number \| null \| undefined\): string \{[\s\S]*?\n {4}\}/);
-    assert(!!fnMatch, 'formatCurrency() localizada no source real');
-    assert(!!fnMatch && /return `\$\$\{/.test(fnMatch[0]),
-        'formatCurrency() ainda prefixa $ internamente — reprodução acima é fiel ao source');
+        console.log('\n=== S232-1 — o detail() REAL, sobre os valores do incidente (Bitcoin, 14/08/2026): sem $ duplicado ===');
+        {
+            // Valores reais do incidente: market_cap≈1.26e12, volume≈19.83e9.
+            const saida = await detalhe('moeda-grande');
+            assert(saida.includes('Market Cap: $1.26T'), 'Market Cap sai com exatamente um $ ("$1.26T")', saida.split('\n').find(l => l.startsWith('Market Cap')));
+            assert(saida.includes('Volume 24h: $19.83B'), 'Volume 24h sai com exatamente um $ ("$19.83B")', saida.split('\n').find(l => l.startsWith('Volume 24h')));
+            assert(!saida.includes('$$'), 'a saída entregue ao usuário nunca contém "$$"');
+        }
+
+        console.log('\n=== S232-2 — o contrato de formatCurrency() visto pela saída real: escala, e "N/A" sem $ solto ===');
+        {
+            const media = await detalhe('moeda-media');
+            assert(media.includes('Market Cap: $5.00M'), 'valor na casa dos milhões: "$5.00M"', media.split('\n').find(l => l.startsWith('Market Cap')));
+            assert(media.includes('Volume 24h: $1.50B'), 'valor na casa dos bilhões: "$1.50B"', media.split('\n').find(l => l.startsWith('Volume 24h')));
+            const vazia = await detalhe('moeda-vazia');
+            assert(vazia.includes('Market Cap: N/A') && vazia.includes('Volume 24h: N/A'), 'valor zero/ausente vira "N/A", sem $ solto', vazia.split('\n').filter(l => /Market Cap|Volume/.test(l)));
+            // Só as duas linhas deste contrato: o relatório inteiro tem "ATH: $N/A" / "ATL: $N/A" quando faltam dados (achado da auditoria,
+            // fora do escopo deste teste — registrado na auditoria da suíte, sem mexer na produção aqui).
+            assert(!vazia.split('\n').filter(l => /^(Market Cap|Volume 24h):/.test(l)).some(l => /\$N\/A/.test(l)), 'nas linhas de Market Cap e Volume nunca "$N/A"');
+        }
+
+        console.log('\n=== S232-3 — o guarda ESTÁTICO que sobra: analiseSangrando() (nunca teve o bug) não ganha prefixo externo ===');
+        {
+            // Esses valores formatados são calculados em analiseSangrando() mas NÃO aparecem no relatório — não há saída para observar;
+            // por isso o único mecanismo possível é estático. Guarda contra alguém "corrigir" aqui e introduzir o bug oposto
+            // (perder o $ que só formatCurrency() fornece).
+            assert(/volume24h: this\.formatCurrency\(volume\)/.test(SOURCE), 'analiseSangrando() continua chamando formatCurrency() sem prefixo externo');
+            assert(/marketCap: this\.formatCurrency\(marketCap\)/.test(SOURCE), 'analiseSangrando() continua chamando formatCurrency() sem prefixo externo (marketCap)');
+        }
+    } finally {
+        (globalThis as { fetch: unknown }).fetch = fetchOriginal;
+    }
+
+    console.log(`\n${'─'.repeat(60)}`);
+    console.log(`S232 RESULTADO: ✅ ${passed} passou | ❌ ${failed} falhou`);
+    if (failed > 0) process.exitCode = 1;
 }
 
-console.log('\n=== S232-3 — os dois call-sites de detail() não prefixam $ externo antes de formatCurrency() ===');
-{
-    // O bug exato: `$${this.formatCurrency(...)}` (o $ literal ANTES do ${...} soma com o $ que
-    // formatCurrency() já devolve). Trava a ausência desse padrão nas duas linhas do incidente.
-    assert(
-        !/Market Cap: \$\$\{this\.formatCurrency/.test(SOURCE),
-        'Market Cap não prefixa $ literal antes de formatCurrency()',
-    );
-    assert(
-        !/Volume 24h: \$\$\{this\.formatCurrency/.test(SOURCE),
-        'Volume 24h não prefixa $ literal antes de formatCurrency()',
-    );
-    assert(
-        /Market Cap: \$\{this\.formatCurrency\(md\.market_cap\?\.usd\)\}/.test(SOURCE),
-        'Market Cap usa exatamente um $ (o de dentro de formatCurrency)',
-    );
-    assert(
-        /Volume 24h: \$\{this\.formatCurrency\(md\.total_volume\?\.usd\)\}/.test(SOURCE),
-        'Volume 24h usa exatamente um $ (o de dentro de formatCurrency)',
-    );
-}
-
-console.log('\n=== S232-4 — analiseSangrando() (nunca teve o bug) permanece sem regressão ===');
-{
-    // Estes call-sites (linhas 148-149) NUNCA prefixavam $ externo — é por isso que o bug só
-    // aparecia em detail(), não em top100/gainers/losers/sangrando. Guarda contra alguém "corrigir"
-    // aqui também e introduzir o bug oposto (perder o $ que só formatCurrency() fornece).
-    assert(
-        /volume24h: this\.formatCurrency\(volume\)/.test(SOURCE),
-        'analiseSangrando() continua chamando formatCurrency() sem prefixo externo',
-    );
-    assert(
-        /marketCap: this\.formatCurrency\(marketCap\)/.test(SOURCE),
-        'analiseSangrando() continua chamando formatCurrency() sem prefixo externo (marketCap)',
-    );
-}
-
-console.log(`\n${'─'.repeat(60)}`);
-console.log(`S232 RESULTADO: ✅ ${passed} passou | ❌ ${failed} falhou`);
-if (failed > 0) process.exitCode = 1;
+main().catch(e => { console.error(e); process.exit(1); });
