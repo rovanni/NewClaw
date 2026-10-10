@@ -51,6 +51,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { sanitizePlanSteps } from '../../loop/planning/sanitizePlanSteps';
 import { detectMissingRequiredArgs } from '../../loop/GoalPlanner';
+import './_fixtures/motorLegado';   // juízes simulados no formato antigo → formato do motor único (ADR-014)
 
 let passed = 0;
 let failed = 0;
@@ -191,9 +192,11 @@ console.log('\n=== S215-5 — C3: o classificador de stub usa o orçamento medid
     // ("um número em milissegundos não descreve a chamada, descreve uma suposição sobre a
     // velocidade do hardware de quem roda"). O certo era usar o mecanismo que já existia.
     const source = fs.readFileSync(path.join(__dirname, '../../shared/contentStubClassifier.ts'), 'utf-8');
+    // Troca ao motor único (ADR-014): o prazo é o do motor, derivado da latência observada (perfil 'validacao').
+    const motorSrc = fs.readFileSync(path.join(__dirname, '../../validation/ValidationEngine.ts'), 'utf-8');
     assert(
-        /getBudgetAuxiliar\('classificacao'\)/.test(source),
-        "deriva o prazo da latência observada, via getBudgetAuxiliar('classificacao')",
+        /obterMotor\(/.test(source) && /getBudgetAuxiliar\('validacao'\)/.test(motorSrc),
+        "deriva o prazo da latência observada, via o motor único (getBudgetAuxiliar('validacao'))",
     );
     assert(
         !/const TIMEOUT_MS = \d[\d_]*;/.test(source) && !/CONTENT_STUB_CLASSIFIER_TIMEOUT_MS/.test(source),

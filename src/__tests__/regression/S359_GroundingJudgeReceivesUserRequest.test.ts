@@ -14,6 +14,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { ObserverValidator } from '../../loop/ObserverValidator';
+import './_fixtures/motorLegado';   // juízes simulados no formato antigo → formato do motor único (ADR-014)
 
 let passed = 0;
 let failed = 0;
@@ -44,23 +45,27 @@ async function main(): Promise<void> {
     const prompts: string[] = [];
     await quiet(() => juiz(prompts).validateGrounding(RESPOSTA, EV, undefined, { phase: 'initial', userRequest: PEDIDO }));
     const p = prompts[0] ?? '';
-    assert(p.includes(`PEDIDO DO USUÁRIO (contexto — NÃO é evidência de ferramenta`) && p.includes(PEDIDO), 'seção de contexto com o pedido íntegro');
-    assert(p.indexOf('PEDIDO DO USUÁRIO') < p.indexOf('EVIDÊNCIAS:'), 'o pedido fica fora do bloco de evidências');
-    const blocoEvid = p.slice(p.indexOf('EVIDÊNCIAS:'), p.indexOf('RESPOSTA:'));
+    // Motor único (ADR-014): o pedido entra na seção CONTEXTO DO USUÁRIO ("não é evidência"), as evidências em FONTES DE VERDADE.
+    assert(p.includes('CONTEXTO DO USUÁRIO (não é evidência') && p.includes(PEDIDO), 'seção de contexto com o pedido íntegro');
+    assert(p.indexOf('CONTEXTO DO USUÁRIO') < p.indexOf('FONTES DE VERDADE'), 'o pedido fica fora do bloco de evidências');
+    const blocoEvid = p.slice(p.indexOf('FONTES DE VERDADE'), p.indexOf('CHECKLIST'));
     assert(!blocoEvid.includes(PEDIDO) && !/\[U1\]|pedido_do_usuario/.test(blocoEvid), 'o pedido NÃO é evidência');
-    assert(/o que a resposta só repete\s*do PEDIDO DO USUÁRIO/.test(p), 'a instrução aponta para o pedido recebido, em vez de pedir que o juiz adivinhe');
+    assert(/o que a resposta só repete do pedido do usuário/.test(p), 'a instrução aponta para o pedido recebido, em vez de pedir que o juiz adivinhe');
 
     console.log('\n=== S359-2 — sem pedido conhecido, o prompt declara a ausência ===');
     const p2: string[] = [];
     await quiet(() => juiz(p2).validateGrounding(RESPOSTA, EV, undefined, { phase: 'initial' }));
-    assert(/PEDIDO DO USUÁRIO[^\n]*\n"""\n\(não informado\)\n"""/.test(p2[0] ?? ''), 'pedido ausente → "(não informado)" — nunca um placeholder cru');
+    assert(/\[Pedido do usuário\]\s*\n"""\n\(não informado\)\n"""/.test(p2[0] ?? ''), 'pedido ausente → "(não informado)" — nunca um placeholder cru');
     assert(!(p2[0] ?? '').includes('{pedido}'), 'nenhum {pedido} sobra no prompt');
 
-    console.log('\n=== S359-3 — o pedido conta no orçamento do prompt ===');
-    const evGrande = [{ id: 'E1', tool: 'arquivo_gerado', output: 'x'.repeat(70_000) }];
-    const semPedido = ObserverValidator.evidenceCapForBudget('resposta', evGrande);
-    const comPedido = ObserverValidator.evidenceCapForBudget('resposta', evGrande, 'p'.repeat(10_000));
-    assert(Number.isFinite(semPedido) && comPedido < semPedido, `pedido de 10 mil chars reduz o espaço da evidência (${semPedido} → ${comPedido})`);
+    console.log('\n=== S359-3 — o pedido conta no teto do prompt ===');
+    // Motor único: nada é cortado. Evidência que cabe SEM o pedido e passa do teto COM ele não é julgada (UNVALIDATED).
+    const evMedia = [{ id: 'E1', tool: 'arquivo_gerado', output: 'x'.repeat(55_000) }];
+    const pSem: string[] = [];
+    await quiet(() => juiz(pSem).validateGrounding('resposta', evMedia));
+    const pCom: string[] = [];
+    const comPedido = await quiet(() => juiz(pCom).validateGrounding('resposta', evMedia, undefined, { phase: 'initial', userRequest: 'p'.repeat(10_000) }));
+    assert(pSem.length === 1 && pCom.length === 0 && comPedido.state === 'UNVALIDATED', `pedido de 10 mil chars + evidência de 55 mil passam do teto: não é julgado, nada é cortado (${pSem.length} chamada sem pedido, ${pCom.length} com)`, comPedido.state);
 
     console.log('\n=== S359-4 — a revalidação da resposta parcial também recebe o pedido ===');
     const src = fs.readFileSync(path.join(process.cwd(), 'src', 'loop', 'AgentLoop.ts'), 'utf-8');

@@ -17,6 +17,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { StepSemanticValidator } from '../../loop/StepSemanticValidator';
 import type { PlanStep } from '../../loop/GoalTypes';
+import './_fixtures/motorLegado';   // juízes simulados no formato antigo → formato do motor único (ADR-014)
 
 let passed = 0;
 let failed = 0;
@@ -90,7 +91,7 @@ console.log('\n=== S331-3 — sem fatos: prompt como antes ===');
     const prompts: string[] = [];
     const v = new StepSemanticValidator(capturingFactory(prompts, '{"result":"relevant","confidence":0.9}'));
     await quiet(() => v.validate(step, output));
-    assert(!prompts[0].includes('Fatos da execução') && prompts[0].includes('O output acima ENDEREÇA a intenção do step?'), 'sem bloco de fatos e com a pergunta original');
+    assert(!prompts[0].includes('Fatos da execução') && prompts[0].includes('ENDEREÇA a intenção do passo'), 'sem bloco de fatos, e a pergunta continua a mesma (motor único)');
 }
 
 console.log('\n=== S331-4 — estrutural: o GoalExecutionLoop passa os fatos da tentativa recém-gravada ===');

@@ -12,6 +12,7 @@
  * Execução: npx ts-node src/__tests__/regression/S351_ObserverQuality_JudgesWholeResponse.test.ts
  */
 import { ObserverValidator } from '../../loop/ObserverValidator';
+import './_fixtures/motorLegado';   // juízes simulados no formato antigo → formato do motor único (ADR-014)
 
 let passed = 0;
 let failed = 0;
@@ -49,9 +50,10 @@ async function main(): Promise<void> {
     assert(resposta.length > 1500, `cenário: resposta longa como a de produção (${resposta.length} chars)`);
     assert(p.includes(resposta), 'a resposta final chega INTEIRA ao juiz (antes: só os primeiros 500 chars)');
     assert(p.includes('**Ressalva importante:** remova os gabaritos'), 'o fim da resposta — a "ressalva" que o juiz disse faltar — está no prompt');
-    assert(!p.includes('FIM_DO_RESULTADO'), 'o resultado da ferramenta continua sendo um trecho (o custo do prompt não explode)');
-    // Sprint V6: o trecho de cada resultado passou de 1000 para 2000 chars (todas as ferramentas do turno entram).
-    assert(/trecho: primeiros 2000 de \d+ caracteres/.test(p), 'o corte do resultado da ferramenta é declarado ao juiz');
+    // Troca ao motor único (ADR-014): o resultado de cada ferramenta é fonte de verdade e vai INTEIRO (Informação Completa para
+    // Decidir); o custo é protegido pelo teto do motor (acima dele o juiz diz "não avaliável", nunca julga um pedaço).
+    assert(p.includes('FIM_DO_RESULTADO'), 'o resultado da ferramenta vai inteiro ao juiz (o teto do motor protege o custo)');
+    assert(!/trecho: primeiros \d+ de \d+ caracteres/.test(p), 'nenhum corte silencioso: o prompt não declara trecho porque nada foi cortado');
     // Sprint V6 (Informação Completa para Decidir): a pergunta é "atende o pedido?" — o pedido vai ÍNTEGRO.
     assert(p.includes(pedido) && !/trecho: primeiros 500 de/.test(p), 'o pedido chega íntegro ao juiz (antes: 500 chars com corte declarado)');
 

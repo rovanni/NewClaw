@@ -2,7 +2,7 @@
  * Divisão de um orçamento de caracteres entre vários textos que vão juntos para um LLM.
  *
  * Fonte única (campanha 09/10/2026): a regra nasceu dentro do juiz de grounding
- * (`ObserverValidator.evidenceCapForBudget`, issue 051) e passou a ser usada também pela etapa do agente que
+ * (antes no juiz de grounding, issue 051 — o juiz hoje não corta nada) e passou a ser usada também pela etapa do agente que
  * recebe os resultados dos passos anteriores de um goal. Duas cópias da mesma regra divergiriam — por isso ela
  * mora aqui, num módulo-folha sem dependências, e os dois lados a importam.
  *

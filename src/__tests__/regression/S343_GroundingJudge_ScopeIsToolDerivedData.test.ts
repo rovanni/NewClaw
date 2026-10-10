@@ -16,6 +16,7 @@
  * Execução: npx ts-node src/__tests__/regression/S343_GroundingJudge_ScopeIsToolDerivedData.test.ts
  */
 import { ObserverValidator } from '../../loop/ObserverValidator';
+import './_fixtures/motorLegado';   // juízes simulados no formato antigo → formato do motor único (ADR-014)
 
 let passed = 0;
 let failed = 0;
@@ -48,11 +49,12 @@ async function main(): Promise<void> {
         const p = prompts[0] ?? '';
         assert(/apresenta como DADO OBTIDO das evidências/.test(p), 'escopo: afirmações apresentadas como dado obtido das evidências', p.slice(0, 200));
         assert(!/Para CADA afirmação factual da resposta/.test(p), 'não pede mais "CADA afirmação factual da resposta"');
+        // Motor único (ADR-014): as regras de escopo da ADR-010/issue 065 são o CHECKLIST do descritor `saida_contra_evidencia`.
         assert(/texto que o assistente redigiu \(explicação,\s*conteúdo didático, conhecimento geral/.test(p), 'texto redigido, conteúdo didático e conhecimento geral ficam fora');
-        // Sprint V3: o juiz agora RECEBE o pedido (seção de contexto); o que a resposta só repete dele continua fora.
-        assert(/o que a resposta só repete\s*do PEDIDO DO USUÁRIO/.test(p) && /o que o\s*assistente diz que fez ou vai fazer/.test(p), 'o que só repete o pedido e ações do assistente ficam fora');
-        assert(/É dado obtido, mesmo no meio de\s*texto redigido — inclua-o/.test(p), 'salvaguarda: valor atribuído a ferramenta é julgado mesmo no meio de texto redigido (River/Clima)');
-        assert(/REGRA CRÍTICA: ausência de contradição NÃO é suporte/.test(p), 'regra crítica da ADR-010 preservada');
+        // Sprint V3: o juiz RECEBE o pedido (seção de contexto); o que a resposta só repete dele continua fora.
+        assert(/o que a resposta só repete do pedido do usuário/.test(p) && /o que o assistente diz que fez ou vai fazer/.test(p), 'o que só repete o pedido e ações do assistente ficam fora');
+        assert(/mesmo no meio de texto redigido/.test(p), 'salvaguarda: valor atribuído a ferramenta é julgado mesmo no meio de texto redigido (River/Clima)');
+        assert(/Ausência de contradição NÃO é suporte/.test(p), 'regra crítica da ADR-010 preservada');
         assert(p.includes(AULA) && p.includes('Apresentação salva: aula.pptx (19 slides)'), 'resposta e evidência chegam inteiras');
     }
 

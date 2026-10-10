@@ -22,8 +22,8 @@ import * as crypto from 'crypto';
 import { createLogger } from '../shared/AppLogger';
 import { gravarEfeito } from '../shared/evaluatorFlightRecorder';
 import { limiteComum } from '../shared/orcamentoDeTexto';
-import { rodarEmSombra } from '../validation/sombra';
-import { estadoDoVeredito } from '../validation/motorPadrao';
+import type { DecisaoDeConclusao } from '../validation/tipos/demaisTipos';
+import { obterMotor } from '../validation/motorPadrao';
 import { DECISION_PROMPT_MAX_CHARS } from '../core/providerTypes';
 import { buildHostAppContextBlock, hostContextMode, appendHostBlock } from '../shared/hostAppContext';
 import { AgentLoop } from './AgentLoop';
@@ -2433,7 +2433,7 @@ export class GoalExecutionLoop {
         // Gravador de voo (ADR-013): o que o goal fez com o bloqueio do juiz. Ligação com o julgamento por goal/step.
         const repete = goal.retryBudget > 0 && !alreadyHinted;
         gravarEfeito({
-            avaliador: 'juiz_grounding', contexto: { goalId: goal.id, stepId: step.id },
+            avaliador: 'validacao_saida_contra_evidencia', contexto: { goalId: goal.id, stepId: step.id },
             efeito: repete ? 'goal_repete_step_com_aviso' : 'goal_bloqueado_vai_replanejar',
             detalhe: { estado: block.state, naoConfirmadas: block.unconfirmedClaims.length, retryBudget: goal.retryBudget, replanBudget: goal.replanBudget, msAteExpirar: goal.expiresAt - Date.now() },
         });
@@ -2685,7 +2685,7 @@ export class GoalExecutionLoop {
             // guardada cortada, e um arquivo gravado dentro de uma etapa do agente só deixa o caminho
             // (subToolWrites) — a resposta seguinte descrevia o arquivo e o juiz não o via. Goal ENADE (06/10):
             // "o banco contempla Máquina de Turing" REJEITADO, com 8 menções a Turing no .md de 38 KB que o juiz
-            // não recebeu. O arquivo em disco é o fato; o orçamento do juiz (evidenceCapForBudget) cuida do tamanho.
+            // não recebeu. O arquivo em disco é o fato; o teto do motor único (DECISION_PROMPT_MAX_CHARS) cuida do tamanho: o que não cabe é "não avaliável".
             ...GoalExecutionLoop.artifactContentEvidence(GoalExecutionLoop.producedArtifactPaths(priorAttempts)),
         ].map((e, i) => ({ ...e, id: `G${i + 1}` }));
         // FIX C + P3-DEDUP: captura sends diferidos com deduplicação por file_path.
@@ -4338,7 +4338,7 @@ Se a intenção original pedia uma explicação condicional (ex: "se não conseg
         // `goal.successCriteria` é o único gatilho — nenhuma checagem de texto/idioma/tamanho.
         const hasResponseContract = (goal.successCriteria ?? []).some(c => c.check === 'response_produced');
         const responseContractBlock = hasResponseContract
-            ? '\n- CONTRATO DE RESPOSTA: o plano deste objetivo declarou que uma resposta em texto, endereçando a pergunta do usuário, é parte obrigatória da conclusão — não basta ter coletado dados ou executado side-effects (ex: memory_write) sem apresentá-los. Se os attempts acima produziram apenas dados brutos, recibos de side-effect, ou nenhuma resposta legível ao usuário, marque achieved=false.'
+            ? '\n- CONTRATO DE RESPOSTA: o plano deste objetivo declarou que uma resposta em texto, endereçando a pergunta do usuário, é parte obrigatória da conclusão — não basta ter coletado dados ou executado side-effects (ex: memory_write) sem apresentá-los. Se os attempts acima produziram apenas dados brutos, recibos de side-effect, ou nenhuma resposta legível ao usuário, reprove.'
             : '';
 
         // Campanha "O8 — Contrato de Modalidade": mesmo padrão do bloco acima, para o lado
@@ -4349,38 +4349,9 @@ Se a intenção original pedia uma explicação condicional (ex: "se não conseg
         // esquecida é julgamento do próprio validador, com a intenção original disponível acima.
         const hasAbandonedDeliveryContract = (goal.successCriteria ?? []).some(c => c.check === 'delivery_not_silently_abandoned');
         const abandonedDeliveryBlock = hasAbandonedDeliveryContract
-            ? '\n- POSSÍVEL ENTREGA ABANDONADA: em uma geração anterior deste plano, o sistema previu enviar um documento e/ou áudio ao usuário (send_document/send_audio); a estratégia atual não prevê mais isso, e nenhum artefato correspondente foi entregue nesta sessão. Releia a INTENÇÃO ORIGINAL DO USUÁRIO: se ela pedia explicitamente um arquivo/documento/áudio, verifique se essa mudança de estratégia foi explicada ao usuário (ex: no "summary"/reason de um blocker anterior) ou se a entrega simplesmente ficou faltando. Se ficou faltando e não há explicação, marque achieved=false.'
+            ? '\n- POSSÍVEL ENTREGA ABANDONADA: em uma geração anterior deste plano, o sistema previu enviar um documento e/ou áudio ao usuário (send_document/send_audio); a estratégia atual não prevê mais isso, e nenhum artefato correspondente foi entregue nesta sessão. Releia a INTENÇÃO ORIGINAL DO USUÁRIO: se ela pedia explicitamente um arquivo/documento/áudio, verifique se essa mudança de estratégia foi explicada ao usuário (ex: no "summary"/reason de um blocker anterior) ou se a entrega simplesmente ficou faltando. Se ficou faltando e não há explicação, reprove.'
             : '';
 
-        const prompt = `Você é um validador de tarefas de software. Verifique se o objetivo especificado foi COMPLETAMENTE concluído.
-
-ALVO DE VALIDAÇÃO:
-${validationTarget}
-
-INTENÇÃO ORIGINAL DO USUÁRIO: ${goal.userIntent}
-${progressBlock}
-STEPS EXECUTADOS RECENTEMENTE:
-${stepsContext || '(nenhum)'}
-
-RESULTADOS DAS FERRAMENTAS:
-${attemptsContext || '(nenhum)'}${artifactBlock}${deliveredArtifactsBlock}
-
-IMPORTANTE — INTERPRETAÇÃO DE OUTPUTS:
-- Comandos de edição in-place (sed -i, python3 -c com open().write(), etc.) produzem SAÍDA VAZIA quando bem-sucedidos. Output vazio = SUCESSO para esses comandos.
-- Se o resultado de uma ferramenta exec_command está vazio e não há mensagem de erro, assuma que o comando foi bem-sucedido.
-- Se alguma leitura posterior (read, exec_command grep) mostra o conteúdo modificado, isso confirma a edição.
-- Se o conteúdo real do arquivo está disponível acima, use ESSE conteúdo como fonte primária de verdade.
-- Se houver ARTEFATOS JÁ ENTREGUES listados acima, o "summary" deve mencionar explicitamente esse artefato (nome do arquivo) como o resultado entregue — não descreva apenas os steps do ciclo atual (ex: releitura de um markdown de referência) como se fossem o objetivo em si.
-- Se PROGRESSO POR COMPONENTE mostra ≥70% concluído, considere entrega parcial como "achieved: true" com summary indicando o que ficou pendente.
-- QUALIDADE DE ARTEFATOS: se um arquivo criado pela ferramenta "write" tiver menos de 200 caracteres OU contiver placeholders evidentes ("[Inserir aqui", "TODO", "stub", "conteúdo será adicionado", texto genérico de uma linha sem dados reais), o objetivo NÃO foi atingido — marque achieved=false. Um arquivo de resumo de pesquisa com apenas uma frase genérica não constitui entrega real do objetivo.${responseContractBlock}${abandonedDeliveryBlock}
-
-Análise crítica: o objetivo ou marco atual foi atingido E o resultado/entregável esperado foi produzido com sucesso?
-Se for um marco de desenvolvimento, verifique se os arquivos/funcionalidades desse marco foram realmente criados e testados.
-
-Responda APENAS com JSON válido (sem markdown):
-{"achieved": true, "summary": "resumo do que foi feito e entregue neste marco/objetivo"}
-OU
-{"achieved": false, "reason": "o que está faltando para concluir este marco/objetivo", "suggestions": ["ação 1", "ação 2"]}`;
 
         // H2 observabilidade: registra o input exato enviado ao validador LLM
         // S4: dedup — o mesmo arquivo pode aparecer em múltiplas tentativas bem-sucedidas
@@ -4420,37 +4391,27 @@ OU
             }
         }
 
-        let llmResult: Awaited<ReturnType<typeof this.providerFactory.chatWithFallback>> | undefined;
         try {
-            // Issue 038 (22/09/2026): este é o validador de conclusão do goal — julga um contexto
-            // grande (steps, attempts, conteúdo real de artefatos) antes de decidir achieved.
-            // reasoningIntensive evita que o teto de "thinking" pensado pra chat curto aborte esse
-            // raciocínio legítimo (mesmo fator 4× já calibrado em auxTimeout.ts).
-            llmResult = await this.providerFactory.chatWithFallback(
-                [{ role: 'user', content: prompt }] as LLMMessage[],
-                undefined,
-                undefined,
-                45_000,
-                undefined,
-                undefined,
-                { reasoningIntensive: true, diag: { component: 'GoalExecutionLoop', phase: 'completion-validator', goalId: goal.id } },
-            );
-
-            if (llmResult.status !== 'success') {
-                // S5.5a (Outcome Integrity): falha TÉCNICA da chamada de validação não é evidência
-                // de sucesso — antes assumia achieved=true aqui, confundindo "não consegui verificar"
-                // com "confirmei que foi atingido". Mesma reação de caller já usada e comprovada
-                // segura pelo caminho de parse inválido (mais abaixo): achieved=false + reason
-                // técnico, bloqueado por replanBudget finito (sem risco de loop infinito).
-                log.warn(`[OUTCOME-INTEGRITY] goal=${goal.id} validator_call_status=${llmResult.status} — tratando como NÃO verificado (achieved=false), não como sucesso`);
-                return {
-                    achieved: false,
-                    reason: 'Validação técnica indisponível (chamada ao LLM de validação falhou) — objetivo não pôde ser confirmado como concluído.',
-                };
+            // Troca M6 (ADR-014, 09/10/2026): quem julga é o motor único, tipo `conclusao_do_objetivo` — pergunta, regras de
+            // interpretação, entradas, prazo, modelo e registro no gravador de voo são do descritor e do motor. Sem veredito
+            // (modelo fora, prazo, saída inválida): o adaptador devolve achieved=false — Outcome Integrity (S5.5a).
+            const { adaptado: parsed, deveBloquear, veredito, desfecho } = await obterMotor(this.providerFactory).validar<DecisaoDeConclusao>('conclusao_do_objetivo', {
+                pedido: goal.userIntent,
+                alvo: validationTarget,
+                resultados: `PASSOS EXECUTADOS:\n${stepsContext || '(nenhum)'}\n\nRESULTADOS DAS FERRAMENTAS:\n${attemptsContext || '(nenhum)'}`,
+                artefatos: `${artifactBlock}${deliveredArtifactsBlock}`.trim() || undefined,
+                contratos: `${progressBlock}${responseContractBlock}${abandonedDeliveryBlock}`.trim() || undefined,
+            }, { goalId: goal.id, phase: 'conclusao' });
+            if (deveBloquear) {   // política do tipo: sem veredito não é sucesso
+                log.warn(`[OUTCOME-INTEGRITY] goal=${goal.id} validator_sem_veredito="${veredito.naoAvaliavelPorque ?? 'n/d'}" — tratando como NÃO verificado (achieved=false), não como sucesso`);
+                // A mensagem distingue a falha pelo desfecho estruturado do motor (nunca pelo texto).
+                const reason = desfecho === 'erro'
+                    ? 'Erro técnico durante a validação de conclusão — objetivo não pôde ser confirmado como concluído.'
+                    : desfecho === 'saida_invalida'
+                        ? 'LLM de validação não retornou JSON válido'
+                        : 'Validação técnica indisponível (chamada ao LLM de validação falhou) — objetivo não pôde ser confirmado como concluído.';
+                return { achieved: false, reason };
             }
-
-            const cleaned = llmResult.content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-            const parsed = JSON.parse(cleaned);
             log.info(`[GoalLoop] LLM validation: achieved=${parsed.achieved}${parsed.reason ? ` reason="${parsed.reason}"` : ''}`);
             // H2 observabilidade: resultado do validador com métricas de contexto.
             // Soma sentArtifacts — do contrário este contador fica em 0 sempre que a entrega
@@ -4478,21 +4439,6 @@ OU
                 ` reason="${(parsed.reason ?? parsed.summary ?? '').slice(0, 100)}"` +
                 ` supporting_tools="${successToolsList.slice(0, 120)}"`
             );
-
-            // ADR-014 M6 — o mesmo julgamento pelo motor único, em sombra (as mesmas seções do prompt atual), comparado
-            // com o veredito do MODELO (antes das checagens estruturais que podem derrubá-lo).
-            rodarEmSombra({
-                providerFactory: this.providerFactory, tipo: 'conclusao_do_objetivo',
-                entradas: {
-                    pedido: goal.userIntent, alvo: validationTarget,
-                    resultados: `PASSOS EXECUTADOS:\n${stepsContext || '(nenhum)'}\n\nRESULTADOS DAS FERRAMENTAS:\n${attemptsContext || '(nenhum)'}`,
-                    artefatos: `${artifactBlock}${deliveredArtifactsBlock}`.trim() || undefined,
-                    contratos: `${progressBlock}${responseContractBlock}${abandonedDeliveryBlock}`.trim() || undefined,
-                },
-                contexto: { goalId: goal.id },
-                avaliadorAtual: 'validacao_conclusao_do_objetivo',
-                estadoAtual: parsed.achieved ? 'aprovado' : 'reprovado', estadoDoMotor: estadoDoVeredito,
-            });
 
             // C1/C5: verificação de evidência pós-LLM (anti-alucinação).
             // Se o LLM afirma achieved=true com claims observáveis ("foi apresentado",
@@ -4554,11 +4500,6 @@ OU
                 artifactPaths: existingArtifactPaths,
             };
         } catch (err) {
-            // LLM respondeu em texto livre (ex: thinking recovered de timeout) → não confirma sucesso
-            if (err instanceof SyntaxError && llmResult?.status === 'success' && llmResult.content.length > 50) {
-                log.warn('[GoalLoop] validation response not JSON — treating as goal_incomplete');
-                return { achieved: false, reason: 'LLM de validação não retornou JSON válido' };
-            }
             // S5.5a (Outcome Integrity): exceção técnica não tratada durante a validação (rede,
             // parsing inesperado, etc.) não é evidência de sucesso — antes assumia achieved=true
             // aqui. Mesma reação de caller já comprovada segura pelo caminho de SyntaxError acima.

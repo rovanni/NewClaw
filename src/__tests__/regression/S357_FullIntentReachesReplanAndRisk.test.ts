@@ -16,6 +16,7 @@ import { RiskAnalyzer } from '../../loop/RiskAnalyzer';
 import { ToolRegistry } from '../../core/ToolRegistry';
 import { ReadTool } from '../../tools/read_tool';
 import type { Goal, GoalBlocker, PlanStep } from '../../loop/GoalTypes';
+import './_fixtures/motorLegado';   // juízes simulados no formato antigo → formato do motor único (ADR-014)
 
 let passed = 0;
 let failed = 0;
@@ -82,7 +83,8 @@ async function main(): Promise<void> {
     const plano: PlanStep[] = [{ id: 'step_1', description: 'ler notas', toolName: 'read', toolArgs: { path: 'n.txt' }, fallbackSteps: [], status: 'pending' } as PlanStep];
     await quiet(() => risco.analyze(goal(), plano, []));
     assert(promptsRisco.length === 1 && promptsRisco[0].includes(INSTRUCAO_DO_FIM), 'prompt da análise de risco contém a instrução do fim do pedido');
-    assert(promptsRisco[0]?.includes(`OBJETIVO: ${RESUMO}`) && promptsRisco[0]?.includes(`PEDIDO ORIGINAL DO USUÁRIO: ${PEDIDO}`), 'o resumo continua, acompanhado do original (resumo nunca substitui)');
+    // Desde a troca ao motor único (ADR-014) o prompt é o do juiz `risco_do_plano`: cada texto numa seção rotulada.
+    assert(/\[Objetivo extraído do pedido\]\s*"""\s*/.test(promptsRisco[0] ?? '') && promptsRisco[0].includes(RESUMO) && /\[Pedido original do usuário\]\s*"""\s*/.test(promptsRisco[0] ?? '') && promptsRisco[0].includes(PEDIDO), 'o resumo continua, acompanhado do original (resumo nunca substitui)');
 
     console.log(`\n${'─'.repeat(60)}`);
     console.log(`S357 RESULTADO: ✅ ${passed} passou | ❌ ${failed} falhou`);

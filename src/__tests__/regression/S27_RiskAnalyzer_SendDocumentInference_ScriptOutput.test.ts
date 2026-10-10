@@ -39,6 +39,7 @@ import { ListWorkspaceTool } from '../../tools/list_workspace';
 import { SendDocumentTool } from '../../tools/send_document';
 import { Goal, PlanStep } from '../../loop/GoalTypes';
 import { getBudgetAuxiliar, PerfilAuxiliar } from '../../shared/auxTimeout';
+import './_fixtures/motorLegado';   // juízes simulados no formato antigo → formato do motor único (ADR-014)
 
 let passed = 0;
 let failed = 0;

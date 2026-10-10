@@ -16,6 +16,7 @@ import * as path from 'path';
 import { StepSemanticValidator } from '../../loop/StepSemanticValidator';
 import { DECISION_PROMPT_MAX_CHARS } from '../../core/providerTypes';
 import type { PlanStep } from '../../loop/GoalTypes';
+import './_fixtures/motorLegado';   // juízes simulados no formato antigo → formato do motor único (ADR-014)
 
 let passed = 0;
 let failed = 0;
@@ -62,9 +63,11 @@ async function main(): Promise<void> {
     console.log('\n=== S361-3 — a seleção por palavra-chave saiu; o teto é a fonte única ===');
     const src = fs.readFileSync(path.join(process.cwd(), 'src', 'loop', 'StepSemanticValidator.ts'), 'utf-8');
     assert(!/extractRelevantSnippet/.test(src), 'extractRelevantSnippet removida');
-    assert(/import \{ DECISION_PROMPT_MAX_CHARS \} from '\.\.\/core\/providerTypes'/.test(src), 'usa o teto compartilhado (providerTypes)');
+    // Troca ao motor único (ADR-014): o teto é do motor, UM só para todos os juízes — nenhum consumidor tem cópia dele.
+    const engineSrc = fs.readFileSync(path.join(process.cwd(), 'src', 'validation', 'ValidationEngine.ts'), 'utf-8');
+    assert(/import \{ DECISION_PROMPT_MAX_CHARS[^}]*\} from '\.\.\/core\/providerTypes'/.test(engineSrc), 'o motor usa o teto compartilhado (providerTypes)');
     const obs = fs.readFileSync(path.join(process.cwd(), 'src', 'loop', 'ObserverValidator.ts'), 'utf-8');
-    assert(/const GROUNDING_MAX_PROMPT_CHARS = DECISION_PROMPT_MAX_CHARS;/.test(obs), 'o juiz usa o mesmo teto (sem cópia do número)');
+    assert(!/DECISION_PROMPT_MAX_CHARS|GROUNDING_MAX_PROMPT_CHARS/.test(src) && !/DECISION_PROMPT_MAX_CHARS|GROUNDING_MAX_PROMPT_CHARS/.test(obs), 'nenhum juiz tem cópia do teto — vale o do motor');
 
     console.log(`\n${'─'.repeat(60)}`);
     console.log(`S361 RESULTADO: ✅ ${passed} passou | ❌ ${failed} falhou`);

@@ -38,6 +38,7 @@ import { PlanStep } from '../../loop/GoalTypes';
 import { ChannelContext } from '../../loop/agentLoopTypes';
 import { permissionRegistry } from '../../core/PermissionRegistry';
 import { OperationalMode } from '../../core/CapabilityMode';
+import './_fixtures/motorLegado';   // juízes simulados no formato antigo → formato do motor único (ADR-014)
 
 let passed = 0;
 let failed = 0;

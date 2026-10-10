@@ -1,25 +1,26 @@
 /// <reference types="node" />
 /**
- * TESTE DE REGRESSÃO — S322 (issue 051)
+ * TESTE DE REGRESSÃO — S322 (issue 051; reescrito na troca ao motor único, ADR-014, 09/10/2026)
  *
- * O juiz de groundedness recebia cada evidência cortada em 2.000 chars (args em 200), um número sem
- * justificativa registrada. Em produção (set-out/2026), 25% das evidências passavam disso e 20 de 55
- * afirmações NOT_EVALUABLE citavam uma evidência cortada. Na validação real da issue 049, um arquivo
- * de 6,5 mil chars com os valores no fim fez o goal falhar após 12 ciclos: o dado estava na evidência,
- * o juiz não o via.
+ * O juiz de groundedness recebia cada evidência cortada em 2.000 chars (args em 200), um número sem justificativa
+ * registrada. Em produção (set-out/2026), 25% das evidências passavam disso e 20 de 55 afirmações NOT_EVALUABLE citavam uma
+ * evidência cortada. Na validação real da issue 049, um arquivo de 6,5 mil chars com os valores no fim fez o goal falhar
+ * após 12 ciclos: o dado estava na evidência, o juiz não o via.
  *
- * Agora a evidência entra inteira; só é cortada se o conjunto não couber no orçamento de entrada do
- * juiz (GROUNDING_MAX_PROMPT_CHARS = 60k), por "water-filling" (corta só os maiores, por igual), e o
- * corte continua marcado. A resposta nunca é cortada. O modo sombra mantém seus limites fixos.
+ * Primeiro a evidência passou a entrar inteira, cortada só por "water-filling" quando não coubesse (corte marcado). No motor
+ * único o princípio "Informação Completa para Decidir" foi levado até o fim: NADA é cortado — nem evidência, nem args, nem
+ * resposta. O que não cabe no teto do motor (DECISION_PROMPT_MAX_CHARS, 60k) não é julgado: o resultado é UNVALIDATED, que
+ * não autoriza entrega — nunca um veredito sobre um pedaço.
  *
- * REGRESSÃO SE: voltar um corte fixo por evidência; o corte por orçamento deixar o prompt passar do
- * teto ou cortar textos pequenos antes dos grandes; a marca de corte sumir; ou a resposta ser cortada.
+ * REGRESSÃO SE: voltar um corte (fixo ou por orçamento) em evidência, args ou resposta; ou o juiz ser chamado com um prompt
+ * acima do teto; ou um conjunto que não cabe virar veredito em vez de UNVALIDATED.
  *
  * Execução: npx ts-node src/__tests__/regression/S322_GroundingEvidence_WholeWithinBudget.test.ts
  */
 process.env.WORKSPACE_DIR = process.env.WORKSPACE_DIR || 'D:/IA/newclaw/workspace';
 
 import { ObserverValidator, EvidenceItem } from '../../loop/ObserverValidator';
+import './_fixtures/motorLegado';   // juízes simulados no formato antigo → formato do motor único (ADR-014)
 
 let passed = 0;
 let failed = 0;
@@ -28,7 +29,6 @@ function assert(c: boolean, m: string, d?: unknown): void {
 }
 
 const MAX_PROMPT = 60_000;
-const MARK = '[EVIDÊNCIA TRUNCADA';
 const judgeJson = JSON.stringify({ claims: [{ claim: 'O pico de 127 V RMS é 179,6 V', evidence: ['E1'], verdict: 'SUPPORTED' }] });
 
 /** Provedor falso que captura o prompt EXATO que o juiz receberia. */
@@ -50,11 +50,11 @@ async function quiet<T>(fn: () => Promise<T>): Promise<T> {
     try { return await fn(); } finally { process.stdout.write = orig; }
 }
 
-async function judge(response: string, evidences: EvidenceItem[]): Promise<{ prompt: string; state: string }> {
+async function judge(response: string, evidences: EvidenceItem[]): Promise<{ prompts: string[]; state: string }> {
     const prompts: string[] = [];
     const v = new ObserverValidator(capturingFactory(prompts), 'm');
     const verdict = await quiet(() => v.validateGrounding(response, evidences));
-    return { prompt: prompts[0] ?? '', state: verdict.state };
+    return { prompts, state: verdict.state };
 }
 
 async function main(): Promise<void> {
@@ -62,10 +62,11 @@ async function main(): Promise<void> {
 console.log('\n=== S322-1 — o caso da validação real: arquivo de 6,5 mil chars com o dado no FIM chega inteiro ao juiz ===');
 {
     const file = 'Parágrafo de contexto. '.repeat(280) + '\n- Pico da rede de 127 V RMS: 179,6 V.';
-    const { prompt, state } = await judge('O pico de 127 V RMS é 179,6 V.', [{ id: 'E1', tool: 'read', input: '{"path":"notas_aula.md"}', output: file }]);
+    const { prompts, state } = await judge('O pico de 127 V RMS é 179,6 V.', [{ id: 'E1', tool: 'read', input: '{"path":"notas_aula.md"}', output: file }]);
+    const prompt = prompts[0] ?? '';
     assert(file.length > 6000, 'pré-condição: evidência acima do antigo corte de 2000', file.length);
     assert(prompt.includes('179,6 V.') && prompt.includes(file), 'o texto inteiro da evidência, inclusive o fim, está no prompt do juiz');
-    assert(!prompt.includes(MARK), 'sem marca de corte quando tudo cabe');
+    assert(!/TRUNCAD|trecho: primeiros/.test(prompt), 'nenhuma marca de corte: nada foi cortado');
     assert(state === 'VALIDATED', 'veredito normal', state);
 }
 
@@ -73,41 +74,35 @@ console.log('\n=== S322-2 — args (ex.: conteúdo gravado por write) também en
 {
     const content = 'linha do resumo\n'.repeat(400);
     const input = JSON.stringify({ path: 'resumo.md', content });
-    const { prompt } = await judge('O resumo foi gravado.', [{ id: 'E1', tool: 'write', input, output: 'Criado: resumo.md' }]);
-    assert(input.length > 200 && prompt.includes(input), 'args de 6 mil chars no prompt (antes: 200)', input.length);
-    assert(!prompt.includes('[ARGS TRUNCADOS]'), 'sem marca de args truncados');
+    const { prompts } = await judge('O resumo foi gravado.', [{ id: 'E1', tool: 'write', input, output: 'Criado: resumo.md' }]);
+    assert(input.length > 200 && (prompts[0] ?? '').includes(input), 'args de 6 mil chars no prompt (antes: 200)', input.length);
+    assert(!/ARGS TRUNCADOS/.test(prompts[0] ?? ''), 'sem marca de args truncados');
 }
 
-console.log('\n=== S322-3 — evidência acima do orçamento: corta só os maiores, por igual, marca o corte e respeita o teto ===');
+console.log('\n=== S322-3 — evidência acima do teto: NÃO é cortada e NÃO é julgada — UNVALIDATED, o juiz nem é chamado ===');
 {
-    const small = 'pequena evidência intacta';
     const evidences: EvidenceItem[] = [
         { id: 'E1', tool: 'read', output: 'A'.repeat(50_000) },
         { id: 'E2', tool: 'web_search', output: 'B'.repeat(40_000) },
-        { id: 'E3', tool: 'weather', output: small },
+        { id: 'E3', tool: 'weather', output: 'pequena evidência intacta' },
     ];
-    const { prompt, state } = await judge('Resposta curta.', evidences);
-    assert(prompt.length > 0 && prompt.length <= MAX_PROMPT, `prompt dentro do teto (${prompt.length} ≤ ${MAX_PROMPT})`, prompt.length);
-    assert(prompt.includes(small), 'a evidência pequena entra inteira (o corte recai sobre as grandes)');
-    const a = (prompt.match(/A+/g) ?? []).reduce((m, s) => Math.max(m, s.length), 0);
-    const b = (prompt.match(/B+/g) ?? []).reduce((m, s) => Math.max(m, s.length), 0);
-    assert(a < 50_000 && b < 40_000 && a === b, `as duas grandes cortadas no MESMO limite (A=${a}, B=${b})`, { a, b });
-    assert((prompt.match(/\[EVIDÊNCIA TRUNCADA/g) ?? []).length === 2, 'o corte é marcado nas duas evidências cortadas');
-    assert(state === 'VALIDATED', 'julgamento acontece (não vira UNVALIDATED por excesso)', state);
+    const { prompts, state } = await judge('Resposta curta.', evidences);
+    assert(prompts.length === 0, 'o modelo não é chamado com um pedaço da evidência (antes: cortava as maiores por igual)', prompts.length);
+    assert(state === 'UNVALIDATED', 'conjunto que não cabe → UNVALIDATED (não autoriza entrega; nunca um veredito sobre um pedaço)', state);
 }
 
-console.log('\n=== S322-4 — evidenceCapForBudget: Infinity quando cabe; 0 quando nem a resposta cabe ===');
+console.log('\n=== S322-4 — no limite: o que cabe inteiro é julgado inteiro (o prompt nunca passa do teto) ===');
 {
-    assert(ObserverValidator.evidenceCapForBudget('r', [{ id: 'E1', tool: 't', output: 'x'.repeat(30_000) }]) === Infinity, 'cabe → Infinity');
-    assert(ObserverValidator.evidenceCapForBudget('r'.repeat(70_000), [{ id: 'E1', tool: 't', output: 'x' }]) === 0, 'resposta acima do teto → 0');
-    const cap = ObserverValidator.evidenceCapForBudget('r', [{ id: 'E1', tool: 't', output: 'x'.repeat(100_000) }]);
-    assert(cap > 50_000 && cap < 60_000, 'uma evidência gigante recebe quase todo o orçamento', cap);
+    const { prompts, state } = await judge('r', [{ id: 'E1', tool: 'read', output: 'x'.repeat(30_000) }]);
+    assert(prompts.length === 1 && prompts[0].length <= MAX_PROMPT && prompts[0].includes('x'.repeat(30_000)), `evidência de 30 mil chars entra inteira (prompt de ${prompts[0]?.length ?? 0} ≤ ${MAX_PROMPT})`);
+    assert(state !== 'UNVALIDATED', 'e há julgamento', state);
 }
 
 console.log('\n=== S322-5 — a resposta nunca é cortada: acima do teto continua UNVALIDATED ===');
 {
-    const { state } = await judge('r'.repeat(70_000), [{ id: 'E1', tool: 'read', output: 'x' }]);
-    assert(state === 'UNVALIDATED', 'resposta maior que o orçamento → UNVALIDATED (sem julgar um prefixo)', state);
+    const { prompts, state } = await judge('r'.repeat(70_000), [{ id: 'E1', tool: 'read', output: 'x' }]);
+    assert(state === 'UNVALIDATED', 'resposta de 70 mil chars → UNVALIDATED (não julga um prefixo)', state);
+    assert(prompts.length === 0, 'o modelo não foi chamado com a resposta cortada', prompts.length);
 }
 
 console.log(`\n${'─'.repeat(60)}`);
@@ -115,7 +110,4 @@ console.log(`S322 RESULTADO: ✅ ${passed} passou | ❌ ${failed} falhou`);
 if (failed > 0) process.exitCode = 1;
 }
 
-main().catch((err) => {
-    console.error('S322 erro inesperado:', err);
-    process.exitCode = 1;
-});
+main().catch((err) => { console.error('S322 erro inesperado:', err); process.exitCode = 1; });

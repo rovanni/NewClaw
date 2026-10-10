@@ -48,6 +48,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { getBudgetAuxiliar } from '../../shared/auxTimeout';
 import { CircuitBreaker } from '../../core/CircuitBreaker';
+import './_fixtures/motorLegado';   // juízes simulados no formato antigo → formato do motor único (ADR-014)
 
 let passed = 0;
 let failed = 0;
@@ -187,8 +188,12 @@ console.log('\n=== S186-8b — StepSemanticValidator: a evidência apareceu, o t
     // (2 × 8 s) com um modelo local, em 08/10/2026. Migrou para o MESMO mecanismo — perfil 'validacao' ("avaliar um passo").
     const src = fs.readFileSync(path.join(process.cwd(), 'src/loop/StepSemanticValidator.ts'), 'utf-8');
     assert(!/const TIMEOUT_MS = \d[\d_]*;/.test(src), 'não é mais um número fixo em milissegundos');
-    assert(/getBudgetAuxiliar\('validacao'\)/.test(src) && /chatWithFallback\(messages, undefined, undefined, orcamento\.timeoutMs,/.test(src),
-        "usa getBudgetAuxiliar('validacao') como prazo da chamada");
+    // Troca ao motor único (ADR-014): o prazo deixou de ser deste arquivo — é o do motor, que o deriva de
+    // getBudgetAuxiliar('validacao') para TODOS os tipos de validação.
+    const motor = fs.readFileSync(path.join(process.cwd(), 'src/validation/ValidationEngine.ts'), 'utf-8');
+    assert(/obterMotor\(/.test(src) && !/chatWithFallback/.test(src), 'o validador de passo valida pelo motor único (não tem prazo próprio)');
+    assert(/getBudgetAuxiliar\('validacao'\)/.test(motor) && /orcamento\.timeoutMs/.test(motor),
+        "o motor usa getBudgetAuxiliar('validacao') como prazo da chamada — um lugar só para todos os juízes");
 }
 
 console.log('\n=== S186-9 — contentStubClassifier: a evidência apareceu, o teto fixo saiu (Sprint 043) ===');
@@ -207,9 +212,11 @@ console.log('\n=== S186-9 — contentStubClassifier: a evidência apareceu, o te
         !/const TIMEOUT_MS = \d[\d_]*;/.test(src),
         'não voltou a ser um número fixo em milissegundos',
     );
+    // Troca ao motor único (ADR-014): o prazo é o do motor (perfil 'validacao', derivado da latência observada).
+    const motor = fs.readFileSync(path.join(process.cwd(), 'src/validation/ValidationEngine.ts'), 'utf-8');
     assert(
-        /getBudgetAuxiliar\('classificacao'\)/.test(src),
-        "usa getBudgetAuxiliar('classificacao') — mesmo perfil de DomainRegistry e GoalExtractor",
+        /obterMotor\(/.test(src) && !/chatWithFallback/.test(src) && /getBudgetAuxiliar\('validacao'\)/.test(motor),
+        "valida pelo motor único, cujo prazo vem de getBudgetAuxiliar('validacao') — nenhum número fixo neste arquivo",
     );
     assert(
         /isStub: true, reason: 'erro na classificação LLM \(fail-closed\)'/.test(src),

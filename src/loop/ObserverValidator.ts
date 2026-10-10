@@ -4,67 +4,15 @@
  * Only runs when tools are executed, not for simple conversations
  */
 
-import { ProviderFactory, LLMMessage } from '../core/ProviderFactory';
+import { ProviderFactory } from '../core/ProviderFactory';
 import { createLogger } from '../shared/AppLogger';
 import { errorMessage } from '../shared/errors';
 import { createHash } from 'crypto';
 import { ANALYSIS_INTENT_PATTERN } from '../shared/analysisIntentPattern';
-import { gravarAvaliacao, novaAvaliacaoId, versaoDoPrompt, INSTRUCAO_FALTOU, lerFaltou } from '../shared/evaluatorFlightRecorder';
-import type { CallTelemetry } from '../core/providerTypes';
-import { DECISION_PROMPT_MAX_CHARS } from '../core/providerTypes';
-import { limiteComum } from '../shared/orcamentoDeTexto';
-import { rodarEmSombra } from '../validation/sombra';
-import { estadoDoVeredito } from '../validation/motorPadrao';
-import { TIPO_SAIDA_CONTRA_EVIDENCIA, type EstadoDeGrounding } from '../validation/tipos/saidaContraEvidencia';
+import { TIPO_SAIDA_CONTRA_EVIDENCIA, type DecisaoDeGrounding } from '../validation/tipos/saidaContraEvidencia';
+import { obterMotor } from '../validation/motorPadrao';
+import type { DecisaoDeQualidade } from '../validation/tipos/demaisTipos';
 const log = createLogger('Observervalidator');
-
-/**
- * Extrai o primeiro objeto JSON válido contendo a chave "approved" de um conteúdo arbitrário.
- * Usa contagem de chaves para lidar com objetos aninhados e strings com caracteres especiais —
- * o regex simples /\{[^}]*"approved"[^}]*\}/ quebrava ao encontrar `}` dentro de reason ou
- * ao receber o campo thinking do qwen3.5 como fallback de conteúdo.
- */
-function extractApprovedJson(content: string): Record<string, unknown> | null {
-    // Tentativa direta: conteúdo inteiro é JSON válido
-    try {
-        const parsed = JSON.parse(content) as Record<string, unknown>;
-        if ('approved' in parsed) return parsed;
-    } catch { /* continua */ }
-
-    // Varredura por objetos JSON via contagem de chaves
-    let i = 0;
-    while (i < content.length) {
-        const start = content.indexOf('{', i);
-        if (start === -1) break;
-        let depth = 0;
-        let inString = false;
-        let escape = false;
-        let j = start;
-        while (j < content.length) {
-            const ch = content[j];
-            if (escape) { escape = false; j++; continue; }
-            if (ch === '\\' && inString) { escape = true; j++; continue; }
-            if (ch === '"') { inString = !inString; j++; continue; }
-            if (!inString) {
-                if (ch === '{') depth++;
-                else if (ch === '}') {
-                    depth--;
-                    if (depth === 0) break;
-                }
-            }
-            j++;
-        }
-        if (depth === 0) {
-            const candidate = content.slice(start, j + 1);
-            try {
-                const parsed = JSON.parse(candidate) as Record<string, unknown>;
-                if ('approved' in parsed) return parsed;
-            } catch { /* tenta próximo */ }
-        }
-        i = start + 1;
-    }
-    return null;
-}
 
 export type FailureType = 'incomplete_response' | 'read_only' | 'future_action' | 'tool_error' | 'other' | 'none';
 
@@ -77,15 +25,6 @@ export interface ValidationResult {
     failureType?: FailureType;
     /** Gravador de voo (ADR-013): id do registro deste julgamento, quando houve julgamento. */
     avaliacaoId?: string;
-}
-
-/** Gravador de voo (ADR-013): o que o validador de qualidade observou, preenchido durante o julgamento. */
-interface RegistroQualidade {
-    telemetria: CallTelemetry;
-    prompt: string;
-    /** undefined = não houve julgamento (pulado) — nada a gravar. */
-    desfecho?: string;
-    saidaBruta?: string;
 }
 
 /**
@@ -140,14 +79,9 @@ export interface EvidenceItem {
 
 /**
  * Quanto do texto de cada evidência vai para o LOG opcional (`TRACE_CONTENT=true`). Só tamanho de log:
- * desde a issue 051 o juiz recebe a evidência inteira (ver `evidenceCapForBudget`).
+ * o juiz recebe a evidência INTEIRA (nada é cortado; o que não cabe no teto do motor é "não avaliável").
  */
 const TRACE_EVIDENCE_LOG_CHARS = 2000;
-/** Limites do modo sombra de evidência ampliada (`GROUNDING_EVIDENCE_SHADOW`) — só observação, nunca o julgamento real. */
-const GROUNDING_SHADOW_EVIDENCE_CHARS = 4000;
-const GROUNDING_SHADOW_ARGS_CHARS = 6000;
-const GROUNDING_SHADOW_REQUEST_CHARS = 4000;
-
 // ── Observabilidade do juiz de grounding (`[GROUNDING-TRACE]`) ───────────────────────────────
 // Só fatos, nenhuma interpretação: o que o juiz recebeu (tamanho de cada evidência e se foi
 // cortada), o que devolveu (TODAS as afirmações com veredito e evidência citada, não só a
@@ -170,8 +104,7 @@ export interface GroundingTraceContext {
     planGeneration?: number;
     /**
      * O pedido ORIGINAL do usuário. Sprint V3 (Informação Completa para Decidir): entra no prompt do
-     * julgamento real como CONTEXTO, numa seção própria — nunca como evidência. O modo sombra de evidência
-     * ampliada (`GROUNDING_EVIDENCE_SHADOW`) continua a experimentá-lo como evidência (U1). Não vai para o
+     * julgamento como CONTEXTO, numa seção própria — nunca como evidência. Não vai para o
      * `[GROUNDING-TRACE]` (só o tamanho); o gravador de voo o grava com TRACE_CONTENT.
      */
     userRequest?: string;
@@ -180,14 +113,6 @@ export interface GroundingTraceContext {
      * parcial; `shadow-extended` = a execução em sombra com evidência ampliada (nunca vira decisão).
      */
     phase?: 'initial' | 'partial-revalidation' | 'shadow-extended' | 'shadow-model';
-}
-
-/** Limites de corte da evidência no prompt do juiz. O padrão é o do julgamento real; o modo sombra os amplia. */
-interface GroundingEvidenceLimits {
-    evidenceChars?: number;
-    argsChars?: number;
-    /** Só o modo sombra de modelo passa isto: julga com OUTRO modelo (mesma evidência, mesmo prompt). */
-    model?: string;
 }
 
 interface GroundingEvidenceFact {
@@ -239,143 +164,6 @@ export interface GroundingVerdict {
     avaliacaoId?: string;
 }
 
-const CLAIM_VERDICTS: ReadonlySet<string> = new Set<ClaimVerdict>(['SUPPORTED', 'NOT_SUPPORTED', 'NOT_EVALUABLE']);
-
-/**
- * Teto de caracteres do prompt do juiz. Não é limite de estilo nem economia de tokens: é a
- * fronteira a partir da qual deixa de ser possível AFIRMAR que o juiz recebeu a resposta inteira.
- *
- * A resposta NUNCA é truncada para caber aqui. Truncar produziria um veredito sobre um prefixo,
- * e esse veredito viraria `VALIDATED` sobre um texto que ninguém avaliou — o vazamento fail-open
- * que a ADR-010 §10 fecha ao exigir que só o avaliado seja entregue. Acima do teto o resultado é
- * `UNVALIDATED`: o juiz não concluiu sobre a resposta que seria entregue.
- *
- * Derivação: o menor contexto que o projeto assume em runtime é o padrão de `OLLAMA_NUM_CTX`
- * (32768 tokens — `OllamaProvider`), e num_ctx cobre entrada + saída. A ~3 chars/token em pt-BR
- * são ~98k chars no total; reservando a saída (o JSON de vereditos) e margem para a instrução,
- * o teto de ENTRADA fica em 60k. Conservador de propósito: errar para o lado do bloqueio é o
- * comportamento pedido nesta implementação.
- */
-const GROUNDING_MAX_PROMPT_CHARS = DECISION_PROMPT_MAX_CHARS;   // fonte única em providerTypes (Sprint V5)
-
-// O contrato do juiz é o da ADR-010 §5, enunciado em termos gerais: nenhuma menção a ferramenta,
-// domínio, unidade ou idioma. O exemplo de unidade indeterminada existe para tornar concreta a
-// regra "ausência de contradição não é suporte" — é ilustração, não regra especial (ADR-010 §5).
-//
-// Duas lacunas fechadas aqui (16/08/2026, achado real — conversão de moeda bloqueada
-// repetidamente): a agregação é tudo-ou-nada (`aggregateGrounding` — QUALQUER claim
-// NOT_EVALUABLE derruba a resposta inteira), então uma categoria de claim mal-coberta pelo
-// prompt bloqueia respostas onde tudo o mais está correto.
-//
-// 1. "transformação determinística" listava arredondamento/unidade/reformatação/tradução/
-//    omissão de campos, mas não aritmética — então "evidência: 1 USD = R$5,19" + pergunta
-//    "quanto é 9 dólares?" + resposta "R$46,71" virava NOT_EVALUABLE: nem o "9" nem o "46,71"
-//    aparecem literalmente na evidência, e nenhuma das transformações listadas cobre combinar
-//    um valor da evidência com um número de outra parte do contexto via operação aritmética.
-// 2. Fatos triviais independentes de qualquer evidência (dia da semana de uma data, por
-//    exemplo) também caíam em NOT_EVALUABLE — nenhuma evidência de ferramenta "trata do
-//    assunto" porque nenhuma precisa tratar: não é um fato que dependa de fonte externa.
-//
-// Issue 065 (06/10/2026): o escopo do prompt era MAIOR que o da ADR-010. A §2 decide sobre
-// "afirmações factuais DERIVADAS DE FERRAMENTAS"; o prompt pedia "CADA afirmação factual da
-// resposta". Como o gatilho é "o turno usou alguma ferramenta", uma aula escrita pelo agente
-// (rodou um script para gerar o .pptx) virava 23 afirmações a fundamentar — conteúdo didático,
-// contexto do pedido, ações do agente —, que nenhuma evidência determina por definição. Produção:
-// 1 VALIDATED em 22 julgamentos do glm-5.3, 95–317 s cada; 57 de 280 afirmações NOT_EVALUABLE; a
-// sombra gemma4 concordava em 7/13. Agora o próprio juiz (LLM — a distinção é semântica) separa o
-// que a resposta apresenta como DADO OBTIDO de ferramenta do que é redigido; o resto do contrato
-// não muda. Experimento (19 casos: 10 curtos de 03/10, 5 realistas, 4 armadilhas com dado de
-// ferramenta errado dentro de texto redigido — River/Clima em resposta longa): glm-5.3 de 14/19
-// para 19/19, gemma4 de 18/19 para 19/19, armadilhas 4/4 em todos; os dois modelos concordam
-// nos 19.
-// Sprint V3 (Informação Completa para Decidir, 08/10/2026): o juiz recebe o PEDIDO DO USUÁRIO numa seção própria,
-// marcada como contexto — não como evidência. Antes ele não o recebia e tinha de adivinhar o que "veio do pedido"
-// (experimento de 07/10: bloqueou uma resposta correta que citava o curso informado pelo usuário).
-const GROUNDING_PROMPT = `Você verifica quais afirmações de uma RESPOSTA são sustentadas pelas EVIDÊNCIAS.
-
-PEDIDO DO USUÁRIO (contexto — NÃO é evidência de ferramenta; serve para você saber o que veio do usuário):
-"""
-{pedido}
-"""
-
-EVIDÊNCIAS:
-{evidences}
-
-RESPOSTA:
-"""
-{response}
-"""
-
-Para CADA afirmação que a resposta apresenta como DADO OBTIDO das evidências — valor, resultado,
-conteúdo lido, contagem, estado ou nome informado por uma ferramenta —, indique quais evidências a
-sustentam e o veredito.
-
-- SUPPORTED: a evidência DETERMINA POSITIVAMENTE a afirmação — está presente nela, ou é obtida
-  dela por transformação determinística (arredondamento, mudança de unidade declarada,
-  reformatação, tradução, omissão de campos, ou cálculo aritmético — soma, subtração,
-  multiplicação, divisão — que combina um valor da evidência com um número explícito em outra
-  parte do contexto, como a pergunta do usuário).
-- NOT_SUPPORTED: a evidência determina que a afirmação é falsa — contradiz, ou atribui o valor a
-  um papel/entidade/momento diferente, ou acrescenta um fato que a evidência enumera e não contém.
-- NOT_EVALUABLE: a evidência não determina a afirmação — não trata do assunto, é ambígua, é
-  conflitante, ou não enumera a dimensão de que a afirmação fala.
-
-REGRA CRÍTICA: ausência de contradição NÃO é suporte. Se a evidência não determina a afirmação,
-o veredito é NOT_EVALUABLE, nunca SUPPORTED. Exemplo: evidência "X: 25" e afirmação "X está a
-25°C" — o número aparece, mas a unidade não está determinada, então NÃO é SUPPORTED.
-
-NÃO são dado obtido das evidências — não os inclua: texto que o assistente redigiu (explicação,
-conteúdo didático, conhecimento geral, opinião, recomendação, cortesia), o que a resposta só repete
-do PEDIDO DO USUÁRIO acima (o pedido não confirma nem contradiz dado de ferramenta), o que o
-assistente diz que fez ou vai fazer, e fato verificável por si só sem depender
-de fonte externa (ex: dia da semana correspondente a uma data, resultado de um cálculo já
-classificado acima). Um valor que a resposta atribui a uma ferramenta ou apresenta como resultado
-de consulta (preço, temperatura, quantidade, nome de arquivo...) É dado obtido, mesmo no meio de
-texto redigido — inclua-o.
-Se a resposta não contiver nenhuma afirmação apresentada como dado obtido das evidências, devolva a
-lista vazia.
-
-${INSTRUCAO_FALTOU}
-
-Responda APENAS com JSON:
-{"claims":[{"claim":"...","evidence":["E1"],"verdict":"SUPPORTED|NOT_SUPPORTED|NOT_EVALUABLE"}],"faltou":"(opcional)"}`;
-
-const OBSERVER_PROMPT = `Você é um agente observador responsável por validar a qualidade das ações de um assistente virtual.
-
-Analise as informações abaixo:
-
-1. Solicitação do usuário:
-"{userMessage}"
-
-2. Intenção identificada:
-{intent}
-
-3. Ferramenta(s) executada(s) neste turno:
-{toolUsed}
-
-4. Resultado da(s) ferramenta(s):
-{toolResult}
-
-5. Resposta final ao usuário:
-"{finalResponse}"
-
-Avalie se a ação executada está correta e se a resposta atende plenamente à solicitação do usuário.
-
-${INSTRUCAO_FALTOU}
-
-Responda APENAS em JSON:
-{"approved": true/false, "reason": "explicação curta", "confidence": 0.0-1.0, "suggested_fix": "ação sugerida caso não aprovado", "failure_type": "incomplete_response | read_only | future_action | tool_error | other | none", "faltou": "(opcional)"}`;
-
-/**
- * Issue 067: trecho de um dado de CONTEXTO (pedido, resultado de ferramenta) com o corte declarado —
- * sem o aviso, o juiz não distingue "o dado acaba aqui" de "o prompt cortou aqui".
- */
-function trechoRotulado(texto: string, limite: number): string {
-    if (texto.length <= limite) return texto;
-    return `${texto.slice(0, limite)}
-[… trecho: primeiros ${limite} de ${texto.length} caracteres — o corte é do validador, não do dado]`;
-}
-
 // ── Deterministic pre-checks ─────────────────────────────────────────────────
 // Short-circuits LLM validation for obvious cases (~80% of tool calls).
 // Ordered from most-specific to least-specific.
@@ -397,27 +185,21 @@ const KNOWN_GOOD_TOOLS: Array<{
 ];
 
 export class ObserverValidator {
-    private observerModel: string;
     private providerFactory: ProviderFactory;
 
     constructor(providerFactory: ProviderFactory, observerModel: string = process.env.OBSERVER_MODEL || '') {
         this.providerFactory = providerFactory;
-        this.observerModel = observerModel;
+        // O modelo do juiz é UM só para todos os tipos de validação e mora no motor único (ADR-014).
+        if (observerModel) obterMotor(providerFactory).definirModeloDoJuiz(observerModel);
     }
 
     /**
-     * Issue 068 (substitui a regra da issue 057): o código não escolhe modelo para o juiz. Sem OBSERVER_MODEL
-     * configurado (painel ou .env), a chamada sai sem modelo — o provedor usa o próprio modelo padrão (o "Modelo
-     * padrão" do painel), mesma regra da issue 019 para o classificador. Antes, com o Ollama, o código pedia
-     * 'qwen3.5:cloud' em silêncio: um modelo que o operador nunca escolheu e que o painel não mostrava.
-     * Modelo configurado (OBSERVER_MODEL, setModel) nunca é tocado.
+     * Issue 068: o código não escolhe modelo para o juiz — sem OBSERVER_MODEL (painel ou .env) a chamada sai sem modelo e o
+     * provedor usa o próprio padrão. Desde a troca ao motor único (ADR-014), esse modelo vale para TODOS os tipos de
+     * validação, e este método só o repassa ao motor (`updateConfig` do painel chega aqui).
      */
-    private get effectiveModel(): string {
-        return this.observerModel;
-    }
-
     setModel(model: string): void {
-        if (model) this.observerModel = model;
+        if (model) obterMotor(this.providerFactory).definirModeloDoJuiz(model);
     }
 
     // ── Deterministic pre-check (no LLM) ─────────────────────────────────────
@@ -456,6 +238,11 @@ export class ObserverValidator {
     }
 
     /**
+     * Qualidade da resposta final: pré-checagens determinísticas para os casos óbvios (sem LLM) e, nos demais, o motor
+     * único — tipo `qualidade_da_resposta` (troca M3, ADR-014, 09/10/2026). Pergunta, checklist, entradas (pedido,
+     * resposta e resultados de TODAS as ferramentas do turno, íntegros), prazo, modelo e registro no gravador de voo são do
+     * descritor e do motor; aqui ficam só as entradas deste consumidor e a tradução para `ValidationResult`.
+     *
      * @param signal - AbortSignal tied to the caller's timeout. When the signal fires the
      *   provider call is abandoned and the method returns a skipped result instead of logging
      *   a confusing approved=false after the turn already ended.
@@ -470,49 +257,6 @@ export class ObserverValidator {
         /** Sprint V6: todas as ferramentas do turno. Sem isto, só `toolUsed`/`toolResult` (a última). */
         ferramentasDoTurno?: Array<{ tool: string; output: string }>,
     ): Promise<ValidationResult> {
-        const t0 = Date.now();
-        const reg: RegistroQualidade = { telemetria: { attempts: [] }, prompt: '' };
-        const result = await this.julgarQualidade(userMessage, intent, toolUsed, toolResult, finalResponse, signal, reg, ferramentasDoTurno);
-        if (reg.desfecho === undefined) return result;
-        const avaliacaoId = novaAvaliacaoId();
-        gravarAvaliacao({
-            id: avaliacaoId, avaliador: 'validador_qualidade',
-            antes: {
-                modelo: this.effectiveModel || '(padrão do provedor)', versaoPrompt: versaoDoPrompt(OBSERVER_PROMPT), promptChars: reg.prompt.length,
-                fatos: { ferramenta: toolUsed, pedidoChars: userMessage.length, resultadoChars: toolResult.length, respostaChars: finalResponse.length },
-                conteudo: { prompt: reg.prompt, pedido: userMessage, resultadoFerramenta: toolResult, resposta: finalResponse },
-            },
-            telemetria: reg.telemetria,
-            depois: {
-                desfecho: reg.desfecho, estado: result.validationSkipped ? 'pulado' : result.approved ? 'aprovado' : 'reprovado', duracaoMs: Date.now() - t0,
-                fatos: { confianca: result.confidence, failureType: result.failureType, faltouInformado: !!lerFaltou(reg.saidaBruta) },
-                conteudo: { motivo: result.reason, sugestao: result.suggestedFix, saidaBruta: reg.saidaBruta, faltou: lerFaltou(reg.saidaBruta) },
-            },
-        });
-        // ADR-014 M3 — o mesmo julgamento pelo motor único, em sombra (só quando houve veredito real).
-        if (reg.desfecho === 'veredito' && !result.validationSkipped) {
-            const ferramentas = ferramentasDoTurno && ferramentasDoTurno.length > 0 ? ferramentasDoTurno : [{ tool: toolUsed, output: toolResult }];
-            rodarEmSombra({
-                providerFactory: this.providerFactory, tipo: 'qualidade_da_resposta',
-                entradas: { pedido: userMessage, resposta: finalResponse, intencao: intent, ferramentas: ferramentas.map((f, i) => `[${i + 1}] ferramenta=${f.tool}\n${f.output}`).join('\n\n') },
-                avaliadorAtual: 'validador_qualidade', avaliacaoIdAtual: avaliacaoId,
-                estadoAtual: result.approved ? 'aprovado' : 'reprovado', estadoDoMotor: estadoDoVeredito, msAtual: Date.now() - t0,
-                detalheAtual: { tipoDeFalhaAntigo: result.failureType },
-            });
-        }
-        return { ...result, avaliacaoId };
-    }
-
-    private async julgarQualidade(
-        userMessage: string,
-        intent: string,
-        toolUsed: string,
-        toolResult: string,
-        finalResponse: string,
-        signal: AbortSignal | undefined,
-        reg: RegistroQualidade,
-        ferramentasDoTurno?: Array<{ tool: string; output: string }>,
-    ): Promise<ValidationResult> {
         // Try deterministic check first — avoids LLM entirely for obvious cases
         const deterministic = this.deterministicCheck(toolUsed, toolResult, finalResponse);
         if (deterministic) {
@@ -524,7 +268,6 @@ export class ObserverValidator {
                     ` approved=${deterministic.approved} confidence=${deterministic.confidence}` +
                     ` evidence_rule="${deterministic.reason}"`
                 );
-                reg.desfecho = 'deterministico';
             }
             return deterministic;
         }
@@ -534,47 +277,12 @@ export class ObserverValidator {
         }
 
         const ferramentas = ferramentasDoTurno && ferramentasDoTurno.length > 0 ? ferramentasDoTurno : [{ tool: toolUsed, output: toolResult }];
-        const prompt = OBSERVER_PROMPT
-            // Sprint V6 (Informação Completa para Decidir): a pergunta é "atende o pedido?" — o pedido vai ÍNTEGRO
-            // (antes: 500 chars), e o julgamento vê TODAS as ferramentas do turno (antes: só a última). Os resultados
-            // são contexto de execução: cada um pode ir em trecho, com o corte declarado.
-            .replace('{userMessage}', () => userMessage)
-            .replace('{intent}', () => intent)
-            .replace('{toolUsed}', () => ferramentas.map(f => f.tool).join(', '))
-            .replace('{toolResult}', () => ferramentas.length === 1
-                ? trechoRotulado(ferramentas[0].output, 2000)
-                : ferramentas.map((f, i) => `[${i + 1}] ferramenta=${f.tool}\n${trechoRotulado(f.output, 2000)}`).join('\n\n'))
-            // Issue 067: a resposta é o objeto julgado — vai inteira (mesma regra do juiz de grounding).
-            // Cortada em 500 chars, o juiz reprovava como "truncada" uma resposta completa de 1914 chars.
-            .replace('{finalResponse}', () => finalResponse);
-
-        const messages: LLMMessage[] = [
-            { role: 'system', content: 'Você é um validador de qualidade. Responda APENAS com JSON válido.' },
-            { role: 'user', content: prompt }
-        ];
-        reg.prompt = prompt;
-        if (prompt.length > DECISION_PROMPT_MAX_CHARS) {
-            // Não cabe → não avaliável; nunca um veredito sobre um pedaço (princípio §4.5).
-            log.info(`[OBSERVER] prompt de qualidade com ${prompt.length} chars excede ${DECISION_PROMPT_MAX_CHARS} — não avaliável`);
-            reg.desfecho = 'nao_avaliavel';
-            return { approved: true, reason: 'não avaliável: pedido e resposta não cabem inteiros no orçamento', confidence: 0, validationSkipped: true, failureType: 'none' };
-        }
-
+        const startTime = Date.now();
         try {
-            const startTime = Date.now();
-            // Reusa chatWithFallback em vez de getProviderWithModel() direto — mesmo mecanismo já
-            // corrigido em GoalPlanner.callPlannerLLM() pelo incidente River #2 (S221-S224/S222):
-            // getProviderWithModel() sem providerName cai sempre em this.defaultProvider, então um
-            // observerModel de nuvem configurado (ex: "glm-5.2:cloud") era ignorado sempre que o
-            // provedor padrão do usuário fosse um modelo local — sem fallback nenhum, um provedor
-            // local lento bastava para nunca validar resposta alguma. modelOverride preserva
-            // observerModel na tentativa do provedor padrão (semântica de "dono" da S173); se esse
-            // provedor falhar, os seguintes usam o próprio modelo, nunca herdam o override.
-            const orcamento = this.providerFactory.getBudgetAuxiliar('validacao');
-            // Issue 038: mesmo perfil 'validacao' já usado pro timeout externo — reasoningIntensive
-            // aplica o mesmo fator (4×) ao orçamento interno de "thinking" do provider, evitando
-            // que o juiz de grounding seja abortado por raciocínio legítimo (ver ChatFallbackOptions).
-            const fallbackResult = await this.providerFactory.chatWithFallback(messages, undefined, undefined, orcamento.timeoutMs, signal, this.effectiveModel, { reasoningIntensive: true, diag: { component: 'ObserverValidator', role: 'observer', phase: 'quality' }, telemetry: reg.telemetria });
+            const { adaptado: d, veredito, semVeredito } = await obterMotor(this.providerFactory).validar<DecisaoDeQualidade>('qualidade_da_resposta', {
+                pedido: userMessage, resposta: finalResponse, intencao: intent,
+                ferramentas: ferramentas.map((f, i) => `[${i + 1}] ferramenta=${f.tool}\n${f.output}`).join('\n\n'),
+            }, { phase: 'qualidade', signal });
             const elapsed = Date.now() - startTime;
 
             // If the signal aborted while the LLM was running, discard the result silently.
@@ -582,51 +290,27 @@ export class ObserverValidator {
             // already fired and the turn has ended — confusing but actionless.
             if (signal?.aborted) {
                 log.info(`[OBSERVER] Result discarded — signal aborted after ${elapsed}ms (post-turn advisory window closed)`);
-                reg.desfecho = 'abortado_pelo_chamador';
                 return { approved: true, reason: 'Validation result discarded after abort', confidence: 0, validationSkipped: true };
             }
-
-            if (fallbackResult.status !== 'success') {
-                const lastAttempt = fallbackResult.attempts[fallbackResult.attempts.length - 1];
-                log.warn(`Validation error: ${lastAttempt?.errorMessage ?? fallbackResult.status}, skipping`);
-                reg.desfecho = `llm_${fallbackResult.status}`;
-                return { approved: false, reason: `Observer error: ${lastAttempt?.errorMessage ?? fallbackResult.status}`, confidence: 0, validationSkipped: true, failureType: 'other' };
+            if (semVeredito) {
+                log.warn(`Validation error: ${veredito.naoAvaliavelPorque}, skipping`);
+                return { approved: false, reason: `Observer error: ${veredito.naoAvaliavelPorque}`, confidence: 0, validationSkipped: true, failureType: 'other', avaliacaoId: veredito.avaliacaoId };
             }
 
-            const content = (fallbackResult.content || '').trim();
-            reg.saidaBruta = content;
-
-            // Extrai o primeiro objeto JSON válido que contenha "approved" no conteúdo.
-            // O regex simples [^}]* quebrava com objetos aninhados ou reason com aspas.
-            // Aqui fazemos parse incremental por contagem de chaves para resistir a conteúdo complexo.
-            const result = extractApprovedJson(content);
-            if (!result) {
-                log.warn(`No JSON found in response, skipping validation. Elapsed: ${elapsed}ms`);
-                reg.desfecho = 'saida_sem_json';
-                return { approved: false, reason: 'Observer returned non-JSON', confidence: 0, validationSkipped: true };
-            }
-            const conf = Number(result['confidence']) || 0.5;
-            reg.desfecho = 'veredito';
-            const llmPath = conf >= 0.7 ? 'llm_high_confidence' : 'llm_low_confidence';
-            log.info(`${result['approved'] ? '✅' : '❌'} approved=${result['approved']} confidence=${conf} reason="${result['reason']}" elapsed=${elapsed}ms`);
+            const llmPath = d.confidence >= 0.7 ? 'llm_high_confidence' : 'llm_low_confidence';
+            log.info(`${d.approved ? '✅' : '❌'} approved=${d.approved} confidence=${d.confidence} reason="${d.reason}" elapsed=${elapsed}ms`);
             log.info('GOAL_VALIDATION_PATH',
                 `validation_path=${llmPath} tool=${toolUsed}` +
-                ` approved=${result['approved']} confidence=${conf} elapsed_ms=${elapsed}`
+                ` approved=${d.approved} confidence=${d.confidence} elapsed_ms=${elapsed}`
             );
-
             return {
-                approved: !!result['approved'],
-                reason: String(result['reason'] || ''),
-                confidence: conf,
-                suggestedFix: String(result['suggested_fix'] || result['suggestedFix'] || '') || undefined,
-                failureType: (result['failure_type'] as FailureType) || 'other'
+                approved: d.approved, reason: d.reason, confidence: d.confidence,
+                suggestedFix: d.suggestedFix, failureType: d.failureType as FailureType, avaliacaoId: veredito.avaliacaoId,
             };
         } catch (error) {
             if (signal?.aborted) {
-                reg.desfecho = 'abortado_pelo_chamador';
                 return { approved: true, reason: 'Validation aborted', confidence: 0, validationSkipped: true, failureType: 'none' };
             }
-            reg.desfecho = 'erro';
             log.warn(`Validation error: ${errorMessage(error)}, skipping`);
             return { approved: false, reason: `Observer error: ${errorMessage(error)}`, confidence: 0, validationSkipped: true, failureType: 'other' };
         }
@@ -763,33 +447,15 @@ export class ObserverValidator {
         signal?: AbortSignal,
         /** Só observabilidade (`[GROUNDING-TRACE]`): quem chama e em que fase. Não influencia o julgamento. */
         traceCtx?: GroundingTraceContext,
-        /** Só o modo sombra passa isto; o julgamento real usa sempre os limites padrão. */
-        limits?: GroundingEvidenceLimits,
     ): Promise<GroundingVerdict> {
-        // Issue 051: o julgamento real recebe a evidência INTEIRA; só corta se o conjunto não couber no
-        // orçamento de entrada do juiz (GROUNDING_MAX_PROMPT_CHARS). O modo sombra mantém limites fixos.
-        // Sprint V3: o pedido do usuário entra no prompt como contexto (nunca como evidência) e conta no orçamento.
-        const pedidoDoUsuario = traceCtx?.userRequest?.trim() || '(não informado)';
-        const budgetCap = ObserverValidator.evidenceCapForBudget(response, evidences, pedidoDoUsuario);
-        const evidenceCharsLimit = limits?.evidenceChars ?? budgetCap;
-        const argsCharsLimit = limits?.argsChars ?? budgetCap;
         const t0 = Date.now();
         const orcamento = this.providerFactory.getBudgetAuxiliar('validacao');
-        const avaliacaoId = novaAvaliacaoId();
-        const base = { budgetMs: orcamento.timeoutMs, budgetOrigin: orcamento.origem, avaliacaoId };
-        // Gravador de voo (ADR-013): o que o modelo fez em cada tentativa, e o prompt exato enviado.
-        const telemetria: CallTelemetry = { attempts: [] };
-        let promptEnviado = '';
+        const base = { budgetMs: orcamento.timeoutMs, budgetOrigin: orcamento.origem };
 
-        // Fatos do julgamento para o log. Preenchido à medida que a função avança e emitido em
-        // TODOS os caminhos de saída — inclusive os que não chegam a um veredito.
+        // Fatos do julgamento para o log. A evidência vai INTEIRA (nada é cortado; se o conjunto não couber no teto do
+        // motor, o resultado é UNVALIDATED — nunca um veredito sobre um pedaço).
         const evidenceFacts: GroundingEvidenceFact[] = evidences.map(e => ({
-            id: e.id,
-            tool: e.tool,
-            inputChars: (e.input ?? '').length,
-            outputChars: e.output.length,
-            sentChars: Math.min(e.output.length, evidenceCharsLimit),
-            truncated: e.output.length > evidenceCharsLimit,
+            id: e.id, tool: e.tool, inputChars: (e.input ?? '').length, outputChars: e.output.length, sentChars: e.output.length, truncated: false,
         }));
         const emit = (outcome: string, extra: Partial<GroundingTraceRecord> = {}): void => {
             ObserverValidator.traceGrounding({
@@ -798,22 +464,6 @@ export class ObserverValidator {
                 outcome, elapsedMs: Date.now() - t0, budgetMs: orcamento.timeoutMs,
                 responseChars: response.length, evidences: evidenceFacts, ...extra,
             }, response, evidences);
-            gravarAvaliacao({
-                id: avaliacaoId, avaliador: 'juiz_grounding',
-                contexto: { traceId: traceCtx?.traceId, conversationId: traceCtx?.conversationId, goalId: traceCtx?.goalId, stepId: traceCtx?.stepId, phase: traceCtx?.phase ?? 'initial' },
-                antes: {
-                    modelo: (limits?.model ?? this.effectiveModel) || '(padrão do provedor)', versaoPrompt: versaoDoPrompt(GROUNDING_PROMPT), promptChars: promptEnviado.length,
-                    orcamentoMs: orcamento.timeoutMs,
-                    fatos: { responseChars: response.length, evidencias: evidenceFacts, stepDescription: traceCtx?.stepDescription?.split('\n')[0] },
-                    conteudo: { prompt: promptEnviado, pedido: traceCtx?.userRequest, resposta: response, evidencias: evidences },
-                },
-                telemetria,
-                depois: {
-                    desfecho: outcome, estado: extra.state, duracaoMs: Date.now() - t0,
-                    fatos: { claimCounts: extra.claimCounts, judgeStatus: extra.judgeStatus, judgeError: extra.judgeError, judgeOutputChars: extra.judgeOutputChars, faltouInformado: !!lerFaltou(extra.judgeRaw) },
-                    conteudo: { saidaBruta: extra.judgeRaw, afirmacoes: extra.claims, faltou: lerFaltou(extra.judgeRaw) },
-                },
-            });
         };
 
         // Sem evidência não há afirmação derivada de ferramenta a verificar. Não é aprovação:
@@ -823,101 +473,35 @@ export class ObserverValidator {
             return { state: 'NOT_APPLICABLE', claims: [], reason: 'nenhuma evidência de ferramenta no turno', elapsedMs: 0, ...base };
         }
 
-        // A EVIDÊNCIA é truncada; a RESPOSTA nunca é. A assimetria é o ponto:
-        //
-        // - Evidência cortada só empurra o veredito para NOT_EVALUABLE (o juiz deixa de ver o
-        //   trecho que determinaria a afirmação) — direção que BLOQUEIA. E o corte é MARCADO,
-        //   porque a ADR-010 §5 manda tratar evidência enumerativa/fechada como NOT_SUPPORTED
-        //   quando a afirmação acrescenta item ausente, e um output cortado no meio parece
-        //   exatamente uma lista fechada; sem a marca, evidência incompleta viraria determinação
-        //   de falsidade sobre resposta correta.
-        // - Resposta cortada empurra para o lado oposto: o juiz aprova o prefixo, o usuário
-        //   recebe o texto inteiro, e o excedente vai entregue como se tivesse sido verificado.
-        //   Isso é fail-open e não tem marca que conserte — o juiz não julga o que não recebeu.
-        //
-        // Por isso a resposta entra inteira e, se o conjunto não couber, o resultado é
-        // UNVALIDATED (abaixo), nunca um julgamento parcial.
-        const EVIDENCIA_CHARS = evidenceCharsLimit, ARGS_CHARS = argsCharsLimit;
-        const corta = (texto: string, limite: number, marca: string): string =>
-            texto.length > limite ? `${texto.slice(0, limite)}\n${marca}` : texto;
-
-        const blocoEvidencias = evidences.map(e =>
-            `[${e.id}] ferramenta=${e.tool}${e.input ? ` args=${corta(e.input, ARGS_CHARS, '…[ARGS TRUNCADOS]')}` : ''}\n` +
-            corta(e.output, EVIDENCIA_CHARS, '…[EVIDÊNCIA TRUNCADA — o texto acima está incompleto; não a trate como lista completa]')
-        ).join('\n\n');
-
-        // Substituição por FUNÇÃO, não por string: numa string de substituição, `$&`, `$\``,
-        // `$'` e `$$` são padrões — e evidência real carrega cifrão (preço de ativo, variável de
-        // shell). Com string, um `$&` no output do tool reescreveria o prompt do juiz.
-        const prompt = GROUNDING_PROMPT
-            .replace('{pedido}', () => pedidoDoUsuario)
-            .replace('{evidences}', () => blocoEvidencias)
-            .replace('{response}', () => response);
-        promptEnviado = prompt;
-
-        // Não cabe → não foi avaliado → UNVALIDATED. Nunca truncar para caber, nunca deixar o
-        // provedor cortar em silêncio e devolver veredito sobre um prefixo.
-        if (prompt.length > GROUNDING_MAX_PROMPT_CHARS) {
-            log.warn(`[GROUNDING] prompt de ${prompt.length} chars excede ${GROUNDING_MAX_PROMPT_CHARS} — UNVALIDATED`);
-            emit('prompt_too_long', { state: 'UNVALIDATED', promptChars: prompt.length });
-            return {
-                state: 'UNVALIDATED', claims: [],
-                reason: `resposta não avaliável integralmente: prompt de ${prompt.length} chars excede o teto de ${GROUNDING_MAX_PROMPT_CHARS}`,
-                elapsedMs: Date.now() - t0, ...base,
-            };
-        }
-
+        // Troca M1/M2 (ADR-014, 09/10/2026): quem julga é o motor único, tipo `saida_contra_evidencia`. As regras do contrato
+        // ADR-010 §5 (SUPPORTED só por determinação positiva; ausência de contradição não é suporte; o que o assistente
+        // redigiu ou diz que fez não é dado obtido) são o checklist do descritor — e, diferente do juiz antigo, a citação
+        // de cada veredito é CONFERIDA pelo código (o trecho tem de existir literalmente nas evidências). A resposta e as
+        // evidências entram inteiras; sem veredito (modelo fora, prazo, saída inválida, acima do teto) vale UNVALIDATED,
+        // que não autoriza entrega (ADR-010 §9).
+        const blocoEvidencias = evidences
+            .map(e => `[${e.id}] ferramenta=${e.tool}${e.input ? ` args=${e.input}` : ''}\n${e.output}`)
+            .join('\n\n');
         try {
-            // Reusa chatWithFallback em vez de getProviderWithModel() direto — achado ao vivo
-            // (2026-08-24, prompt.txt + newclaw-audit.log, três turnos reais 16:11/17:45/19:12):
-            // getProviderWithModel() sem providerName cai sempre em this.defaultProvider, então
-            // com o provedor padrão apontando pra um modelo local lento (GLM-4.7-Flash 30B, ~150s
-            // por resposta comum), o juiz de grounding NUNCA tinha como concluir dentro do teto de
-            // `orcamento.timeoutMs` (até 120s pelo perfil 'validacao') — sem fallback nenhum pro
-            // Ollama, mesmo ele respondendo rápido e mesmo com observerModel="glm-5.2:cloud"
-            // configurado (nunca chegava a ser usado). Resultado observado: TODO turno virava
-            // UNVALIDATED e a entrega era bloqueada — mesmo quando a ferramenta (`weather`) tinha
-            // sucesso e trazia dado real (turno 19:12, log 19:18:14). Mesmo mecanismo já corrigido
-            // em GoalPlanner.callPlannerLLM() pelo incidente River #2 (S221-S224/S222) — chatWithFallback
-            // dá ao juiz a MESMA cadeia de resiliência que o resto do turno já usa, em vez de um
-            // provider único sem saída. chatWithFallback já cuida do externalSignal (aborta em
-            // todas as tentativas caso `signal` dispare) — sem precisar de um AbortController manual
-            // aqui.
-            // Issue 038: mesmo motivo do outro call site de grounding acima — reasoningIntensive
-            // evita que o juiz seja abortado pelo teto de "thinking" pensado para chat curto.
-            const fallbackResult = await this.providerFactory.chatWithFallback(
-                [{ role: 'user', content: prompt }], undefined, undefined, orcamento.timeoutMs, signal, limits?.model ?? this.effectiveModel,
-                { reasoningIntensive: true, diag: { component: 'ObserverValidator', role: 'observer', phase: 'grounding' }, telemetry: telemetria },
-            );
-
-            if (fallbackResult.status !== 'success') {
-                const lastAttempt = fallbackResult.attempts[fallbackResult.attempts.length - 1];
-                log.warn(`[GROUNDING] juiz não concluiu (${(lastAttempt?.errorMessage ?? fallbackResult.status).slice(0, 80)}) — UNVALIDATED`);
-                emit('judge_failed', { state: 'UNVALIDATED', promptChars: prompt.length, judgeStatus: fallbackResult.status, judgeError: (lastAttempt?.errorMessage ?? '').slice(0, 120) });
-                return { state: 'UNVALIDATED', claims: [], reason: `juiz não concluiu: ${(lastAttempt?.errorMessage ?? fallbackResult.status).slice(0, 120)}`, elapsedMs: Date.now() - t0, ...base };
+            const r = await obterMotor(this.providerFactory).validar<DecisaoDeGrounding>(TIPO_SAIDA_CONTRA_EVIDENCIA, {
+                pedido: traceCtx?.userRequest?.trim() || undefined, resposta: response, evidencias: blocoEvidencias,
+            }, { traceId: traceCtx?.traceId, conversationId: traceCtx?.conversationId, goalId: traceCtx?.goalId, stepId: traceCtx?.stepId, phase: traceCtx?.phase ?? 'initial', signal });
+            if (r.semVeredito) {
+                const porque = r.veredito.naoAvaliavelPorque ?? 'n/d';
+                log.warn(`[GROUNDING] juiz não concluiu (${porque.slice(0, 80)}) — UNVALIDATED`);
+                // O caminho de saída do trace sai do desfecho ESTRUTURADO do motor (nunca de leitura de texto).
+                const outcome = r.desfecho === 'saida_invalida' ? 'malformed_judge_output' : r.desfecho === 'acima_do_teto' ? 'prompt_too_long' : r.desfecho === 'erro' ? 'judge_error' : 'judge_failed';
+                emit(outcome, { state: 'UNVALIDATED', judgeError: porque.slice(0, 120), judgeRaw: r.saidaBruta, judgeOutputChars: r.saidaBruta?.length });
+                return { state: 'UNVALIDATED', claims: [], reason: `juiz não concluiu: ${porque.slice(0, 120)}`, elapsedMs: Date.now() - t0, ...base, avaliacaoId: r.veredito.avaliacaoId };
             }
-
-            const parsed = this.parseGroundingOutput(fallbackResult.content || '', evidences);
-            if (!parsed) {
-                log.warn(`[GROUNDING] saída do juiz sem estrutura válida — UNVALIDATED`);
-                emit('malformed_judge_output', { state: 'UNVALIDATED', promptChars: prompt.length, judgeOutputChars: (fallbackResult.content ?? '').length, judgeRaw: fallbackResult.content ?? '' });
-                return { state: 'UNVALIDATED', claims: [], reason: 'saída do juiz estruturalmente inválida', elapsedMs: Date.now() - t0, ...base };
-            }
-
-            const state = ObserverValidator.aggregateGrounding(parsed);
+            const { state, claims } = r.adaptado;
             emit('verdict', {
-                state, promptChars: prompt.length, judgeOutputChars: (fallbackResult.content ?? '').length, judgeRaw: fallbackResult.content ?? '',
-                claims: parsed.map(c => ({ claim: c.claim.slice(0, 200), verdict: c.verdict, evidence: c.evidence })),
-                claimCounts: {
-                    SUPPORTED: parsed.filter(c => c.verdict === 'SUPPORTED').length,
-                    NOT_SUPPORTED: parsed.filter(c => c.verdict === 'NOT_SUPPORTED').length,
-                    NOT_EVALUABLE: parsed.filter(c => c.verdict === 'NOT_EVALUABLE').length,
-                },
+                state,
+                claims: claims.map(c => ({ claim: c.claim.slice(0, 200), verdict: c.verdict, evidence: c.evidence })),
+                claimCounts: ObserverValidator.countClaims(claims),
+                judgeRaw: r.saidaBruta, judgeOutputChars: r.saidaBruta?.length,
             });
-            this.maybeObserveExtendedEvidence(response, evidences, traceCtx, { state, claims: parsed });
-            this.maybeObserveLightModel(response, evidences, traceCtx, { state, claims: parsed, elapsedMs: Date.now() - t0 });
-            this.maybeShadowMotor(response, blocoEvidencias, pedidoDoUsuario, traceCtx, { state, claims: parsed, elapsedMs: Date.now() - t0, avaliacaoId });
-            return { state, claims: parsed, reason: ObserverValidator.describeGrounding(state, parsed), elapsedMs: Date.now() - t0, ...base };
+            return { state, claims, reason: ObserverValidator.describeGrounding(state, claims), elapsedMs: Date.now() - t0, ...base, avaliacaoId: r.veredito.avaliacaoId };
         } catch (err) {
             // Timeout, abort, erro de rede, provedor/modelo indisponível — todos significam a
             // mesma coisa: o juiz não concluiu. Nunca é aprovação (ADR-010 §9).
@@ -925,161 +509,6 @@ export class ObserverValidator {
             emit('judge_error', { state: 'UNVALIDATED', judgeError: String(err).slice(0, 120) });
             return { state: 'UNVALIDATED', claims: [], reason: `juiz não concluiu: ${String(err).slice(0, 120)}`, elapsedMs: Date.now() - t0, ...base };
         }
-    }
-
-    /**
-     * Issue 051 — quanto de cada texto de evidência (output e args) cabe no prompt do juiz.
-     *
-     * Antes era um corte fixo de 2.000 chars por output (200 por args), sem justificativa registrada:
-     * em produção (set-out/2026) 25% das evidências passavam disso, e 20 de 55 afirmações
-     * NOT_EVALUABLE citavam justamente uma evidência cortada — o dado existia, o juiz não o via.
-     * Nenhum dos 25 julgamentos teria passado do orçamento com tudo inteiro (máximo: 31 mil chars).
-     *
-     * Sem constante nova: o limite é o orçamento de entrada que o juiz já tem
-     * (GROUNDING_MAX_PROMPT_CHARS), descontados a instrução, a resposta (nunca cortada) e o cabeçalho
-     * e a marca de corte de cada evidência. Se tudo cabe → Infinity (nada é cortado). Se não cabe,
-     * "water-filling": o maior limite único `c` tal que Σ min(tamanho, c) cabe — corta só os textos
-     * maiores, por igual, e o corte continua MARCADO no prompt. Se nem a resposta cabe, devolve 0 e
-     * o teto de prompt adiante produz UNVALIDATED, como antes.
-     *
-     * Puro e determinístico; não decide nada sobre o conteúdo.
-     */
-    static evidenceCapForBudget(response: string, evidences: EvidenceItem[], pedido = ''): number {
-        // Cabeçalho "[E1] ferramenta=x args=" + quebras + marcas de corte (a de evidência tem ~90 chars).
-        const PER_EVIDENCE_OVERHEAD = 160;
-        const skeleton = GROUNDING_PROMPT.replace('{pedido}', () => pedido).replace('{evidences}', () => '').replace('{response}', () => response).length;
-        const available = GROUNDING_MAX_PROMPT_CHARS - skeleton
-            - evidences.reduce((s, e) => s + PER_EVIDENCE_OVERHEAD + e.id.length + e.tool.length, 0);
-        // A divisão em si é a fonte única de shared/orcamentoDeTexto.ts (campanha 09/10/2026).
-        return limiteComum(evidences.flatMap(e => [e.output.length, (e.input ?? '').length]), available);
-    }
-
-    // ── Modo sombra de evidência ampliada (Sprint 3, issue 048) ──────────────────────────────────
-    //
-    // Caso real (26/09/2026): 2 de 12 afirmações `NOT_EVALUABLE` derrubaram a resposta inteira — uma sobre
-    // conteúdo que o modelo escreveu num `write` (o juiz só via "Criado… 204 linhas"; os argumentos chegam
-    // cortados em 200 chars) e outra sobre o próprio pedido do usuário (que não é evidência). Antes de
-    // mudar o que o juiz enxerga em produção, mede-se: com `GROUNDING_EVIDENCE_SHADOW=true` o mesmo
-    // julgamento roda DE NOVO em segundo plano com (a) argumentos e evidência com limites maiores e (b) o
-    // pedido do usuário como evidência `U1`, e o resultado vira UMA linha `[GROUNDING-SHADOW]`
-    // comparando com o veredito real. O veredito real já foi devolvido e nada da sombra o altera. O
-    // custo é uma chamada extra ao juiz por julgamento (opt-in, desligado por padrão).
-
-    private maybeObserveExtendedEvidence(
-        response: string,
-        evidences: EvidenceItem[],
-        traceCtx: GroundingTraceContext | undefined,
-        real: { state: GroundingState; claims: GroundedClaim[] },
-    ): void {
-        if (process.env.GROUNDING_EVIDENCE_SHADOW !== 'true') return;
-        if (!traceCtx || traceCtx.phase === 'shadow-extended' || traceCtx.phase === 'shadow-model' || !traceCtx.userRequest) return; // sem recursão (nenhuma sombra dispara outra)
-        void this.runExtendedEvidenceShadow(response, evidences, traceCtx, real).catch(() => { /* nunca afeta o real */ });
-    }
-
-    private async runExtendedEvidenceShadow(
-        response: string,
-        evidences: EvidenceItem[],
-        traceCtx: GroundingTraceContext,
-        real: { state: GroundingState; claims: GroundedClaim[] },
-    ): Promise<void> {
-        const userRequest = traceCtx.userRequest ?? '';
-        const capText = (text: string, limit: number): string => text.slice(0, limit);
-        const extended: EvidenceItem[] = [
-            ...evidences,
-            { id: 'U1', tool: 'pedido_do_usuario', output: capText(userRequest, GROUNDING_SHADOW_REQUEST_CHARS) },
-        ];
-        const t0 = Date.now();
-        const verdict = await this.validateGrounding(response, extended, undefined,
-            { ...traceCtx, phase: 'shadow-extended' },
-            { evidenceChars: GROUNDING_SHADOW_EVIDENCE_CHARS, argsChars: GROUNDING_SHADOW_ARGS_CHARS });
-        const counts = ObserverValidator.countClaims;
-        log.info('[GROUNDING-SHADOW] ' + JSON.stringify({
-            v: 1,
-            goalId: traceCtx.goalId, stepId: traceCtx.stepId, traceId: traceCtx.traceId, planGeneration: traceCtx.planGeneration,
-            realState: real.state, realCounts: counts(real.claims),
-            shadowState: verdict.state, shadowCounts: counts(verdict.claims),
-            stateChanged: real.state !== verdict.state,
-            shadowNotSupported: verdict.claims.filter(c => c.verdict !== 'SUPPORTED').map(c => ({ claim: c.claim.slice(0, 200), verdict: c.verdict, evidence: c.evidence })),
-            addedEvidence: { userRequestChars: userRequest.length, userRequestSentChars: Math.min(userRequest.length, GROUNDING_SHADOW_REQUEST_CHARS), argsCharsLimit: GROUNDING_SHADOW_ARGS_CHARS, evidenceCharsLimit: GROUNDING_SHADOW_EVIDENCE_CHARS },
-            shadowElapsedMs: Date.now() - t0,
-        }));
-    }
-
-    // ── Modo sombra de modelo (Sprint 5, issue 048) ──────────────────────────────────────────────
-    //
-    // Sprint 4 (medição): o custo dominante do juiz é o VOLUME de raciocínio do modelo pesado (165.000
-    // chars, 383 s no prompt real de 229 s), e um modelo leve fez o mesmo prompt em 52 s — mas decompôs em
-    // 19 afirmações com 4 NOT_EVALUABLE (o pesado: 12 e 2), então NÃO é equivalente. Equivalência só se
-    // demonstra com tráfego real. Com `GROUNDING_SHADOW_MODEL=<modelo>` (opt-in; vazio = desligado) o
-    // MESMO julgamento — mesma resposta, mesma evidência, mesmo prompt — roda de novo em segundo plano
-    // com esse modelo e vira UMA linha `[GROUNDING-SHADOW-MODEL]` (estado, contagens, tempo dos dois).
-    // Diferente da sombra de evidência (que amplia o que o juiz vê), aqui a ÚNICA variável é o modelo,
-    // para a diferença ser atribuível a ele. O veredito real já foi devolvido; nada da sombra o altera.
-
-    /**
-     * ADR-014 M1 — o mesmo julgamento pelo motor único (tipo `saida_contra_evidencia`), em SOMBRA: com as MESMAS
-     * entradas (pedido, resposta inteira, o mesmo bloco de evidências), depois do veredito real, sem bloquear e sem
-     * mudar nada. Registra a comparação (`sombra_motor_comparada`) para o critério de troca do M2 (ADR-014 §5).
-     * Desligado por padrão (VALIDACAO_SOMBRA) — no servidor local, uma chamada a mais na fila do usuário.
-     */
-    private maybeShadowMotor(
-        response: string,
-        blocoEvidencias: string,
-        pedido: string,
-        traceCtx: GroundingTraceContext | undefined,
-        real: { state: GroundingState; claims: GroundedClaim[]; elapsedMs: number; avaliacaoId: string },
-    ): void {
-        if (!traceCtx || (traceCtx.phase ?? '').startsWith('shadow')) return; // sem recursão nas outras sombras
-        rodarEmSombra<EstadoDeGrounding>({
-            providerFactory: this.providerFactory, tipo: TIPO_SAIDA_CONTRA_EVIDENCIA,
-            entradas: { pedido, resposta: response, evidencias: blocoEvidencias },
-            contexto: { traceId: traceCtx.traceId, conversationId: traceCtx.conversationId, goalId: traceCtx.goalId, stepId: traceCtx.stepId, phase: traceCtx.phase ?? 'initial' },
-            avaliadorAtual: 'juiz_grounding', avaliacaoIdAtual: real.avaliacaoId,
-            estadoAtual: real.state, estadoDoMotor: (estado) => estado, msAtual: real.elapsedMs,
-            detalheAtual: { antigoContagem: ObserverValidator.countClaims(real.claims) },
-        });
-    }
-
-    private maybeObserveLightModel(
-        response: string,
-        evidences: EvidenceItem[],
-        traceCtx: GroundingTraceContext | undefined,
-        real: { state: GroundingState; claims: GroundedClaim[]; elapsedMs: number },
-    ): void {
-        const model = (process.env.GROUNDING_SHADOW_MODEL ?? '').trim();
-        if (!model) return;
-        if (!traceCtx || traceCtx.phase === 'shadow-extended' || traceCtx.phase === 'shadow-model') return; // sem recursão
-        // Issue 071: o experimento obedece à mesma regra de onde rodar — modelo de nuvem com o padrão local e sem
-        // autorização não roda (produção, 08/10: gemma4:cloud chamado em todo julgamento, com tudo configurado local).
-        if (this.providerFactory.modeloPermitidoPelaSoberania?.(model) === false) {
-            log.info(`[GROUNDING-SHADOW-MODEL] '${model}' sairia da máquina do usuário (padrão local, nuvem não autorizada) — sombra não executada`);
-            return;
-        }
-        void this.runLightModelShadow(response, evidences, traceCtx, real, model).catch(() => { /* nunca afeta o real */ });
-    }
-
-    private async runLightModelShadow(
-        response: string,
-        evidences: EvidenceItem[],
-        traceCtx: GroundingTraceContext,
-        real: { state: GroundingState; claims: GroundedClaim[]; elapsedMs: number },
-        model: string,
-    ): Promise<void> {
-        const t0 = Date.now();
-        const verdict = await this.validateGrounding(response, evidences, undefined,
-            { ...traceCtx, phase: 'shadow-model' }, { model });
-        const shadowUnsupported = verdict.claims.filter(c => c.verdict !== 'SUPPORTED');
-        log.info('[GROUNDING-SHADOW-MODEL] ' + JSON.stringify({
-            v: 1,
-            goalId: traceCtx.goalId, stepId: traceCtx.stepId, traceId: traceCtx.traceId, planGeneration: traceCtx.planGeneration,
-            phase: traceCtx.phase ?? 'initial',
-            realModel: this.effectiveModel || null, shadowModel: model,
-            realState: real.state, realCounts: ObserverValidator.countClaims(real.claims), realElapsedMs: real.elapsedMs,
-            shadowState: verdict.state, shadowCounts: ObserverValidator.countClaims(verdict.claims), shadowElapsedMs: Date.now() - t0,
-            stateAgrees: real.state === verdict.state,
-            realNotSupported: real.claims.filter(c => c.verdict !== 'SUPPORTED').map(c => ({ claim: c.claim.slice(0, 160), verdict: c.verdict })),
-            shadowNotSupported: shadowUnsupported.map(c => ({ claim: c.claim.slice(0, 160), verdict: c.verdict })),
-        }));
     }
 
     private static countClaims(claims: GroundedClaim[]): { SUPPORTED: number; NOT_SUPPORTED: number; NOT_EVALUABLE: number } {
@@ -1108,64 +537,6 @@ export class ObserverValidator {
             }
             log.info('[GROUNDING-TRACE] ' + JSON.stringify(out));
         } catch { /* observabilidade nunca pode afetar o julgamento */ }
-    }
-
-    /**
-     * Validação ESTRUTURAL da saída do juiz (ADR-010 §16) — determinística, sem interpretação
-     * semântica. Devolve null para qualquer desvio de forma; o chamador trata como UNVALIDATED.
-     * Uma saída malformada nunca é "consertada": não há como saber o que o juiz quis dizer.
-     */
-    private parseGroundingOutput(content: string, evidences: EvidenceItem[]): GroundedClaim[] | null {
-        const cleaned = content.replace(/```json\n?/gi, '').replace(/```\n?/g, '').trim();
-        const match = cleaned.match(/\{[\s\S]*\}/);
-        if (!match) return null;
-
-        let raw: unknown;
-        try { raw = JSON.parse(match[0]); } catch { return null; }
-        if (!raw || typeof raw !== 'object') return null;
-
-        const lista = (raw as { claims?: unknown }).claims;
-        if (!Array.isArray(lista)) return null;
-
-        const idsValidos = new Set(evidences.map(e => e.id));
-        const out: GroundedClaim[] = [];
-        for (const item of lista) {
-            if (!item || typeof item !== 'object') return null;
-            const o = item as Record<string, unknown>;
-            const claim = typeof o.claim === 'string' ? o.claim.trim() : '';
-            const verdict = typeof o.verdict === 'string' ? o.verdict.toUpperCase() : '';
-            if (!claim || !CLAIM_VERDICTS.has(verdict)) return null;
-
-            const brutos = Array.isArray(o.evidence) ? o.evidence
-                : typeof o.evidence === 'string' && o.evidence ? [o.evidence]
-                : [];
-            const evidence = brutos
-                .filter((x): x is string => typeof x === 'string')
-                .map(x => x.trim())
-                .filter(x => idsValidos.has(x));
-
-            // Um id inexistente é invenção do juiz sobre a própria proveniência — não pode
-            // sustentar SUPPORTED. Rebaixa para NOT_EVALUABLE em vez de descartar o julgamento.
-            const inventou = brutos.length > 0 && evidence.length === 0;
-            out.push({
-                claim,
-                evidence,
-                verdict: (inventou && verdict === 'SUPPORTED') ? 'NOT_EVALUABLE' : verdict as ClaimVerdict,
-            });
-        }
-        return out;
-    }
-
-    /**
-     * Agregação determinística por afirmação → estado da resposta (ADR-010 §5, §10).
-     * Precedência: REJECTED > NOT_EVALUABLE > VALIDATED. Uma violação demonstrada é conclusão
-     * mais forte que uma indeterminação, e qualquer indeterminação impede afirmar groundedness.
-     */
-    static aggregateGrounding(claims: GroundedClaim[]): GroundingState {
-        if (claims.length === 0) return 'NOT_APPLICABLE';
-        if (claims.some(c => c.verdict === 'NOT_SUPPORTED')) return 'REJECTED';
-        if (claims.some(c => c.verdict === 'NOT_EVALUABLE')) return 'NOT_EVALUABLE';
-        return 'VALIDATED';
     }
 
     private static describeGrounding(state: GroundingState, claims: GroundedClaim[]): string {

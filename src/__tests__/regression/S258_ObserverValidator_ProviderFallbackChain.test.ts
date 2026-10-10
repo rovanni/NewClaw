@@ -37,6 +37,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { ObserverValidator, EvidenceItem } from '../../loop/ObserverValidator';
 import type { ProviderFactory, LLMResult } from '../../core/ProviderFactory';
+import './_fixtures/motorLegado';   // juízes simulados no formato antigo → formato do motor único (ADR-014)
 
 let passed = 0;
 let failed = 0;
@@ -72,17 +73,18 @@ console.log('\n=== S258-1 — estrutural: nem validate() nem validateGrounding()
     const endValidate = source.indexOf('\n    private buildCorrectedResponse');
     const bodyValidate = source.slice(startValidate, endValidate);
     assert(!/\.getProviderWithModel\(/.test(bodyValidate), 'validate() não CHAMA mais getProviderWithModel (menção em comentário é esperada)');
-    assert(/this\.providerFactory\.chatWithFallback\(/.test(bodyValidate), 'validate() chama chatWithFallback');
-    // Atualizado DE PROPÓSITO na issue 057 (G1): o modelo passa por effectiveModel, que devolve o observerModel
-    // configurado e só aplica o padrão de nuvem quando o provedor padrão é o Ollama (S332).
-    assert(/this\.(observerModel|effectiveModel)/.test(bodyValidate), 'validate() ainda repassa o modelo do observer (como modelOverride, não mais preso a getProviderWithModel)');
+    // Troca ao motor único (ADR-014): quem chama o provedor é o motor, por chatWithFallback — a cadeia de fallback é a mesma
+    // para TODOS os juízes. O modelo do observer vai ao motor (definirModeloDoJuiz) e de lá ao provedor como modelOverride.
+    const engine = fs.readFileSync(path.join(__dirname, '../../validation/ValidationEngine.ts'), 'utf-8');
+    assert(/obterMotor\(this\.providerFactory\)/.test(bodyValidate) && /this\.providerFactory\.chatWithFallback\(/.test(engine), 'validate() valida pelo motor, que chama chatWithFallback');
+    assert(/definirModeloDoJuiz\(/.test(source) && /modelo \|\| undefined/.test(engine), 'o modelo do observer chega ao motor e vai ao provedor como modelOverride (não mais preso a getProviderWithModel)');
 
     const startGrounding = source.indexOf('async validateGrounding(');
-    const endGrounding = source.indexOf('\n    /**\n     * Validação ESTRUTURAL');
+    const endGrounding = source.indexOf('\n    private static countClaims');
     const bodyGrounding = source.slice(startGrounding, endGrounding);
     assert(!/\.getProviderWithModel\(/.test(bodyGrounding), 'validateGrounding() não CHAMA mais getProviderWithModel (menção em comentário é esperada)');
-    assert(/this\.providerFactory\.chatWithFallback\(/.test(bodyGrounding), 'validateGrounding() chama chatWithFallback');
-    assert(/orcamento\.timeoutMs/.test(bodyGrounding), 'validateGrounding() continua usando o orçamento de getBudgetAuxiliar(\'validacao\') — nenhuma constante de timeout nova');
+    assert(/obterMotor\(this\.providerFactory\)/.test(bodyGrounding), 'validateGrounding() valida pelo motor (que chama chatWithFallback)');
+    assert(/getBudgetAuxiliar\('validacao'\)/.test(engine) && /orcamento\.timeoutMs/.test(engine), 'o motor usa o orçamento de getBudgetAuxiliar(\'validacao\') — nenhuma constante de timeout nova');
 }
 
 console.log('\n=== S258-2 — validateGrounding(): repassa observerModel como modelOverride, preferredProvider livre ===');

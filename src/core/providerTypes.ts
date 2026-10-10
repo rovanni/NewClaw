@@ -337,7 +337,7 @@ export const REASONING_INTENSIVE_TIMEOUT_FLOOR_MS = 240_000;
  * Derivação: o menor contexto que o projeto assume em runtime é o padrão de `OLLAMA_NUM_CTX` (32768 tokens —
  * `OllamaProvider`), e num_ctx cobre entrada + saída. A ~3 chars/token em pt-BR são ~98k chars no total; reservando a
  * saída e margem para a instrução, o teto de ENTRADA fica em 60k. Fonte única: antes vivia só no juiz de grounding
- * (`GROUNDING_MAX_PROMPT_CHARS`); o validador do passo passou a precisar do mesmo número (Sprint V5).
+ * (o teto do motor único de validação); o validador do passo passou a precisar do mesmo número (Sprint V5).
  */
 export const DECISION_PROMPT_MAX_CHARS = 60_000;
 

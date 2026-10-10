@@ -19,6 +19,7 @@ process.env.WORKSPACE_DIR = process.env.WORKSPACE_DIR || 'D:/IA/newclaw/workspac
 import { ObserverValidator, EvidenceItem } from '../../loop/ObserverValidator';
 import { GoalExecutionLoop } from '../../loop/GoalExecutionLoop';
 import { Goal, PlanStep, SuccessCriterion } from '../../loop/GoalTypes';
+import './_fixtures/motorLegado';   // juízes simulados no formato antigo → formato do motor único (ADR-014)
 
 let passed = 0;
 let failed = 0;
@@ -88,7 +89,7 @@ async function main(): Promise<void> {
         const r = traces(lines, '[GROUNDING-TRACE]')[0];
         assert(r.responseText === response, 'texto da resposta avaliada');
         assert(r.evidenceSent[0].output.length === 2000 && !r.evidenceSent[0].output.includes('SEGREDO-DA-EVIDENCIA'), 'log de conteúdo limitado a 2000 chars da evidência (TRACE_EVIDENCE_LOG_CHARS — limite de log, não do juiz)');
-        assert(typeof r.judgeRaw === 'string' && r.judgeRaw.includes('NOT_EVALUABLE'), 'saída crua do juiz');
+        assert(typeof r.judgeRaw === 'string' && r.judgeRaw.includes('sem_evidencia'), 'saída crua do juiz (no formato do motor)');
         delete process.env.TRACE_CONTENT;
     }
 
@@ -98,7 +99,7 @@ async function main(): Promise<void> {
         assert(traces(lines, '[GROUNDING-TRACE]')[0]?.outcome === 'skipped_no_evidence', 'sem evidência');
         lines = (await captureLogs(() => new ObserverValidator(fakeFactory('fail'), 'm').validateGrounding(response, evidences))).lines;
         const f = traces(lines, '[GROUNDING-TRACE]')[0];
-        assert(f?.outcome === 'judge_failed' && f.state === 'UNVALIDATED' && f.judgeError === 'provedor fora', 'juiz falhou', f);
+        assert(f?.outcome === 'judge_failed' && f.state === 'UNVALIDATED' && /modelo não concluiu/.test(f.judgeError ?? ''), 'juiz falhou', f);
         lines = (await captureLogs(() => new ObserverValidator(fakeFactory('malformed'), 'm').validateGrounding(response, evidences))).lines;
         assert(traces(lines, '[GROUNDING-TRACE]')[0]?.outcome === 'malformed_judge_output', 'saída inválida do juiz');
         lines = (await captureLogs(() => new ObserverValidator(fakeFactory('ok', judgeJson), 'm').validateGrounding('y'.repeat(200000), evidences))).lines;

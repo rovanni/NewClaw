@@ -20,6 +20,13 @@
 
 ## 1. Tabela
 
+> **Atualização 09/10/2026 (noite) — troca ao motor único (ADR-014).** Os seis validadores desta tabela (juiz de grounding,
+> validador de qualidade, validador de passo, validador de conclusão, análise de risco, detector de conteúdo-molde)
+> deixaram de chamar o provedor: decidem pelo `ValidationEngine` (`src/validation/`), um descritor por pergunta. As linhas
+> abaixo continuam valendo como o **registro do que cada pergunta recebe** — agora declarado no descritor do tipo
+> (`src/validation/tipos/`), com a evidência e o pedido íntegros (nada é cortado; o que não cabe no teto do motor é
+> "não avaliável"). O recenseamento (S356) conta as chamadas de decisão por arquivo; o motor é um deles.
+
 | # | Componente | Pergunta que decide | O que recebe (código) | Falta para decidir como um humano | Situação |
 |---|---|---|---|---|---|
 | 1 | `UnifiedIntentRouter` | conversa, tarefa ou ferramenta direta? | mensagem inteira + conversa recente + última resposta do assistente (500 chars) | — | ✅ |

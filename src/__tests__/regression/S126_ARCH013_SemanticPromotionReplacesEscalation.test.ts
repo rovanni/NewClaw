@@ -29,6 +29,7 @@ import { GoalStore } from '../../loop/GoalStore';
 import { Goal, GoalAttempt } from '../../loop/GoalTypes';
 import { StepSemanticValidator } from '../../loop/StepSemanticValidator';
 import { PlanStep } from '../../loop/GoalTypes';
+import './_fixtures/motorLegado';   // juízes simulados no formato antigo → formato do motor único (ADR-014)
 
 let passed = 0;
 let failed = 0;

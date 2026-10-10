@@ -1160,7 +1160,7 @@ export class AgentLoop {
                 const g = await this.observer.validateGrounding(response, evidences, signal, { traceId: trace.id, conversationId, phase: 'initial', userRequest: userText, ...channelContext?.goalTrace });
                 // Gravador de voo (ADR-013): o que o turno fez com o veredito.
                 const efeitoDoJuiz = (efeito: string, detalhe?: Record<string, unknown>): void => gravarEfeito({
-                    avaliacaoId: g.avaliacaoId, avaliador: 'juiz_grounding', efeito, detalhe,
+                    avaliacaoId: g.avaliacaoId, avaliador: 'validacao_saida_contra_evidencia', efeito, detalhe,
                     contexto: { traceId: trace.id, conversationId, goalId: channelContext?.goalTrace?.goalId, stepId: channelContext?.goalTrace?.stepId },
                 });
                 if (g.state === 'VALIDATED' || g.state === 'NOT_APPLICABLE') efeitoDoJuiz('resposta_liberada', { estado: g.state });
@@ -3634,7 +3634,7 @@ export class AgentLoop {
      * Issue 052 (Sprint 2) — até quantos chars de contexto (todas as mensagens do turno) cabem na
      * janela do modelo com folga para a resposta. `OLLAMA_NUM_CTX` é o `num_ctx` que o OllamaProvider
      * envia em toda chamada (padrão 32.768 tokens); ~3 chars/token em pt-BR, a mesma conversão do teto
-     * do juiz de grounding (`GROUNDING_MAX_PROMPT_CHARS`, ObserverValidator); 25% da janela reservados
+     * do juiz de grounding (`DECISION_PROMPT_MAX_CHARS`, motor único de validação); 25% da janela reservados
      * para a saída do modelo (que pode trazer o conteúdo inteiro de um `write`). Padrão: ~73,7 mil chars.
      */
     static contextCapacityChars(): number {

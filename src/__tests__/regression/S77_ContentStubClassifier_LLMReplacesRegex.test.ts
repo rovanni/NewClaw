@@ -35,6 +35,7 @@ import * as path from 'path';
 import { makeContentStubClassifier } from '../../shared/contentStubClassifier';
 import { getBudgetAuxiliar, PerfilAuxiliar } from '../../shared/auxTimeout';
 import { sanitizePlanSteps } from '../../loop/planning/sanitizePlanSteps';
+import './_fixtures/motorLegado';   // juízes simulados no formato antigo → formato do motor único (ADR-014)
 
 let passed = 0;
 let failed = 0;

@@ -92,8 +92,13 @@ export interface DescritorDeValidacao<TAdaptado = VereditoPadrao> {
      */
     camposExtras?: Array<{ nome: string; instrucao: string }>;
     raciocinio: ModoDeRaciocinio;
-    /** Chave da configuração que escolhe o modelo (ex.: 'OBSERVER_MODEL'). Vazia/ausente = modelo padrão do provedor. */
-    modeloConfig?: string;
+    /**
+     * Política declarada para quando o motor NÃO chega a um veredito (modelo fora, prazo, saída inválida, prompt acima do
+     * teto) — vale para todo consumidor do tipo, em vez de cada um decidir do seu jeito. `bloquear`: sem veredito não se
+     * confia (a coisa julgada não passa); `liberar`: a falta do juiz não derruba o fluxo (fica no log e no gravador).
+     * O modelo é UM só para todos os tipos (`OBSERVER_MODEL`, a chave do juiz): não há modelo por tipo.
+     */
+    semVeredito: 'bloquear' | 'liberar';
     /** Traduz o veredito padrão para o formato que o consumidor de hoje já usa. */
     adaptador?: (v: VereditoPadrao) => TAdaptado;
 }
@@ -117,6 +122,7 @@ export function validarDescritor(d: DescritorDeValidacao<unknown>): string[] {
         }
     }
     if (d.checklist.length === 0) erros.push('checklist vazio');
+    if (d.semVeredito !== 'bloquear' && d.semVeredito !== 'liberar') erros.push('semVeredito deve ser "bloquear" ou "liberar"');
     const papeisDaCitacao = d.fontesDaCitacao ?? ['fonte_de_verdade'];
     if (d.preVerificacoes?.includes('citacao_existe_na_fonte') && !d.entradas.some(e => papeisDaCitacao.includes(e.papel))) {
         erros.push('citacao_existe_na_fonte exige ao menos uma entrada com papel de fonte da citação');
@@ -156,17 +162,48 @@ const CONFERE: ReadonlySet<string> = new Set(['sim', 'nao', 'sem_evidencia']);
 const ESTADOS: ReadonlySet<string> = new Set(['aprovado', 'reprovado']);
 
 /**
+ * Acha o objeto JSON do veredito no texto do modelo. Modelos que escrevem uma análise antes da resposta (mesmo com o
+ * raciocínio desligado) deixam chaves soltas e exemplos de JSON no meio da prosa — "do primeiro { ao último }" quebrava e o
+ * juiz ficava sem veredito (achado ao vivo, 09/10/2026: 6 de 12 casos). Varre os objetos de nível superior, com contagem de
+ * chaves que respeita strings, e fica com o ÚLTIMO que é um objeto de veredito (tem `estado` ou `itens`). Estrutural: só
+ * forma — o texto do modelo não é interpretado.
+ */
+export function extrairObjetoDoVeredito(texto: string): Record<string, unknown> | null {
+    const limpo = texto.replace(/```json\n?/gi, '').replace(/```\n?/g, '');
+    let achado: Record<string, unknown> | null = null;
+    let i = 0;
+    while (i < limpo.length) {
+        const inicio = limpo.indexOf('{', i);
+        if (inicio < 0) break;
+        let profundidade = 0, emTexto = false, escape = false, j = inicio;
+        for (; j < limpo.length; j++) {
+            const ch = limpo[j];
+            if (escape) { escape = false; continue; }
+            if (emTexto) { if (ch === '\\') escape = true; else if (ch === '"') emTexto = false; continue; }
+            if (ch === '"') emTexto = true;
+            else if (ch === '{') profundidade++;
+            else if (ch === '}') { profundidade--; if (profundidade === 0) break; }
+        }
+        if (profundidade === 0 && j < limpo.length) {
+            try {
+                const o = JSON.parse(limpo.slice(inicio, j + 1)) as unknown;
+                if (o && typeof o === 'object' && !Array.isArray(o) && ('estado' in o || 'itens' in o)) achado = o as Record<string, unknown>;
+            } catch { /* não é JSON: segue procurando */ }
+            i = j + 1;
+        } else {
+            i = inicio + 1;
+        }
+    }
+    return achado;
+}
+
+/**
  * Lê a saída do modelo. Estrutural: só existência, tipo e valores permitidos — o texto não é interpretado.
  * Devolve null quando a forma não confere (o motor trata como não avaliável; uma saída malformada nunca é "consertada").
  */
 export function lerSaidaDoModelo(saida: string, nomesExtras: readonly string[] = []): Omit<VereditoPadrao, 'estado'> & { estadoDoModelo?: 'aprovado' | 'reprovado' } | null {
-    const limpo = saida.replace(/```json\n?/gi, '').replace(/```\n?/g, '');
-    const inicio = limpo.indexOf('{');
-    const fim = limpo.lastIndexOf('}');
-    if (inicio < 0 || fim <= inicio) return null;
-    let bruto: Record<string, unknown>;
-    try { bruto = JSON.parse(limpo.slice(inicio, fim + 1)); } catch { return null; }
-    if (!bruto || typeof bruto !== 'object') return null;
+    const bruto = extrairObjetoDoVeredito(saida);
+    if (!bruto) return null;
 
     const itensBrutos = Array.isArray(bruto.itens) ? bruto.itens : [];
     const itens: ItemJulgado[] = [];

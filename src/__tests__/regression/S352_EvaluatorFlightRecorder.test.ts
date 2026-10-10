@@ -26,6 +26,7 @@ import { RiskAnalyzer } from '../../loop/RiskAnalyzer';
 import { ToolRegistry } from '../../core/ToolRegistry';
 import { ReadTool } from '../../tools/read_tool';
 import type { Goal, PlanStep } from '../../loop/GoalTypes';
+import './_fixtures/motorLegado';   // juízes simulados no formato antigo → formato do motor único (ADR-014)
 
 let passed = 0;
 let failed = 0;
@@ -97,10 +98,10 @@ async function main(): Promise<void> {
     delete process.env.TRACE_CONTENT;
     const juiz = new ObserverValidator(fakeFactory('{"claims":[{"claim":"faz 27 °C","evidence":["E1"],"verdict":"NOT_SUPPORTED"}]}'), 'modelo-de-teste');
     const v = await quiet(() => juiz.validateGrounding('Faz 27 °C em Curitiba.', [{ id: 'E1', tool: 'weather', output: 'Curitiba: 18.4 °C' }], undefined, { phase: 'initial', goalId: 'goal_x', stepId: 'step_2' }));
-    const regs = lerRegistros(pasta, 'juiz_grounding-');
+    const regs = lerRegistros(pasta, 'validacao_saida_contra_evidencia-');
     const r = regs.find(x => x.tipo === 'avaliacao');
-    assert(!!r, 'registro do julgamento gravado em logs/avaliadores/juiz_grounding-AAAA-MM-DD.jsonl');
-    assert(v.state === 'REJECTED' && r?.depois?.estado === 'REJECTED', `veredito no registro (${r?.depois?.estado})`);
+    assert(!!r, 'registro do julgamento gravado em logs/avaliadores/validacao_saida_contra_evidencia-AAAA-MM-DD.jsonl');
+    assert(v.state === 'REJECTED' && r?.depois?.estado === 'reprovado', `veredito no registro (${r?.depois?.estado})`);
     assert(!!v.avaliacaoId && r?.id === v.avaliacaoId, 'o veredito carrega o id do registro, para o consumidor gravar o efeito');
     assert(/^[0-9a-f]{8}$/.test(r?.antes?.versaoPrompt ?? '') && r?.antes?.promptChars > 0, `versão do prompt (${r?.antes?.versaoPrompt}) e tamanho do prompt registrados`);
     assert(r?.contexto?.goalId === 'goal_x' && r?.contexto?.stepId === 'step_2', 'contexto (goal/step) registrado');
@@ -112,22 +113,22 @@ async function main(): Promise<void> {
     process.env.TRACE_CONTENT = 'true';
     const evidenciaGrande = 'linha de questão ENADE\n'.repeat(2000);
     const v2 = await quiet(() => juiz.validateGrounding('Faz 27 °C em Curitiba.', [{ id: 'E1', tool: 'arquivo_gerado', output: evidenciaGrande }], undefined, { phase: 'initial' }));
-    const r2 = lerRegistros(pasta, 'juiz_grounding-').find(x => x.id === v2.avaliacaoId);
-    assert(r2?.antes?.conteudo?.evidencias?.[0]?.output === evidenciaGrande, `evidência gravada INTEIRA (${evidenciaGrande.length} chars; o [GROUNDING-TRACE] corta em 2000)`);
+    const r2 = lerRegistros(pasta, 'validacao_saida_contra_evidencia-').find(x => x.id === v2.avaliacaoId);
+    assert((r2?.antes?.conteudo?.entradas?.evidencias ?? '').includes(evidenciaGrande), `evidência gravada INTEIRA (${evidenciaGrande.length} chars; o [GROUNDING-TRACE] corta em 2000)`);
     assert(typeof r2?.antes?.conteudo?.prompt === 'string' && r2.antes.conteudo.prompt.includes('Faz 27 °C'), 'prompt exato enviado gravado');
     assert(r2?.durante?.tentativas?.[0]?.thinkingText === 'pensei aqui.', 'texto do raciocínio gravado');
     assert(typeof r2?.depois?.conteudo?.saidaBruta === 'string', 'saída bruta do juiz gravada');
 
     console.log('\n=== S352-4 — efeito do veredito vai para o mesmo arquivo, ligado pelo id ===');
-    gravarEfeito({ avaliacaoId: v2.avaliacaoId, avaliador: 'juiz_grounding', efeito: 'resposta_bloqueada', detalhe: { estado: 'REJECTED' } });
-    const ef = lerRegistros(pasta, 'juiz_grounding-').find(x => x.tipo === 'efeito');
+    gravarEfeito({ avaliacaoId: v2.avaliacaoId, avaliador: 'validacao_saida_contra_evidencia', efeito: 'resposta_bloqueada', detalhe: { estado: 'REJECTED' } });
+    const ef = lerRegistros(pasta, 'validacao_saida_contra_evidencia-').find(x => x.tipo === 'efeito');
     assert(ef?.avaliacaoId === v2.avaliacaoId && ef?.efeito === 'resposta_bloqueada', 'efeito gravado com o id da avaliação');
 
     console.log('\n=== S352-5 — validador de qualidade também grava; pulos não ===');
     const qual = new ObserverValidator(fakeFactory('{"approved": false, "reason": "não atende", "confidence": 0.8, "failure_type": "other"}'), 'modelo-de-teste');
     const q = await quiet(() => qual.validate('qual a previsão?', 'question', 'edit', 'Conteúdo adicionado: questoes.md', 'Resposta completa ao usuário, com a tabela inteira.'));
     const pulo = await quiet(() => qual.validate('qual a previsão?', 'question', 'edit', 'Conteúdo adicionado: questoes.md', ''));
-    const rq = lerRegistros(pasta, 'validador_qualidade-');
+    const rq = lerRegistros(pasta, 'validacao_qualidade_da_resposta-');
     assert(rq.length === 1 && rq[0].id === q.avaliacaoId && rq[0].depois?.estado === 'reprovado', `julgamento do validador gravado (${rq.length} registro)`);
     assert(pulo.validationSkipped === true && pulo.avaliacaoId === undefined, 'validação pulada (sem resposta ainda) não gera registro');
 

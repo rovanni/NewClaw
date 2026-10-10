@@ -15,6 +15,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { ObserverValidator } from '../../loop/ObserverValidator';
 import { DECISION_PROMPT_MAX_CHARS } from '../../core/providerTypes';
+import './_fixtures/motorLegado';   // juízes simulados no formato antigo → formato do motor único (ADR-014)
 
 let passed = 0;
 let failed = 0;
@@ -52,7 +53,7 @@ async function main(): Promise<void> {
     const p = prompts[0] ?? '';
     assert(prompts.length === 1, 'o julgamento por LLM foi feito');
     assert(p.includes('RESULTADO_DA_PRIMEIRA_FERRAMENTA') && p.includes('RESULTADO_DA_SEGUNDA_FERRAMENTA'), 'os resultados das ferramentas ANTERIORES chegam ao validador (antes: só a última)');
-    assert(/crypto_analysis, weather, edit/.test(p), 'a lista de ferramentas do turno está no prompt');
+    assert(/ferramenta=crypto_analysis/.test(p) && /ferramenta=weather/.test(p) && /ferramenta=edit/.test(p), 'a lista de ferramentas do turno está no prompt (uma seção por ferramenta)');
     assert(p.includes(PEDIDO), `pedido íntegro (${PEDIDO.length} chars; antes: 500)`);
 
     console.log('\n=== S362-2 — sem a lista do turno, comportamento anterior (só a última) ===');

@@ -18,6 +18,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { ObserverValidator } from '../../loop/ObserverValidator';
 import { INSTRUCAO_FALTOU, lerFaltou } from '../../shared/evaluatorFlightRecorder';
+import './_fixtures/motorLegado';   // juízes simulados no formato antigo → formato do motor único (ADR-014)
 
 let passed = 0;
 let failed = 0;
@@ -59,9 +60,9 @@ async function main(): Promise<void> {
     const comCampo = await quiet(() => new ObserverValidator(fake('{"claims":[{"claim":"faz 27 °C","evidence":["E1"],"verdict":"NOT_SUPPORTED"}],"faltou":"o pedido do usuário"}', pj), 'm').validateGrounding('Faz 27 °C.', ev, undefined, { phase: 'initial' }));
     assert(pj[0].includes(INSTRUCAO_FALTOU), 'o prompt do juiz contém a instrução única');
     assert(semCampo.state === comCampo.state && semCampo.state === 'REJECTED', `veredito não muda com o campo (${semCampo.state} / ${comCampo.state})`);
-    const rj = ler('juiz_grounding-').find(r => r.id === comCampo.avaliacaoId);
+    const rj = ler('validacao_saida_contra_evidencia-').find(r => r.id === comCampo.avaliacaoId);
     assert(rj?.depois?.fatos?.faltouInformado === true && rj?.depois?.conteudo?.faltou === 'o pedido do usuário', 'gravador registra a observação do juiz');
-    const rj0 = ler('juiz_grounding-').find(r => r.id === semCampo.avaliacaoId);
+    const rj0 = ler('validacao_saida_contra_evidencia-').find(r => r.id === semCampo.avaliacaoId);
     assert(rj0?.depois?.fatos?.faltouInformado === false, 'sem observação → faltouInformado=false');
 
     console.log('\n=== S354-3 — validador de qualidade: idem ===');
@@ -70,7 +71,7 @@ async function main(): Promise<void> {
     const q1 = await quiet(() => new ObserverValidator(fake('{"approved": false, "reason": "r", "confidence": 0.8, "faltou": "o resultado das outras ferramentas"}', pq), 'm').validate('pedido', 'i', 'edit', 'Conteúdo adicionado', 'Resposta completa ao usuário.'));
     assert(pq[0].includes(INSTRUCAO_FALTOU), 'o prompt do validador contém a instrução única');
     assert(q0.approved === q1.approved && q0.confidence === q1.confidence, 'aprovação e confiança não mudam com o campo');
-    assert(ler('validador_qualidade-').find(r => r.id === q1.avaliacaoId)?.depois?.conteudo?.faltou === 'o resultado das outras ferramentas', 'gravador registra a observação do validador');
+    assert(ler('validacao_qualidade_da_resposta-').find(r => r.id === q1.avaliacaoId)?.depois?.conteudo?.faltou === 'o resultado das outras ferramentas', 'gravador registra a observação do validador');
 
     console.log('\n=== S354-4 — análise de risco: o prompt pede o campo, pela mesma instrução ===');
     const srcRisco = fs.readFileSync(path.join(process.cwd(), 'src', 'loop', 'RiskAnalyzer.ts'), 'utf8');

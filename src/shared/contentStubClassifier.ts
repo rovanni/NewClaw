@@ -19,17 +19,12 @@
  * lento; um stub que chega ao usuário via TTS/arquivo é irreversível depois do fato.
  */
 
-import { ProviderFactory, LLMMessage } from '../core/ProviderFactory';
+import type { ProviderFactory } from '../core/ProviderFactory';
 import { createLogger } from './AppLogger';
-import { rodarEmSombra } from '../validation/sombra';
-import { estadoDoVeredito } from '../validation/motorPadrao';
+import { obterMotor } from '../validation/motorPadrao';
+import type { DecisaoDeMolde } from '../validation/tipos/demaisTipos';
 
 const log = createLogger('ContentStubClassifier');
-
-// Sem padrão embutido (issue 019): quando o operador não configura, quem decide o modelo é o
-// provedor ativo — via getProviderWithModel() sem modelo. Um nome de modelo de NUVEM como padrão
-// aqui era enviado ao provedor em uso, e numa instalação só-local ele não existe.
-const CLASSIFIER_MODEL = process.env['CONTENT_STUB_CLASSIFIER_MODEL'] ?? '';
 
 export interface ContentStubVerdict {
     isStub: boolean;
@@ -40,96 +35,31 @@ export interface ContentStubVerdict {
 /** `pedido` (Sprint V4, Informação Completa para Decidir): a pergunta é se o texto responde ao pedido real — sem o pedido, o LLM adivinhava. */
 export type ContentStubClassifier = (content: string, toolName: string, pedido?: string) => Promise<ContentStubVerdict>;
 
-/** Constrói o classificador real a partir de um ProviderFactory já existente (GoalPlanner/RiskAnalyzer). */
+/**
+ * Constrói o classificador real a partir de um ProviderFactory já existente (GoalPlanner/RiskAnalyzer).
+ *
+ * Campanha 09/10/2026 (troca M4, ADR-014): quem julga é o motor único, tipo `conteudo_molde` — a pergunta, as entradas
+ * (pedido e texto INTEIROS), o prazo, o modelo (CLASSIFIER_MODEL) e o registro no gravador de voo são do descritor e do
+ * motor, não mais deste arquivo. Aqui ficam só a política e o formato do consumidor: aprovado = conteúdo real.
+ */
 export function makeContentStubClassifier(providerFactory: ProviderFactory): ContentStubClassifier {
     return async (content: string, toolName: string, pedido?: string): Promise<ContentStubVerdict> => {
         if (!content || content.trim().length < 3) {
             return { isStub: true, reason: 'conteúdo vazio ou quase vazio' };
         }
-
-        const lines = [
-            'Você é um detector de conteúdo-molde ("stub") gerado por um LLM em vez de conteúdo real.',
-            '',
-            `Ferramenta: ${toolName} (o texto abaixo será entregue DIRETAMENTE ao usuário — como arquivo ou narração de áudio, sem revisão humana).`,
-            '',
-            'Pedido do usuário (para saber o que é "responder ao pedido real"):',
-            '"""',
-            pedido?.trim() || '(não informado)',
-            '"""',
-            '',
-            'Texto a avaliar:',
-            '"""',
-            // Sprint V4: o texto julgado vai inteiro (antes: 800 chars). O tamanho já é limitado pelo JSON de plano
-            // que o próprio LLM escreveu — não há teto novo a impor.
-            content,
-            '"""',
-            '',
-            'O texto acima é CONTEÚDO REAL, pronto para entrega (mesmo que curto ou simples)?',
-            'Ou é uma DESCRIÇÃO/PLACEHOLDER do que deveria ser gerado — ex: menciona "step"/"passo N", ' +
-            '"dados obtidos anteriormente", identificadores entre colchetes/sublinhados ' +
-            '(ex: [resultado_do_passo_1]), frases tipo "conteúdo será gerado", ou texto genérico ' +
-            'que descreve o processo em vez de responder ao pedido real?',
-            'Responda APENAS com JSON: {"isStub": true|false, "reason": "curta em português"}',
-        ];
-
-        const messages: LLMMessage[] = [{ role: 'user', content: lines.join('\n') }];
-        // Orçamento derivado da latência observada do provedor (shared/auxTimeout.ts), como
-        // DomainRegistry e GoalExtractor já fazem. O teto fixo de 6s que existia aqui era o
-        // sétimo dos que a Sprint 7 mediu e deixou de fora por não ter evidência de abort —
-        // a evidência apareceu em 08/08/2026: `AbortError: This operation was aborted` em 2 de
-        // 3 classificações do turno, contra um provedor cujo primeiro chunk levou 14,2s. Como o
-        // classificador é fail-closed, cada aborto rebaixava para AgentLoop um step 'write' com
-        // conteúdo legítimo.
-        //
-        // Aumentar a constante seria repetir o erro que auxTimeout.ts foi criado para encerrar:
-        // um número em milissegundos não descreve a chamada, descreve uma suposição sobre a
-        // velocidade do hardware de quem roda. O perfil 'classificacao' é o mesmo dos outros dois
-        // pontos — a chamada é da mesma natureza (JSON de uma linha, veredito binário).
-        //
-        // O fail-closed NÃO muda (ver doc no topo): erro continua valendo isStub=true. O que muda
-        // é parar de tratar "este provedor é mais lento" como "o LLM não conseguiu classificar".
-        const orcamento = providerFactory.getBudgetAuxiliar('classificacao');
-        const TIMEOUT_MS = orcamento.timeoutMs;
-
-        // Reusa chatWithFallback em vez de getProviderWithModel() direto (D-08,
-        // docs/ARCHITECTURE/INVENTARIO_DUPLICACAO_2026-08-24.md) — mesmo mecanismo que
-        // ObserverValidator (S258) já usa. getProviderWithModel() sem providerName cai sempre em
-        // this.defaultProvider, sem nenhum fallback se essa única chamada falhar; chatWithFallback
-        // tenta os demais providers antes de desistir, com o mesmo TIMEOUT_MS de hoje delimitando
-        // cada tentativa. A política fail-closed continua decidida aqui, não no ProviderFactory —
-        // qualquer status diferente de 'success' (erro, timeout, cancelado) cai no mesmo ramo.
-        const result = await providerFactory.chatWithFallback(messages, undefined, undefined, TIMEOUT_MS, undefined, CLASSIFIER_MODEL, { diag: { component: 'contentStubClassifier', role: 'classifier' } });
-        if (result.status !== 'success') {
-            log.warn(`[ContentStubClassifier] tool=${toolName} chamada ao LLM falhou (status=${result.status}) — fail-closed (isStub=true)`);
-            return { isStub: true, reason: 'erro na classificação LLM (fail-closed)' };
-        }
-
         try {
-            const cleaned = result.content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-            const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
-            if (!jsonMatch) {
-                log.warn(`[ContentStubClassifier] tool=${toolName} resposta sem JSON válido — fail-closed (isStub=true)`);
-                return { isStub: true, reason: 'resposta do LLM sem JSON válido' };
+            const { adaptado, semVeredito, deveBloquear, veredito } = await obterMotor(providerFactory).validar<DecisaoDeMolde>('conteudo_molde', { pedido, texto: content, ferramenta: toolName }, { phase: 'planejamento' });
+            // Fail-closed (política declarada no tipo, `semVeredito: bloquear`): sem veredito (modelo fora, prazo, saída inválida)
+            // vale isStub=true — falso positivo é aceitável, falso negativo não (um stub que chega ao usuário por arquivo/áudio é
+            // irreversível). Um step convertido à toa para o AgentLoop ainda completa o objetivo, por um caminho mais lento.
+            if (semVeredito && deveBloquear) {
+                log.warn(`[ContentStubClassifier] tool=${toolName} sem veredito (${veredito.naoAvaliavelPorque ?? 'não declarado'}) — fail-closed (isStub=true)`);
+                return { isStub: true, reason: 'erro na classificação LLM (fail-closed)' };
             }
-
-            const parsed = JSON.parse(jsonMatch[0]) as { isStub?: boolean; reason?: string };
-            if (typeof parsed.isStub !== 'boolean') {
-                log.warn(`[ContentStubClassifier] tool=${toolName} JSON sem campo isStub válido — fail-closed (isStub=true)`);
-                return { isStub: true, reason: 'resposta do LLM sem campo isStub' };
-            }
-
-            const reason = String(parsed.reason ?? (parsed.isStub ? 'classificado como stub' : 'classificado como conteúdo real'));
-            // ADR-014 — o mesmo julgamento pelo motor único, em sombra (aprovado = conteúdo real, pronto para entrega).
-            rodarEmSombra({
-                providerFactory, tipo: 'conteudo_molde',
-                entradas: { pedido, texto: content, ferramenta: toolName },
-                avaliadorAtual: 'validacao_conteudo_molde',
-                estadoAtual: parsed.isStub ? 'reprovado' : 'aprovado', estadoDoMotor: estadoDoVeredito,
-            });
-            log.info(`[ContentStubClassifier] tool=${toolName} isStub=${parsed.isStub} reason="${reason.slice(0, 100)}"`);
-            return { isStub: parsed.isStub, reason };
+            log.info(`[ContentStubClassifier] tool=${toolName} isStub=${adaptado.isStub} reason="${adaptado.reason.slice(0, 100)}"`);
+            return adaptado;
         } catch (err) {
-            log.warn(`[ContentStubClassifier] tool=${toolName} erro ao interpretar resposta: ${String(err).slice(0, 100)} — fail-closed (isStub=true)`);
+            log.warn(`[ContentStubClassifier] tool=${toolName} erro no motor: ${String(err).slice(0, 100)} — fail-closed (isStub=true)`);
             return { isStub: true, reason: 'erro na classificação LLM (fail-closed)' };
         }
     };

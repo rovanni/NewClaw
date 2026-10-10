@@ -6,8 +6,8 @@
  *   2. monta o prompt por seções, na mesma ordem para todo tipo (pergunta → pedido → objeto → fontes → contexto da
  *      execução → checklist → observações → formato), com corte só onde o descritor declara, e declarado no prompt;
  *   3. respeita o teto DECISION_PROMPT_MAX_CHARS — não cabe: não avaliável (nunca um veredito sobre um pedaço);
- *   4. chama o modelo do tipo (chave de configuração do descritor; vazia = modelo padrão do provedor), com o modo de
- *      raciocínio do tipo;
+ *   4. chama o modelo do juiz (UMA chave para todos os tipos, `OBSERVER_MODEL`; vazia = modelo padrão do provedor), com
+ *      o modo de raciocínio do tipo;
  *   5. lê a saída num formato só e roda as pré-verificações determinísticas declaradas;
  *   6. registra tudo no gravador de voo (`validacao_<tipo>`);
  *   7. devolve o veredito padrão e, se o descritor tiver adaptador, o formato do consumidor.
@@ -26,6 +26,9 @@ import {
 
 const log = createLogger('ValidationEngine');
 
+/** Chave de configuração do modelo do juiz — a mesma para todos os tipos (um juiz só; ver `DescritorDeValidacao.semVeredito`). */
+export const CHAVE_DO_MODELO_DO_JUIZ = 'OBSERVER_MODEL';
+
 const ORDEM_DAS_SECOES: PapelDaEntrada[] = ['contexto_do_usuario', 'objeto', 'fonte_de_verdade', 'contexto_da_execucao'];
 const TITULO_DA_SECAO: Record<PapelDaEntrada, string> = {
     contexto_do_usuario: 'CONTEXTO DO USUÁRIO (não é evidência — serve para saber o que veio do usuário)',
@@ -36,6 +39,17 @@ const TITULO_DA_SECAO: Record<PapelDaEntrada, string> = {
 
 export interface ResultadoDaValidacao<T> {
     veredito: VereditoPadrao;
+    /** O motor não chegou a um veredito (modelo fora, prazo, saída inválida, acima do teto). */
+    semVeredito: boolean;
+    /**
+     * Como a validação terminou, em código estável: `veredito` | `entrada_ausente` | `acima_do_teto` | `erro` | `saida_invalida` |
+     * `llm_<status>` (o modelo não concluiu: timeout, error…). O consumidor que precisa distinguir a falha lê isto — nunca o texto.
+     */
+    desfecho: string;
+    /** A saída crua do modelo (quando houve resposta) — para observabilidade (`TRACE_CONTENT`), nunca para decisão. */
+    saidaBruta?: string;
+    /** `semVeredito` + a política declarada pelo tipo é bloquear. O consumidor só lê isto — não reescreve a política. */
+    deveBloquear: boolean;
     /** Saída do adaptador do descritor; sem adaptador, o próprio veredito. */
     adaptado: T;
 }
@@ -58,14 +72,24 @@ export class ValidationEngine {
         private readonly resolverModelo: (chave: string) => string | undefined = (chave) => process.env[chave],
     ) {}
 
+    /** Modelo do juiz escolhido em tempo de execução (painel: `updateConfig`); vence a variável de ambiente. */
+    private modeloDoJuiz?: string;
+
+    /** O ÚNICO ponto que muda o modelo de TODOS os tipos de validação (vazio/undefined = volta à configuração). */
+    definirModeloDoJuiz(modelo: string | undefined): void {
+        this.modeloDoJuiz = modelo?.trim() || undefined;
+    }
+
     /** Monta o prompt do tipo — exportado para teste e para o gravador (versão do modelo de prompt). */
     montarPrompt(d: DescritorDeValidacao<unknown>, entradas: Record<string, string | undefined>): string {
         const secoes: string[] = [`Você é um validador. PERGUNTA: ${d.pergunta}`];
         for (const papel of ORDEM_DAS_SECOES) {
-            const daSecao = d.entradas.filter(e => e.papel === papel && entradas[e.nome] !== undefined && entradas[e.nome] !== '');
+            // O pedido do usuário ausente é DECLARADO ao modelo ("(não informado)"), nunca omitido em silêncio: sem a marca, o
+            // juiz não sabe se o pedido não existe ou se esqueceram de mostrá-lo (princípio Informação Completa para Decidir).
+            const daSecao = d.entradas.filter(e => e.papel === papel && (papel === 'contexto_do_usuario' || (entradas[e.nome] !== undefined && entradas[e.nome] !== '')));
             if (!daSecao.length) continue;
             const corpo = daSecao.map(e => {
-                const valor = String(entradas[e.nome]);
+                const valor = entradas[e.nome] ? String(entradas[e.nome]) : '(não informado)';
                 const texto = e.corteMaxChars !== undefined ? trechoDeclarado(valor, e.corteMaxChars) : valor;
                 return `[${e.rotulo}]\n"""\n${texto}\n"""`;
             }).join('\n\n');
@@ -92,7 +116,7 @@ export class ValidationEngine {
         const t0 = Date.now();
         const avaliacaoId = novaAvaliacaoId();
         const telemetria: CallTelemetry = { attempts: [] };
-        const modelo = d.modeloConfig ? (this.resolverModelo(d.modeloConfig) ?? '') : '';
+        const modelo = this.modeloDoJuiz ?? this.resolverModelo(CHAVE_DO_MODELO_DO_JUIZ) ?? '';
         let prompt = '';
         let saidaBruta: string | undefined;
 
@@ -116,7 +140,8 @@ export class ValidationEngine {
                     conteudo: { saidaBruta, itens: v.itens, motivo: v.motivo, faltou: v.faltou, dificuldade: v.dificuldade, extras: v.extras },
                 },
             });
-            return { veredito: v, adaptado: (d.adaptador ? d.adaptador(v) : v) as T };
+            const semVeredito = v.estado === 'nao_avaliavel' && !!v.naoAvaliavelPorque;
+            return { veredito: v, semVeredito, desfecho, saidaBruta, deveBloquear: semVeredito && d.semVeredito === 'bloquear', adaptado: (d.adaptador ? d.adaptador(v) : v) as T };
         };
         const naoAvaliavel = (porque: string, desfecho: string) =>
             concluir({ estado: 'nao_avaliavel', itens: [], naoAvaliavelPorque: porque }, desfecho);

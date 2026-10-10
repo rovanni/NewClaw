@@ -31,6 +31,7 @@ import { GoalExecutionLoop } from '../../loop/GoalExecutionLoop';
 import { GoalStore } from '../../loop/GoalStore';
 import { ToolRegistry } from '../../core/ToolRegistry';
 import { Goal, SuccessCriterion } from '../../loop/GoalTypes';
+import './_fixtures/motorLegado';   // juízes simulados no formato antigo → formato do motor único (ADR-014)
 
 // Sprint 0.6, Front A: validateGoalCompletion() passou a receber o GoalExecutionState
 // explicitamente (antes era um campo de instância `this.progressModel`). O tipo não é

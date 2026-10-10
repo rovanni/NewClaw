@@ -20,19 +20,16 @@ export function criarRegistroPadrao(): RegistroDeValidacoes {
     return registro;
 }
 
-/** Estado do motor na escala comum — usado pelas sombras dos tipos de agregação 'modelo'. */
-export const estadoDoVeredito = (_: unknown, v: { estado: string }): string => v.estado;
-
-/**
- * ADR-014 (M1–M6): um tipo roda em SOMBRA — junto do validador atual, sem decidir nada — quando está em
- * `VALIDACAO_SOMBRA` (lista separada por vírgula, ou `todos`). Desligado por padrão: num servidor local que atende um
- * pedido por vez, cada sombra é uma chamada a mais na fila do usuário; liga-se para medir, por um período.
- */
-export function sombraLigadaPara(tipo: string): boolean {
-    const v = (process.env.VALIDACAO_SOMBRA ?? '').split(',').map(s => s.trim()).filter(Boolean);
-    return v.includes('todos') || v.includes(tipo);
-}
-
 export function criarMotorDeValidacao(providerFactory: ProviderFactory): ValidationEngine {
     return new ValidationEngine(providerFactory, criarRegistroPadrao());
+}
+
+// Uma instância por ProviderFactory: o motor é só dados (o registro) + a fábrica de provedores.
+const motores = new WeakMap<object, ValidationEngine>();
+
+/** O motor único do NewClaw para esta fábrica de provedores — todo consumidor valida por aqui (ADR-014). */
+export function obterMotor(providerFactory: ProviderFactory): ValidationEngine {
+    let m = motores.get(providerFactory);
+    if (!m) { m = criarMotorDeValidacao(providerFactory); motores.set(providerFactory, m); }
+    return m;
 }

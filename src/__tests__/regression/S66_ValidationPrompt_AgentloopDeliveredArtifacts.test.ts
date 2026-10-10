@@ -34,6 +34,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import './_fixtures/motorLegado';   // juízes simulados no formato antigo → formato do motor único (ADR-014)
 
 let passed = 0;
 let failed = 0;
@@ -118,7 +119,8 @@ assert(
 );
 
 assert(
-    /\$\{attemptsContext \|\| '\(nenhum\)'\}\$\{artifactBlock\}\$\{deliveredArtifactsBlock\}/.test(loopSource),
+    // Desde a troca ao motor único (ADR-014) o bloco vai na entrada `artefatos` do tipo `conclusao_do_objetivo`.
+    /artefatos: `\$\{artifactBlock\}\$\{deliveredArtifactsBlock\}`/.test(loopSource),
     'deliveredArtifactsBlock está de fato concatenado no prompt enviado ao validador (não só declarado)',
 );
 

@@ -25,6 +25,7 @@ import { WriteTool } from '../../tools/write_tool';
 import { ExecCommandTool } from '../../tools/exec_command';
 import { SendDocumentTool } from '../../tools/send_document';
 import { Goal, PlanStep } from '../../loop/GoalTypes';
+import './_fixtures/motorLegado';   // juízes simulados no formato antigo → formato do motor único (ADR-014)
 
 let passed = 0;
 let failed = 0;

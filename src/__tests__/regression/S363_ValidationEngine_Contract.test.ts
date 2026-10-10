@@ -57,7 +57,7 @@ const DADOS: DescritorDeValidacao = {
     agregacao: 'itens',
     preVerificacoes: ['citacao_existe_na_fonte'],
     raciocinio: 'desligado',
-    modeloConfig: 'S363_MODELO_DO_TIPO',
+    semVeredito: 'bloquear',
 };
 
 async function main(): Promise<void> {
@@ -84,7 +84,7 @@ async function main(): Promise<void> {
     console.log('\n=== S363-3 — prompt por seções, na ordem do contrato, com corte só onde declarado ===');
     const c2: Chamada[] = [];
     const saidaReprova = JSON.stringify({ estado: 'aprovado', itens: [{ item: 'faz 27 °C', confere: 'nao', evidencia: 'E1', trecho: '18.4 °C' }], faltou: 'o horário da medição', dificuldade: 'a resposta mistura dado e opinião' });
-    const motor2 = new ValidationEngine(fabrica(saidaReprova, c2), reg, (k) => k === 'S363_MODELO_DO_TIPO' ? 'modelo-do-painel' : undefined);
+    const motor2 = new ValidationEngine(fabrica(saidaReprova, c2), reg, (k) => k === 'OBSERVER_MODEL' ? 'modelo-do-painel' : undefined);
     const historico = 'tentativa 1 falhou por timeout; tentativa 2 trouxe dados parciais e foi descartada';
     const r2 = await quiet(() => motor2.validar('dados_contra_ferramenta', { pedido: 'qual o tempo em Curitiba?', resposta: 'Faz 27 °C em Curitiba.', evidencia: 'Curitiba: 18.4 °C, nublado', historico }, { goalId: 'g1' }));
     const p = c2[0]?.prompt ?? '';

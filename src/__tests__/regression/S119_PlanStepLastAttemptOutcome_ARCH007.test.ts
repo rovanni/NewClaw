@@ -28,6 +28,8 @@ import { Goal, PlanStep } from '../../loop/GoalTypes';
 import { ChannelContext } from '../../loop/agentLoopTypes';
 import { permissionRegistry } from '../../core/PermissionRegistry';
 import { OperationalMode } from '../../core/CapabilityMode';
+import { vereditoPasso } from './_fixtures/veredito';
+import './_fixtures/motorLegado';   // juízes simulados no formato antigo → formato do motor único (ADR-014)
 
 let passed = 0;
 let failed = 0;
@@ -169,8 +171,8 @@ async function main() {
             getBudgetAuxiliar: () => ({ timeoutMs: 45_000, origem: 'padrao', latenciaTipicaMs: null }),
             chatWithFallback: async (messages: Array<{ content?: string }>) => {
                 const prompt = messages.map(m => m.content ?? '').join('\n');
-                if (prompt.includes('validador de relevância de resultado de ferramentas')) {
-                    return { status: 'success', content: JSON.stringify({ result: 'mismatch', confidence: 0.9, reason: 'teste S119 — output não endereça a intenção do step' }), attempts: [] };
+                if (prompt.includes('ENDEREÇA a intenção do passo')) {
+                    return { status: 'success', content: vereditoPasso('mismatch', 0.9, 'teste S119 — output não endereça a intenção do step'), attempts: [] };
                 }
                 return { status: 'success', content: JSON.stringify({ achieved: true, summary: 'teste S119' }), attempts: [] };
             },

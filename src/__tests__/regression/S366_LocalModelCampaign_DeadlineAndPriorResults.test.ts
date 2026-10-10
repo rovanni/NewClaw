@@ -26,6 +26,7 @@ import { ProviderFactory } from '../../core/ProviderFactory';
 import { OpenAIProvider } from '../../core/OpenAIProvider';
 import { limiteComum } from '../../shared/orcamentoDeTexto';
 import { GoalExecutionLoop } from '../../loop/GoalExecutionLoop';
+import './_fixtures/motorLegado';   // juízes simulados no formato antigo → formato do motor único (ADR-014)
 
 let passed = 0;
 let failed = 0;
@@ -122,9 +123,10 @@ async function main(): Promise<void> {
         assert(limiteComum([100, 200], 1000) === Infinity, 'tudo cabe → nada é cortado');
         assert(limiteComum([100, 200], 0) === 0, 'nada cabe → 0');
         assert(limiteComum([100, 5000, 5000], 3100) === 1500, 'textos pequenos inteiros, os grandes cortados por igual');
+        // Troca ao motor único (ADR-014): o juiz de grounding não corta mais nada (nem evidência, nem resposta); a regra de
+        // `limiteComum` segue sendo a fonte única do corte declarado onde ele existe (a etapa do agente).
         const ov = ler('src', 'loop', 'ObserverValidator.ts');
-        const corpo = ov.slice(ov.indexOf('static evidenceCapForBudget'), ov.indexOf('// ── Modo sombra de evidência ampliada'));
-        assert(/limiteComum\(/.test(corpo) && !/sizes\.sort/.test(corpo), 'o juiz usa a regra de shared/orcamentoDeTexto, sem cópia própria');
+        assert(!/limiteComum\(/.test(ov) && !/evidenceCapForBudget/.test(ov), 'o juiz de grounding não tem regra de corte própria — nada é cortado');
     }
 
     console.log('\n=== S366-4 — a etapa do agente recebe os resultados inteiros e os próximos passos ===');

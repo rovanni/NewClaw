@@ -27,6 +27,7 @@ import { GoalStore } from '../../loop/GoalStore';
 import { ToolRegistry } from '../../core/ToolRegistry';
 import { Goal, PlanStep, createEmptyStepCognitiveContext } from '../../loop/GoalTypes';
 import { AUTO_DELIVERY_CRITERION_IDS } from '../../loop/planning/ensureDeliverySuccessCriteria';
+import './_fixtures/motorLegado';   // juízes simulados no formato antigo → formato do motor único (ADR-014)
 
 let passed = 0;
 let failed = 0;
@@ -123,7 +124,7 @@ console.log('\n=== S245-3 — validateGoalCompletion(): COM o GATE (abandono rea
     const validation = await (loop as any).validateGoalCompletion(goal, undefined, state);
     assert(llmCalls === 1, `Caminho 2 forçado: LLM chamado exatamente 1 vez — chamadas=${llmCalls}`, llmCalls);
     assert(/POSSÍVEL ENTREGA ABANDONADA/.test(lastPrompt), 'o prompt real enviado ao LLM contém o fato estrutural sobre a entrega abandonada', lastPrompt.slice(0, 200));
-    assert(/INTENÇÃO ORIGINAL DO USUÁRIO: instale o pacote X/.test(lastPrompt), 'o prompt continua incluindo a intenção original — o LLM tem o que precisa para decidir se é abandono legítimo', lastPrompt.slice(0, 400));
+    assert(/\[Intenção original do usuário\]\s*"""\s*instale o pacote X/.test(lastPrompt), 'o prompt continua incluindo a intenção original — o LLM tem o que precisa para decidir se é abandono legítimo', lastPrompt.slice(0, 400));
     assert(validation.achieved === false, 'o LLM (mockado, correto) rejeita — reason preservado', validation);
 }
 

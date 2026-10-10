@@ -54,8 +54,8 @@ async function main(): Promise<void> {
             'campo extra que colide com o veredito, fora de snake_case ou sem instrução é recusado no registro', erros);
         const semFonte = { ...descritorSuficienciaDoPedido, tipo: 'x_sem_fonte', fontesDaCitacao: ['contexto_do_usuario'] };
         assert(validarDescritor(semFonte as never).some(e => /fonte da citação/.test(e)), 'citação sem nenhuma entrada no papel declarado é recusada');
-        assert(descritorSuficienciaDoPedido.raciocinio === 'desligado' && descritorSuficienciaDoPedido.modeloConfig === 'CLASSIFIER_MODEL',
-            'raciocínio desligado; modelo do classificador (vazio = padrão do provedor)');
+        assert(descritorSuficienciaDoPedido.raciocinio === 'desligado' && descritorSuficienciaDoPedido.semVeredito === 'liberar',
+            'raciocínio desligado; sem veredito não bloqueia (política declarada no descritor)');
     }
 
     console.log('\n=== S368-2 — prompt: campo extra pedido; citação pode vir do pedido ===');
@@ -99,7 +99,9 @@ async function main(): Promise<void> {
         assert(d4.acao === 'sem_veredito', 'prazo esgotado / modelo fora → sem veredito (não bloqueia o pedido)', d4);
 
         const lixo = motorCom({ nada: 'disso' } as any);
-        assert((await validar(lixo.motor, { pedido: 'x' })).acao === 'seguir', 'saída sem itens → nada exigido → seguir');
+        // Um objeto sem `estado` nem `itens` não é veredito (S374): antes virava "nada exigido → seguir" — lixo lido como aprovação.
+        // Agora é "sem veredito", que também não bloqueia o pedido (política do tipo: liberar), sem fingir que o modelo aprovou.
+        assert((await validar(lixo.motor, { pedido: 'x' })).acao === 'sem_veredito', 'saída fora do contrato → sem veredito (não bloqueia, não finge aprovação)');
     }
 
     console.log('\n=== S368-4 — encaixe no GoalOrchestrator ===');

@@ -36,6 +36,7 @@ import { ReflectionMemory } from '../../memory/ReflectionMemory';
 import { ToolRegistry } from '../../core/ToolRegistry';
 import { LLMMessage, LLMResult } from '../../core/ProviderFactory';
 import { PlanStep } from '../../loop/GoalTypes';
+import './_fixtures/motorLegado';   // juízes simulados no formato antigo → formato do motor único (ADR-014)
 
 let passed = 0;
 let failed = 0;
@@ -86,8 +87,10 @@ console.log('\n=== S262-1 [estrutural] — nenhum dos 3 consumidores chama getPr
     assert(!stubSrc.includes('.getProviderWithModel('), 'contentStubClassifier.ts não chama mais getProviderWithModel()', null);
     assert(!validatorSrc.includes('.getProviderWithModel('), 'StepSemanticValidator.ts não chama mais getProviderWithModel()', null);
     assert(riskSrc.includes('chatWithFallback'), 'RiskAnalyzer.ts chama chatWithFallback', null);
-    assert(stubSrc.includes('chatWithFallback'), 'contentStubClassifier.ts chama chatWithFallback', null);
-    assert(validatorSrc.includes('chatWithFallback'), 'StepSemanticValidator.ts chama chatWithFallback', null);
+    // Troca ao motor único (ADR-014): contentStubClassifier e StepSemanticValidator validam pelo motor, que chama chatWithFallback.
+    const engineSrc = readSrc('validation/ValidationEngine.ts');
+    assert(stubSrc.includes('obterMotor(') && engineSrc.includes('chatWithFallback'), 'contentStubClassifier.ts valida pelo motor único (que chama chatWithFallback)', null);
+    assert(validatorSrc.includes('obterMotor('), 'StepSemanticValidator.ts valida pelo motor único (que chama chatWithFallback)', null);
 }
 
 console.log('\n=== S262-2 [funcional] — RiskAnalyzer.callRiskLLM: sucesso via chatWithFallback, modelOverride = this.model ===');
@@ -126,7 +129,7 @@ console.log('\n=== S262-4 [funcional] — contentStubClassifier: fail-closed (is
     const classifier = makeContentStubClassifier(factory);
     const verdict = await classifier('conteúdo qualquer, suficientemente longo pra passar do fast-path de vazio', 'send_audio');
     assert(verdict.isStub === true, 'FAIL-CLOSED preservado: chatWithFallback falhando ainda produz isStub=true (política do consumidor, não do ProviderFactory)', verdict);
-    assert(calls[0]?.modelOverride === (process.env['CONTENT_STUB_CLASSIFIER_MODEL'] ?? ''), 'modelOverride = CONTENT_STUB_CLASSIFIER_MODEL (issue 019: sem padrão embutido)', calls[0]);
+    assert((calls[0]?.modelOverride ?? '') === (process.env['OBSERVER_MODEL'] ?? ''), 'modelOverride = OBSERVER_MODEL, a chave única do juiz (issue 019: sem padrão embutido)', calls[0]);
 }
 
 console.log('\n=== S262-5 [funcional] — contentStubClassifier: sucesso via chatWithFallback é interpretado normalmente ===');
@@ -148,7 +151,7 @@ console.log('\n=== S262-6 [funcional] — StepSemanticValidator.validate: fail-s
     const validation = await validator.validate(step, toolOutput);
     assert(validation.result === 'unverifiable', 'FAIL-SOFT preservado: chatWithFallback falhando ainda produz result="unverifiable" (política do consumidor)', validation);
     assert(calls.length === 1, 'chatWithFallback chamado 1x (slow path acionado, fast path inconclusivo)', calls);
-    assert(calls[0]?.modelOverride === (process.env['SEMANTIC_VALIDATOR_MODEL'] ?? ''), 'modelOverride = SEMANTIC_VALIDATOR_MODEL (issue 019: sem padrão embutido)', calls[0]);
+    assert((calls[0]?.modelOverride ?? '') === (process.env['OBSERVER_MODEL'] ?? ''), 'modelOverride = OBSERVER_MODEL, a chave única do juiz (issue 019: sem padrão embutido)', calls[0]);
 }
 
 console.log(`\n${'─'.repeat(60)}`);

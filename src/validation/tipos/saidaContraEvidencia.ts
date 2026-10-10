@@ -21,7 +21,34 @@ export function estadoDeGrounding(v: VereditoPadrao): EstadoDeGrounding {
     return 'VALIDATED';
 }
 
-export const descritorSaidaContraEvidencia: DescritorDeValidacao<EstadoDeGrounding> = {
+export type VereditoDaAfirmacao = 'SUPPORTED' | 'NOT_SUPPORTED' | 'NOT_EVALUABLE';
+
+/** Uma afirmação da resposta com o veredito — o formato que os consumidores do juiz de grounding usam. */
+export interface AfirmacaoJulgada {
+    claim: string;
+    /** ids de evidência citados pelo juiz (E1, E2…); vazio = nenhuma identificada */
+    evidence: string[];
+    verdict: VereditoDaAfirmacao;
+}
+
+export interface DecisaoDeGrounding {
+    state: EstadoDeGrounding;
+    claims: AfirmacaoJulgada[];
+}
+
+const VEREDITO_POR_CONFERE: Record<string, VereditoDaAfirmacao> = { sim: 'SUPPORTED', nao: 'NOT_SUPPORTED', sem_evidencia: 'NOT_EVALUABLE' };
+
+export function adaptarGrounding(v: VereditoPadrao): DecisaoDeGrounding {
+    const claims: AfirmacaoJulgada[] = v.itens.map(i => ({
+        claim: i.item,
+        // Só ids no formato das evidências do turno (E1, G2…); o resto do texto do campo é descartado.
+        evidence: (i.evidencia ?? '').split(/[\s,;]+/).map(x => x.trim()).filter(x => /^[A-Z]\d+$/.test(x)),
+        verdict: VEREDITO_POR_CONFERE[i.confere] ?? 'NOT_EVALUABLE',
+    }));
+    return { state: estadoDeGrounding(v), claims };
+}
+
+export const descritorSaidaContraEvidencia: DescritorDeValidacao<DecisaoDeGrounding> = {
     tipo: TIPO_SAIDA_CONTRA_EVIDENCIA,
     pergunta: 'Cada afirmação que a RESPOSTA apresenta como dado obtido das ferramentas é sustentada pelas EVIDÊNCIAS?',
     entradas: [
@@ -31,9 +58,9 @@ export const descritorSaidaContraEvidencia: DescritorDeValidacao<EstadoDeGroundi
     ],
     checklist: [
         'Liste como itens SOMENTE as afirmações que a resposta apresenta como DADO OBTIDO das evidências — valor, resultado, conteúdo lido, contagem, estado ou nome informado por uma ferramenta, mesmo no meio de texto redigido.',
-        'NÃO liste: texto que o assistente redigiu (explicação, conhecimento geral, opinião, recomendação, cortesia); o que a resposta só repete do pedido do usuário; o que o assistente diz que fez ou vai fazer; fato verificável por si só (ex.: o dia da semana de uma data, o resultado de um cálculo).',
-        'confere="sim" quando a evidência DETERMINA POSITIVAMENTE a afirmação — está nela, ou sai dela por transformação determinística (arredondamento, unidade declarada, reformatação, tradução, omissão de campos, conta aritmética com número explícito do contexto). Copie em "trecho" o texto LITERAL da evidência que a determina.',
-        'confere="nao" quando a evidência determina que a afirmação é falsa — contradiz, atribui o valor a outro papel/entidade/momento, ou acrescenta item a uma lista que a evidência enumera e não contém. Copie em "trecho" o texto LITERAL da evidência que a contradiz.',
+        'NÃO liste: texto que o assistente redigiu (explicação, conteúdo didático, conhecimento geral, opinião, recomendação, cortesia); o que a resposta só repete do pedido do usuário; o que o assistente diz que fez ou vai fazer; fato verificável por si só (ex.: o dia da semana de uma data, o resultado de um cálculo).',
+        'confere="sim" quando a evidência DETERMINA POSITIVAMENTE a afirmação — está nela, ou sai dela por transformação determinística (arredondamento, unidade declarada, reformatação, tradução, omissão de campos, conta aritmética com número explícito do contexto). Copie em "trecho" o texto LITERAL da evidência que a determina e escreva em "evidencia" os ids (E1, E2…) das evidências que a sustentam.',
+        'confere="nao" quando a evidência determina que a afirmação é falsa — contradiz, atribui o valor a outro papel/entidade/momento, ou acrescenta item a uma lista que a evidência enumera e não contém. Copie em "trecho" o texto LITERAL da evidência que a contradiz e escreva em "evidencia" os ids (E1, E2…) das evidências envolvidas.',
         'confere="sem_evidencia" quando a evidência não determina a afirmação (não trata do assunto, é ambígua, conflitante, ou não enumera a dimensão de que a afirmação fala). Ausência de contradição NÃO é suporte.',
         'Se a resposta não tiver nenhuma afirmação apresentada como dado obtido, devolva "itens": [].',
     ],
@@ -41,6 +68,6 @@ export const descritorSaidaContraEvidencia: DescritorDeValidacao<EstadoDeGroundi
     preVerificacoes: ['citacao_existe_na_fonte'],
     // Medição pedida pelo ADR-014 ("a qualidade dos vereditos sem raciocínio não foi medida — M1 mede, na sombra").
     raciocinio: 'desligado',
-    modeloConfig: 'OBSERVER_MODEL',
-    adaptador: estadoDeGrounding,
+    semVeredito: 'bloquear',   // ADR-010 §9: o juiz que não conclui nunca é aprovação (fail-closed)
+    adaptador: adaptarGrounding,
 };

@@ -30,8 +30,8 @@ import { resolvePath } from '../utils/crossPlatform';
 import { createHash } from 'crypto';
 import { gravarAvaliacao, novaAvaliacaoId, versaoDoPrompt, INSTRUCAO_FALTOU, lerFaltou } from '../shared/evaluatorFlightRecorder';
 import type { CallTelemetry } from '../core/providerTypes';
-import { rodarEmSombra } from '../validation/sombra';
-import { estadoDoVeredito } from '../validation/motorPadrao';
+import { obterMotor } from '../validation/motorPadrao';
+import type { DecisaoDeRisco } from '../validation/tipos/demaisTipos';
 
 const log = createLogger('RiskAnalyzer');
 
@@ -708,9 +708,39 @@ export class RiskAnalyzer {
         const tag = shadow ? '[RiskAnalyzer:shadow]' : '[RiskAnalyzer]';
         const createdBy = shadow ? 'risk_analyzer_shadow' : 'risk_analyzer';
 
+        // Troca M5 (ADR-014, 09/10/2026): QUEM JULGA se o plano está completo e correto é o motor único, tipo
+        // `risco_do_plano` (pedido íntegro, plano, objetivo, ferramentas — as perguntas são do descritor). Aprovado: o plano
+        // segue como está, sem chamada de geração. Reprovado: os riscos apontados pelo juiz vão como FATO para o revisor
+        // abaixo, que só ESCREVE o plano corrigido (geração, não julgamento — ver o PENDENTE do ADR-014: esse revisor
+        // pertence ao planejador).
+        let riscosDoJuiz: string[] = [];
+        try {
+            const r = await obterMotor(this.providerFactory).validar<DecisaoDeRisco>('risco_do_plano', {
+                pedido: goal.userIntent, plano: stepsStr, objetivo: goal.objective,
+                ferramentas: this.toolRegistry.getEnabled().map(t => t.name).join(', '),
+            }, { goalId: goal.id, phase: shadow ? 'sombra' : 'plano' });
+            if (r.semVeredito) {
+                log.warn(`${tag} juiz do plano sem veredito (${r.veredito.naoAvaliavelPorque ?? 'n/d'}) — using original plan`);
+                sink.llmStatus = 'sem_veredito';
+                sink.outcome = r.desfecho === 'saida_invalida' ? 'no_json' : 'llm_failed';
+                return { risks: [], adjustedPlan: plan, planAdjusted: false };
+            }
+            sink.llmStatus = 'success';
+            if (r.adaptado.planoBom) {
+                sink.detectedRisks = 0;
+                sink.outcome = 'confirmed';
+                return { risks: [], adjustedPlan: plan, planAdjusted: false };
+            }
+            riscosDoJuiz = r.adaptado.riscos;
+        } catch (err) {
+            log.warn(`${tag} juiz do plano falhou — using original plan: ${String(err).slice(0, 100)}`);
+            sink.outcome = 'error';
+            return { risks: [], adjustedPlan: plan, planAdjusted: false };
+        }
+
         // Informação Completa para Decidir (Sprint V1): o pedido íntegro ao lado do objetivo — "falta passo?" e "o
         // resultado será entregue?" só se respondem sabendo o que foi pedido, não um resumo dele.
-        const prompt = `Você é um analisador de riscos de execução. Revise este plano antes de executá-lo.
+        const prompt = `Você é um revisor de planos de execução. A validação do plano apontou riscos; escreva o plano corrigido.
 
 OBJETIVO: ${goal.objective}
 PEDIDO ORIGINAL DO USUÁRIO: ${goal.userIntent}
@@ -718,16 +748,12 @@ PEDIDO ORIGINAL DO USUÁRIO: ${goal.userIntent}
 PLANO:
 ${stepsStr}
 
+RISCOS APONTADOS PELA VALIDAÇÃO (corrija-os):
+${riscosDoJuiz.length ? riscosDoJuiz.map(r => `- ${r}`).join('\n') : '- (a validação reprovou o plano sem detalhar)'}
+
 Ferramentas disponíveis: ${this.toolRegistry.getEnabled().map(t => t.name).join(', ')}
 
-Verifique:
-1. Há steps faltando? (ex: criar arquivo → verificar se criou → enviar; não pular o envio)
-2. Algum step depende do output do anterior sem capturá-lo explicitamente?
-3. A ordem está correta?
-4. O resultado final será ENTREGUE ao usuário? (se o objetivo pede envio de arquivo, deve haver um step send_document)
-
-Se o plano estiver completo e correto → retorne {"risks": [], "plan": null}
-Se precisar de ajuste → retorne o plano completo corrigido.
+Retorne o plano completo corrigido, com os riscos acima resolvidos (ex.: step faltando, dependência sem captura do output, ordem errada, resultado final não entregue ao usuário — se o objetivo pede envio de arquivo, deve haver um step send_document).
 
 ⚠️ SCHEMAS OBRIGATÓRIOS ao adicionar ou ajustar steps:
   write:       {"path": "resultado.txt", "content": "conteúdo completo aqui"}
@@ -778,21 +804,8 @@ OU
             }
             const parsed = JSON.parse(jsonMatch[0]);
 
-            const detectedRisks: string[] = Array.isArray(parsed.risks) ? parsed.risks : [];
+            const detectedRisks: string[] = Array.isArray(parsed.risks) && parsed.risks.length > 0 ? parsed.risks : riscosDoJuiz;
             if (sink) sink.detectedRisks = detectedRisks.length;
-
-            // ADR-014 M5 — a mesma revisão pelo motor único, em sombra (só validação: o plano está completo e correto?).
-            if (!shadow) {
-                const planoMantido = detectedRisks.length === 0 && !(Array.isArray(parsed.plan) && parsed.plan.length > 0);
-                rodarEmSombra({
-                    providerFactory: this.providerFactory, tipo: 'risco_do_plano',
-                    entradas: { pedido: goal.userIntent, plano: stepsStr, objetivo: goal.objective, ferramentas: this.toolRegistry.getEnabled().map(t => t.name).join(', ') },
-                    contexto: { goalId: goal.id },
-                    avaliadorAtual: 'analise_risco',
-                    estadoAtual: planoMantido ? 'aprovado' : 'reprovado', estadoDoMotor: estadoDoVeredito,
-                    detalheAtual: { riscosAntigos: detectedRisks.slice(0, 5) },
-                });
-            }
 
             if (!parsed.plan || !Array.isArray(parsed.plan) || parsed.plan.length === 0) {
                 if (sink) sink.outcome = 'confirmed';

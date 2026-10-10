@@ -67,6 +67,6 @@ export const descritorSuficienciaDoPedido: DescritorDeValidacao<DecisaoDeSuficie
         instrucao: 'Escreva sempre que houver itens: a pergunta curta e cordial que pediria ao usuário exatamente os dados listados, no MESMO IDIOMA do pedido do usuário. O sistema só a usa se algum dado não estiver comprovado. Vazio quando não há itens.',
     }],
     raciocinio: 'desligado',
-    modeloConfig: 'CLASSIFIER_MODEL',
+    semVeredito: 'liberar',   // ADR-015: sem veredito não bloqueia o pedido
     adaptador: adaptarSuficiencia,
 };

@@ -888,7 +888,7 @@ export class ProviderFactory {
     /**
      * Issue 071: usar este modelo respeita a escolha do usuário de onde rodar? Falso quando o provedor padrão fica na
      * máquina do usuário, a reserva na nuvem não foi autorizada (PERMITIR_NUVEM_COMO_RESERVA) e o modelo é de nuvem.
-     * Para quem escolhe um modelo por fora da cadeia normal — ex.: o juiz em sombra (GROUNDING_SHADOW_MODEL).
+     * Para quem escolhe um modelo por fora da cadeia normal — ex.: um modelo escolhido para uma experiência pontual.
      */
     modeloPermitidoPelaSoberania(modelo: string): boolean {
         if (process.env.PERMITIR_NUVEM_COMO_RESERVA === 'true') return true;

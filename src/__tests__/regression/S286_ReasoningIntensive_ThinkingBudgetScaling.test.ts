@@ -39,6 +39,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { OllamaProvider } from '../../core/OllamaProvider';
+import './_fixtures/motorLegado';   // juízes simulados no formato antigo → formato do motor único (ADR-014)
 
 let passed = 0;
 let failed = 0;
@@ -160,21 +161,23 @@ console.log('\n=== S286.4 — AUDITORIA DE CÓDIGO: só os call sites com evidê
     const goalExecSrc = readSrc('loop/GoalExecutionLoop.ts');
     const agentLoopSrc = readSrc('loop/AgentLoop.ts');
 
+    // Troca ao motor único (ADR-014): os juízes (grounding, qualidade, conclusão…) não chamam mais o provedor — quem o faz é o
+    // motor, que escala o orçamento de raciocínio SÓ para o tipo que declara `raciocinio: 'livre'` (hoje nenhum: todos
+    // 'desligado', então não há raciocínio a orçar). O opt-in continua explícito e por tipo, nunca herdado por acidente.
+    const engineSrc = readSrc('validation/ValidationEngine.ts');
+    assert(/reasoningIntensive:\s*d\.raciocinio === 'livre'/.test(engineSrc), 'o motor liga reasoningIntensive só para o tipo que declara raciocínio livre');
     const observerOccurrences = (observerSrc.match(/reasoningIntensive:\s*true/g) || []).length;
-    assert(observerOccurrences === 2, `ObserverValidator.ts tem exatamente 2 call sites com reasoningIntensive=true (os dois juízes de grounding) — obtido: ${observerOccurrences}`, observerOccurrences);
+    assert(observerOccurrences === 0, `ObserverValidator.ts não tem mais call sites próprios com reasoningIntensive — obtido: ${observerOccurrences}`, observerOccurrences);
 
     assert(/callPlannerLLM[\s\S]{0,2000}reasoningIntensive:\s*true/.test(plannerSrc), 'GoalPlanner.callPlannerLLM() passa reasoningIntensive=true dentro de uma janela razoável de código', plannerSrc.length);
 
     // Janela ampla (a função é longa — monta um prompt grande antes da chamada real) — o que
     // importa é que a ocorrência fique DEPOIS da declaração do método, não antes.
     const methodIdx = goalExecSrc.indexOf('private async validateGoalCompletion(');
-    const reasoningIdx = goalExecSrc.indexOf('reasoningIntensive: true', methodIdx);
     assert(methodIdx !== -1, 'validateGoalCompletion() encontrado em GoalExecutionLoop.ts', methodIdx);
-    assert(
-        methodIdx !== -1 && reasoningIdx !== -1 && reasoningIdx - methodIdx < 20000,
-        `GoalExecutionLoop.validateGoalCompletion() passa reasoningIntensive=true a ${reasoningIdx - methodIdx} chars da declaração`,
-        { methodIdx, reasoningIdx }
-    );
+    // O validador de conclusão valida pelo motor (tipo conclusao_do_objetivo); o orçamento de raciocínio é do tipo (descritor).
+    const trecho = goalExecSrc.slice(methodIdx, methodIdx + 40000);
+    assert(/validar<DecisaoDeConclusao>\('conclusao_do_objetivo'/.test(trecho), 'validateGoalCompletion() valida pelo motor único (tipo conclusao_do_objetivo)');
 
     assert(
         !agentLoopSrc.includes('reasoningIntensive: true'),

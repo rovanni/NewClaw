@@ -55,7 +55,7 @@ const encontrados = arquivos(path.join(RAIZ, 'src'))
     .filter(p => !FORA.has(path.basename(p)))
     .map(p => ({ p, n: chamadas(fs.readFileSync(p, 'utf-8')) }))
     .filter(x => x.n > 0);
-assert(encontrados.length >= 10, `recenseamento encontrou ${encontrados.length} arquivos com decisão do LLM`);
+assert(encontrados.length >= 8, `recenseamento encontrou ${encontrados.length} arquivos com decisão do LLM`);
 for (const { p, n } of encontrados) {
     const nome = path.basename(p, '.ts');
     assert(tabela.includes(nome), `${path.relative(RAIZ, p)} (${n} chamada(s)) está no registro`,

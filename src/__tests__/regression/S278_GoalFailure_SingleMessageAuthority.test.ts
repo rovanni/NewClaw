@@ -39,6 +39,7 @@ import { permissionRegistry } from '../../core/PermissionRegistry';
 import { OperationalMode } from '../../core/CapabilityMode';
 import { Goal } from '../../loop/GoalTypes';
 import { makeLoop, makeGoal, emptyState, channelContext } from './_fixtures/goalLoopHarness';
+import './_fixtures/motorLegado';   // juízes simulados no formato antigo → formato do motor único (ADR-014)
 
 let passed = 0;
 let failed = 0;

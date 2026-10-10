@@ -16,18 +16,13 @@
  */
 
 import { createLogger } from '../shared/AppLogger';
-import { ProviderFactory, LLMMessage } from '../core/ProviderFactory';
+import type { ProviderFactory } from '../core/ProviderFactory';
 import { PlanStep } from './GoalTypes';
-import { DECISION_PROMPT_MAX_CHARS } from '../core/providerTypes';
-import { rodarEmSombra } from '../validation/sombra';
-import { estadoDoVeredito } from '../validation/motorPadrao';
+import { obterMotor } from '../validation/motorPadrao';
+import type { DecisaoDoPasso } from '../validation/tipos/demaisTipos';
 
 const log = createLogger('StepSemanticValidator');
 
-// Sem padrão embutido (issue 019): quando o operador não configura, quem decide o modelo é o
-// provedor ativo — via getProviderWithModel() sem modelo. Um nome de modelo de NUVEM como padrão
-// aqui era enviado ao provedor em uso, e numa instalação só-local ele não existe.
-const VALIDATOR_MODEL = process.env['SEMANTIC_VALIDATOR_MODEL'] ?? '';
 const FAST_PATH_CONFIDENCE_THRESHOLD = 0.72;
 const LLM_MISMATCH_CONFIDENCE_THRESHOLD = 0.80;
 
@@ -208,100 +203,35 @@ export class StepSemanticValidator {
         };
     }
 
+    /**
+     * Troca M4 (ADR-014, 09/10/2026): quem julga é o motor único, tipo `resultado_do_passo` — a pergunta, as entradas
+     * (pedido e resultado ÍNTEGROS; sem orçamento para o resultado inteiro o motor devolve "não avaliável", nunca um
+     * veredito sobre um trecho), o prazo, o modelo e o registro no gravador de voo são do descritor e do motor. Aqui
+     * ficam só as entradas deste consumidor e a escala de três estados que ele usa.
+     */
     private async llmValidate(
         step: PlanStep,
         toolOutput: string,
         goalIntent?: string,
         facts?: StepExecutionFacts,
     ): Promise<Omit<StepSemanticValidation, 'shouldDowngradeToPartial' | 'shouldPromoteToConfidentSuccess'>> {
-        // Informação Completa para Decidir (Sprint V5): o resultado do passo é o OBJETO da decisão — vai inteiro, e o
-        // pedido também. Antes: 600 chars escolhidos por coincidência de palavras-chave (uma heurística decidindo o que
-        // o LLM podia ver) e 200 chars do pedido. Sem orçamento para o resultado inteiro, "unverifiable" (não avaliável),
-        // que não rebaixa nem promove o passo — nunca um veredito sobre um trecho.
-        const lines = [
-            'Você é um validador de relevância de resultado de ferramentas.',
-            '',
-            `Intenção do step: "${step.description}"`,
-            goalIntent ? `Pedido do usuário (íntegro): "${goalIntent}"` : '',
-            `Ferramenta executada: ${step.toolName ?? 'agentloop'}`,
-            ...(facts ? describeFacts(facts) : []),
-            '',
-            'Output da ferramenta (íntegro):',
-            '"""',
-            toolOutput,
-            '"""',
-            '',
-            facts ? 'O output acima, junto com os fatos da execução, ENDEREÇA a intenção do step?' : 'O output acima ENDEREÇA a intenção do step?',
-            'Responda APENAS com JSON: {"result": "relevant"|"mismatch"|"unverifiable", "confidence": 0.0-1.0, "reason": "curta em português"}',
-            'Exemplo de mismatch: step pede cotações de BTC/ZEC mas output lista dados de ETH/ENA; step pede criar arquivo mas output é erro genérico.',
-        ].filter(Boolean);
-
-        const prompt = lines.join('\n');
-        if (prompt.length > DECISION_PROMPT_MAX_CHARS) {
-            log.info(`[StepSemanticValidator] step=${step.id} prompt de ${prompt.length} chars excede ${DECISION_PROMPT_MAX_CHARS} — não avaliável, sem chamar o LLM`);
-            return { result: 'unverifiable', confidence: 0.5, reason: `resultado grande demais para avaliar inteiro (${toolOutput.length} chars)`, usedFastPath: false };
-        }
-        const messages: LLMMessage[] = [{ role: 'user', content: prompt }];
-
-        // Reusa chatWithFallback em vez de getProviderWithModel() direto (D-08,
-        // docs/ARCHITECTURE/INVENTARIO_DUPLICACAO_2026-08-24.md) — mesmo mecanismo que
-        // ObserverValidator (S258) já usa. getProviderWithModel() sem providerName cai sempre em
-        // this.defaultProvider, sem nenhum fallback se essa única chamada falhar; chatWithFallback
-        // tenta os demais providers antes de desistir, com o orçamento abaixo delimitando a
-        // chamada inteira. O fail-soft ("unverifiable") continua decidido aqui, não no
-        // ProviderFactory — qualquer status diferente de 'success' cai no mesmo ramo.
-        // Campanha 09/10/2026: o teto fixo de 8 s saiu pelo mesmo caminho do contentStubClassifier (Sprint 043) — a
-        // evidência apareceu: `StepSemanticValidator status=timeout ms=16025` (2 × 8 s) num modelo local que leva ~5–6 s
-        // só para ler um prompt deste tamanho. Validar um passo é o perfil 'validacao' (ver auxTimeout.ts).
-        const orcamento = this.providerFactory.getBudgetAuxiliar('validacao');
-        const result = await this.providerFactory.chatWithFallback(messages, undefined, undefined, orcamento.timeoutMs, undefined, VALIDATOR_MODEL, { diag: { component: 'StepSemanticValidator', role: 'validator' } });
-        if (result.status !== 'success') {
-            log.debug(`[StepSemanticValidator] LLM falhou (status=${result.status}) — unverifiable`);
-            return { result: 'unverifiable', confidence: 0.5, reason: 'erro na validação LLM', usedFastPath: false };
-        }
-
         try {
-            const cleaned = result.content
-                .replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-            const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
-            if (!jsonMatch) {
-                return { result: 'unverifiable', confidence: 0.5, reason: 'LLM sem JSON válido', usedFastPath: false };
-            }
-
-            const parsed = JSON.parse(jsonMatch[0]) as { result?: string; confidence?: number; reason?: string };
-            const parsedResult = (['relevant', 'mismatch', 'unverifiable'] as const).includes(parsed.result as SemanticValidationResult)
-                ? (parsed.result as SemanticValidationResult)
-                : 'unverifiable';
-
-            const confidence = typeof parsed.confidence === 'number'
-                ? Math.max(0, Math.min(1, parsed.confidence))
-                : 0.6;
-
+            const { adaptado } = await obterMotor(this.providerFactory).validar<DecisaoDoPasso>('resultado_do_passo', {
+                pedido: goalIntent,
+                resultado: toolOutput,
+                passo: `Intenção do passo: ${step.description}\nFerramenta executada: ${step.toolName ?? 'agentloop'}`,
+                fatos: facts ? describeFacts(facts).join('\n') : undefined,
+            }, { stepId: step.id, phase: 'passo' });
+            const confidence = Math.max(0, Math.min(1, adaptado.confidence));
             log.info(
                 `[StepSemanticValidator] LLM step=${step.id}` +
                 ` tool=${step.toolName ?? 'agentloop'}` +
-                ` result=${parsedResult} confidence=${confidence.toFixed(2)}` +
-                ` reason="${(parsed.reason ?? '').slice(0, 80)}"`
+                ` result=${adaptado.result} confidence=${confidence.toFixed(2)}` +
+                ` reason="${(adaptado.reason ?? '').slice(0, 80)}"`
             );
-
-            // ADR-014 M4 — o mesmo julgamento pelo motor único, em sombra (as MESMAS entradas: passo, pedido, resultado
-            // íntegro, fatos da execução).
-            rodarEmSombra({
-                providerFactory: this.providerFactory, tipo: 'resultado_do_passo',
-                entradas: {
-                    pedido: goalIntent, resultado: toolOutput,
-                    passo: `Intenção do passo: ${step.description}\nFerramenta executada: ${step.toolName ?? 'agentloop'}`,
-                    fatos: facts ? describeFacts(facts).join('\n') : undefined,
-                },
-                contexto: { stepId: step.id },
-                avaliadorAtual: 'validacao_resultado_do_passo',
-                estadoAtual: parsedResult === 'relevant' ? 'aprovado' : parsedResult === 'mismatch' ? 'reprovado' : 'nao_avaliavel',
-                estadoDoMotor: estadoDoVeredito,
-            });
-
-            return { result: parsedResult, confidence, reason: parsed.reason, usedFastPath: false };
+            return { result: adaptado.result, confidence, reason: adaptado.reason, usedFastPath: false };
         } catch (err) {
-            log.debug(`[StepSemanticValidator] erro ao interpretar resposta: ${String(err).slice(0, 80)} — unverifiable`);
+            log.debug(`[StepSemanticValidator] erro no motor: ${String(err).slice(0, 80)} — unverifiable`);
             return { result: 'unverifiable', confidence: 0.5, reason: 'erro na validação LLM', usedFastPath: false };
         }
     }

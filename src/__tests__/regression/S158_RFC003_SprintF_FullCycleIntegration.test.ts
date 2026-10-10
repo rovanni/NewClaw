@@ -66,6 +66,7 @@ import { KNOWN_DEPS } from '../../loop/GoalEvaluator';
 import { commandExists } from '../../utils/crossPlatform';
 import { Goal, PlanStep, DependencyInfo } from '../../loop/GoalTypes';
 import { ChannelContext } from '../../loop/agentLoopTypes';
+import './_fixtures/motorLegado';   // juízes simulados no formato antigo → formato do motor único (ADR-014)
 
 let passed = 0;
 let failed = 0;

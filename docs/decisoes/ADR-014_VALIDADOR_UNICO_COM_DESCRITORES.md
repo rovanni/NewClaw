@@ -2,9 +2,15 @@
 
 > **Status:** **aprovado** pelo operador (08/10/2026). **M0 implementado** (motor, contrato, modo de raciocínio,
 > `faltou`/`dificuldade` — `src/validation/`, teste `S363`). **09/10/2026 (prioridade 0):** primeiro tipo NOVO nascido
-> no motor, `suficiencia_do_pedido` (ADR-015, em produção); **M1–M6 em sombra** — os seis validadores atuais têm o seu
-> tipo no motor, rodando junto, sem decidir, com a comparação no gravador de voo (`VALIDACAO_SOMBRA`, teste `S369`).
-> **Pendente:** a TROCA de cada validador (M2…), pelo critério da §5, depois de um período de sombra em uso real.
+> no motor, `suficiencia_do_pedido` (ADR-015, em produção). **09/10/2026 (noite) — TROCA FEITA (M1–M6), por decisão do
+> operador:** os seis validadores antigos deixaram de decidir; grounding, qualidade, passo, conclusão, risco e
+> conteúdo-molde decidem TODOS pelo motor único (o código de prompt/leitura de JSON/modelo/prazo de cada um foi removido;
+> a máquina de sombra e `VALIDACAO_SOMBRA` também). Padronização (teste `S373`): UM modelo do juiz (`OBSERVER_MODEL`, mudado
+> em tempo de execução por `ValidationEngine.definirModeloDoJuiz`), a política de "sem veredito" declarada no descritor
+> (`semVeredito: bloquear | liberar`, exposta como `deveBloquear`) e um adaptador por tipo. O critério da §5 (período de
+> sombra) foi dispensado pelo operador: "não adianta resolver o problema e não colocar para funcionar".
+> **Pendente:** a revisão de plano do `RiskAnalyzer` (GERA um plano corrigido quando o juiz reprova — geração, não
+> julgamento; deve migrar para o GoalPlanner); o recenseamento S356 ler o registro de descritores; a tela "Validadores".
 > **Data:** 08/10/2026
 > **Origem:** proposta do operador — *"ao invés de ter vários validadores diferentes, ter um padrão e apenas um
 > validador; ele recebe o tipo de validação e todos os dados necessários — entrada, saída, risco etc. Como o MCP:
@@ -221,3 +227,20 @@ observações `faltou` não apontam entrada obrigatória ausente.
     julga) e bloqueou a resposta; o motor validou, com todas as citações conferidas. Passo 2/2, conclusão 1/1
     concordaram; risco 0/1 (o atual pediu passo de entrega numa pergunta respondida no chat; o motor aprovou).
   - Custo: com todas as sombras ligadas num servidor de um pedido por vez, 144 s → 412 s. Por isso desligado por padrão.
+- **09/10/2026 (noite) — a TROCA (M1–M6), pedida pelo operador:** deixar os validadores novos em sombra e os antigos
+  decidindo era "enxugar gelo" — o problema continuava aparecendo. Os seis passaram a decidir pelo motor único:
+  - Grounding (`ObserverValidator.validateGrounding`): tipo `saida_contra_evidencia`; evidência e resposta inteiras
+    (sem corte; acima do teto → `UNVALIDATED`), citação de cada veredito conferida pelo código. As experiências de
+    sombra do juiz antigo (`GROUNDING_EVIDENCE_SHADOW`, `GROUNDING_SHADOW_MODEL`) saíram com ele.
+  - Qualidade (`ObserverValidator.validate`): tipo `qualidade_da_resposta`; ganhou o item "não afirmar ação feita sem
+    ferramenta" (`claimed_without_execution`, portão `AgentLoop.verificarAcaoAfirmada`).
+  - Passo (`StepSemanticValidator`): `resultado_do_passo`, agora por itens (sim/não/sem evidência → relevante/
+    incompatível/não verificável). Conclusão (`GoalExecutionLoop.validateGoalCompletion`): `conclusao_do_objetivo`,
+    com as regras de interpretação de saída que estavam no prompt antigo agora no checklist. Conteúdo-molde
+    (`contentStubClassifier`): `conteudo_molde`.
+  - Risco (`RiskAnalyzer`): o juiz (`risco_do_plano`) decide se o plano tem riscos; só quando reprova roda o revisor,
+    que ESCREVE o plano corrigido recebendo os riscos como fato. Esse revisor é geração (pertence ao GoalPlanner) —
+    fica registrado como pendente, não como juiz.
+  - Padronização conferida por auditoria dos sete descritores (divergências achadas: 4 chaves de modelo, política de
+    falha dentro de cada consumidor, adaptador só em 3 tipos) e travada pelo teste `S373`.
+  - Fora do ADR, consequência: `VALIDACAO_SOMBRA`, `src/validation/sombra.ts` e os testes S306/S307/S369 foram removidos.

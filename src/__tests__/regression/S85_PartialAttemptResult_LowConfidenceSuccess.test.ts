@@ -40,6 +40,8 @@ import { GoalStore } from '../../loop/GoalStore';
 import { ToolRegistry } from '../../core/ToolRegistry';
 import { Goal, PlanStep, GoalAttempt } from '../../loop/GoalTypes';
 import { ChannelContext } from '../../loop/agentLoopTypes';
+import { vereditoPasso } from './_fixtures/veredito';
+import './_fixtures/motorLegado';   // juízes simulados no formato antigo → formato do motor único (ADR-014)
 
 let passed = 0;
 let failed = 0;
@@ -84,7 +86,7 @@ if (TEXT_LONG_RELEVANT.length < 200) throw new Error('TEXT_LONG_RELEVANT curto d
 // passam pelo MESMO chatWithFallback nestes cenários agora, então os mocks abaixo distinguem
 // pelo conteúdo do prompt qual dos dois validadores está perguntando, em vez de responder
 // sempre a mesma coisa (mesmo padrão já aplicado em S115).
-const SEMANTIC_VALIDATOR_PROMPT_MARKER = 'validador de relevância de resultado de ferramentas';
+const SEMANTIC_VALIDATOR_PROMPT_MARKER = 'ENDEREÇA a intenção do passo';
 
 function isSemanticValidatorPrompt(messages: Array<{ content?: string }>): boolean {
     return messages.some(m => (m.content ?? '').includes(SEMANTIC_VALIDATOR_PROMPT_MARKER));
@@ -121,7 +123,7 @@ function makeSemanticValidatorRelevantProviderFactory() {
     return {
         getBudgetAuxiliar: () => ({ timeoutMs: 45_000, origem: 'padrao', latenciaTipicaMs: null }),
         chatWithFallback: async (messages: Array<{ content?: string }>) => isSemanticValidatorPrompt(messages)
-            ? { status: 'success', content: JSON.stringify({ result: 'relevant', confidence: 0.85, reason: 'teste S85 — LLM confirma relevância genuína' }), attempts: [] }
+            ? { status: 'success', content: vereditoPasso('relevant', 0.85, 'teste S85 — LLM confirma relevância genuína'), attempts: [] }
             : { status: 'success', content: JSON.stringify({ achieved: true, summary: 'teste S85' }), attempts: [] },
         getProvider: () => undefined,
     } as unknown as import('../../core/ProviderFactory').ProviderFactory;
@@ -134,7 +136,7 @@ function makeCountingProviderFactory(counter: { calls: number }) {
         chatWithFallback: async (messages: Array<{ content?: string }>) => {
             if (isSemanticValidatorPrompt(messages)) {
                 counter.calls++;
-                return { status: 'success', content: JSON.stringify({ result: 'relevant', confidence: 0.85 }), attempts: [] };
+                return { status: 'success', content: vereditoPasso('relevant', 0.85), attempts: [] };
             }
             return { status: 'success', content: JSON.stringify({ achieved: true, summary: 'teste S85' }), attempts: [] };
         },
@@ -147,7 +149,7 @@ function makeMismatchProviderFactory() {
         // Usado só pelo StepSemanticValidator (slow path) no cenário S85.5.
         getBudgetAuxiliar: () => ({ timeoutMs: 45_000, origem: 'padrao', latenciaTipicaMs: null }),
         chatWithFallback: async (messages: Array<{ content?: string }>) => isSemanticValidatorPrompt(messages)
-            ? { status: 'success', content: JSON.stringify({ result: 'mismatch', confidence: 0.9, reason: 'teste S85 — output não endereça a intenção do step' }), attempts: [] }
+            ? { status: 'success', content: vereditoPasso('mismatch', 0.9, 'teste S85 — output não endereça a intenção do step'), attempts: [] }
             : { status: 'success', content: JSON.stringify({ achieved: true, summary: 'teste S85' }), attempts: [] },
         getProvider: () => undefined,
     } as unknown as import('../../core/ProviderFactory').ProviderFactory;

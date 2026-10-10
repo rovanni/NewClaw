@@ -30,6 +30,7 @@ import { Goal, PlanStep, GoalAttempt } from '../../loop/GoalTypes';
 import { resolveArtifactPathFromEvidence } from '../../loop/planning/artifactContract';
 import { ProviderFactory } from '../../core/ProviderFactory';
 import { ReflectionMemory } from '../../memory/ReflectionMemory';
+import './_fixtures/motorLegado';   // juízes simulados no formato antigo → formato do motor único (ADR-014)
 
 let passed = 0;
 let failed = 0;

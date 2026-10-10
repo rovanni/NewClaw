@@ -39,6 +39,9 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { ObserverValidator, GroundedClaim, EvidenceItem } from '../../loop/ObserverValidator';
+import './_fixtures/motorLegado';   // juízes simulados no formato antigo → formato do motor único (ADR-014)
+import { agregarPorItens } from '../../validation/contratoDeValidacao';
+import { estadoDeGrounding } from '../../validation/tipos/saidaContraEvidencia';
 
 let passed = 0;
 let failed = 0;
@@ -99,7 +102,11 @@ async function main(): Promise<void> {
 
 console.log('\n=== S217-1 — agregação: precedência REJECTED > NOT_EVALUABLE > VALIDATED ===');
 {
-    const A = ObserverValidator.aggregateGrounding;
+    // Troca ao motor único (ADR-014): a agregação é a do motor (`agregarPorItens`) e o estado, o do tipo (`estadoDeGrounding`).
+    const A = (cs: GroundedClaim[]) => {
+        const itens = cs.map(c => ({ item: c.claim, confere: (c.verdict === 'SUPPORTED' ? 'sim' : c.verdict === 'NOT_SUPPORTED' ? 'nao' : 'sem_evidencia') as 'sim' | 'nao' | 'sem_evidencia' }));
+        return estadoDeGrounding({ estado: agregarPorItens(itens), itens });
+    };
     assert(A([]) === 'NOT_APPLICABLE', 'lista vazia → NOT_APPLICABLE (não há afirmação a verificar)', A([]));
     assert(A([{ claim: 'a', evidence: ['E1'], verdict: 'SUPPORTED' }]) === 'VALIDATED', 'todas sustentadas → VALIDATED');
     assert(
@@ -185,15 +192,15 @@ console.log('\n=== S217-9 — saída estruturalmente inválida → UNVALIDATED =
     }
 }
 
-console.log('\n=== S217-10 — evidence_id inventado não sustenta SUPPORTED ===');
+console.log('\n=== S217-10 — proveniência inventada não sustenta SUPPORTED ===');
 {
-    // O juiz declarar proveniência não prova grounding (ADR-010 §2). Um id inexistente é
-    // invenção sobre a própria proveniência — não pode autorizar entrega.
-    const v = await judge('{"claims":[{"claim":"A = 10","evidence":["E99"],"verdict":"SUPPORTED"}]}')
+    // O juiz declarar proveniência não prova grounding (ADR-010 §2). No motor único a garantia é MAIS forte que a do id
+    // inexistente: a citação de cada veredito é CONFERIDA pelo código — um trecho que não existe literalmente nas evidências
+    // não decide nada e rebaixa o item para "sem evidência" (NOT_EVALUABLE).
+    const v = await judge('{"estado":"aprovado","itens":[{"item":"A = 10","confere":"sim","evidencia":"E1","trecho":"trecho que nenhuma evidência contém"}]}')
         .validateGrounding('A = 10.', EVID);
-    assert(v.state !== 'VALIDATED', 'id inexistente não autoriza entrega', v.state);
+    assert(v.state !== 'VALIDATED', 'citação inexistente não autoriza entrega', v.state);
     assert(v.claims[0]?.verdict === 'NOT_EVALUABLE', 'rebaixado para NOT_EVALUABLE', v.claims);
-    assert(v.claims[0]?.evidence.length === 0, 'o id inválido é descartado, não propagado', v.claims);
 }
 
 console.log('\n=== S217-11 — orçamento vem de getBudgetAuxiliar, não de constante nova ===');
@@ -267,7 +274,9 @@ console.log('\n=== S217-14 — resposta que não cabe NÃO é truncada: é UNVAL
     assert(!cap.prompts.some(p => p.includes(excedente)), 'o excedente nunca foi julgado');
     const src = fs.readFileSync(path.join(__dirname, '../../loop/ObserverValidator.ts'), 'utf-8');
     assert(!/response\.slice\(/.test(src), 'não existe mais truncamento da resposta no código');
-    assert(/GROUNDING_MAX_PROMPT_CHARS/.test(src), 'o teto é uma fronteira nomeada, não um número solto');
+    // Troca ao motor único (ADR-014): o teto é do motor — uma fronteira nomeada (DECISION_PROMPT_MAX_CHARS), não um número solto.
+    const engineSrc = fs.readFileSync(path.join(__dirname, '../../validation/ValidationEngine.ts'), 'utf-8');
+    assert(/DECISION_PROMPT_MAX_CHARS/.test(engineSrc), 'o teto é uma fronteira nomeada, não um número solto');
 }
 
 console.log('\n=== S217-15 — cifrão na evidência chega literal ao juiz ===');

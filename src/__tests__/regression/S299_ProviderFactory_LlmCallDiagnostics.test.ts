@@ -16,6 +16,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { ProviderFactory, buildLlmCallSummary } from '../../core/ProviderFactory';
 import type { LLMResult } from '../../core/providerTypes';
+import './_fixtures/motorLegado';   // juízes simulados no formato antigo → formato do motor único (ADR-014)
 
 let passed = 0;
 let failed = 0;
@@ -115,7 +116,8 @@ async function main(): Promise<void> {
                 if (!/diag\s*:/.test(src.slice(m.index, i))) semDiag.push(`${path.relative(root, f)}:${src.slice(0, m.index).split('\n').length}`);
             }
         }
-        assert(total >= 13, `encontrou os chamadores (${total})`);
+        // Troca ao motor único (ADR-014): os seis juízes deixaram de chamar o provedor — hoje quem chama é o ValidationEngine (um só).
+        assert(total >= 8, `encontrou os chamadores (${total})`);
         assert(semDiag.length === 0, 'nenhum chamador sem diag', semDiag);
     }
 

@@ -11,6 +11,7 @@
  * Execução: npx ts-node src/__tests__/regression/S332_ObserverModel_CloudDefaultOnlyForOllama.test.ts
  */
 import { ObserverValidator } from '../../loop/ObserverValidator';
+import './_fixtures/motorLegado';   // juízes simulados no formato antigo → formato do motor único (ADR-014)
 
 let passed = 0;
 let failed = 0;
@@ -18,8 +19,9 @@ function assert(c: boolean, m: string, d?: unknown): void {
     if (c) { console.log(`  ✅ ${m}`); passed++; } else { console.error(`  ❌ FALHOU: ${m}`, d ?? ''); failed++; }
 }
 
-const judgeJson = JSON.stringify({ claims: [{ claim: 'x', evidence: ['E1'], verdict: 'SUPPORTED' }] });
+const judgeJson = JSON.stringify({ estado: 'aprovado', itens: [{ item: 'x', confere: 'sim', evidencia: 'E1', trecho: 'x' }] });
 
+// Desde a troca ao motor único o juiz sem modelo configurado chama o provedor com modelo AUSENTE (undefined), não ''. Mesmo contrato: o provedor usa o próprio padrão.
 /** Provedor falso que registra o modelo pedido em cada chamada (6º argumento do chatWithFallback). */
 function factory(defaultProvider: string | null, models: Array<string | undefined>) {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -48,14 +50,14 @@ console.log('\n=== S332-1 — provedor padrão Ollama, sem OBSERVER_MODEL: nenhu
 {
     const models: Array<string | undefined> = [];
     await quiet(() => new ObserverValidator(factory('ollama', models)).validateGrounding('x', ev));
-    assert(models[0] === '', "pede '' — o Ollama usa o modelo padrão do painel (antes: qwen3.5:cloud em silêncio)", models);
+    assert(!models[0], "não pede modelo (vazio) — o Ollama usa o modelo padrão do painel (antes: qwen3.5:cloud em silêncio)", models);
 }
 
 console.log('\n=== S332-2 — provedor padrão local (custom), sem OBSERVER_MODEL: modelo do provedor ===');
 {
     const models: Array<string | undefined> = [];
     await quiet(() => new ObserverValidator(factory('bonsai', models)).validateGrounding('x', ev));
-    assert(models[0] === '', "pede '' (o provedor usa o próprio modelo)", models);
+    assert(!models[0], "não pede modelo (vazio) (o provedor usa o próprio modelo)", models);
 }
 
 console.log('\n=== S332-3 — OBSERVER_MODEL / setModel configurados: nunca tocados ===');
@@ -72,7 +74,7 @@ console.log('\n=== S332-4 — sem como saber o provedor: mesmo contrato ===');
 {
     const models: Array<string | undefined> = [];
     await quiet(() => new ObserverValidator(factory(null, models)).validateGrounding('x', ev));
-    assert(models[0] === '', "sem getDefaultProvider → '' (nada embutido)", models);
+    assert(!models[0], "sem getDefaultProvider → nenhum modelo (nada embutido)", models);
 }
 
 console.log(`\n${'─'.repeat(60)}`);

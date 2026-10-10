@@ -29,6 +29,7 @@ import { Goal, PlanStep, CycleResult } from '../../loop/GoalTypes';
 import { ChannelContext } from '../../loop/agentLoopTypes';
 import { KNOWN_DEPS } from '../../loop/GoalEvaluator';
 import { CapabilityRegistry } from '../../core/CapabilityRegistry';
+import './_fixtures/motorLegado';   // juízes simulados no formato antigo → formato do motor único (ADR-014)
 
 let passed = 0;
 let failed = 0;
