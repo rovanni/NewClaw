@@ -28,6 +28,7 @@ import { ProviderFactory } from '../core/ProviderFactory';
 import { MemoryManager } from '../memory/MemoryManager';
 import { ContextBuilder } from './ContextBuilder';
 import { criarMotorDeValidacao } from '../validation/motorPadrao';
+import { executarNoTurno } from '../shared/turnCancellation';
 import type { ValidationEngine } from '../validation/ValidationEngine';
 import { TIPO_SUFICIENCIA_DO_PEDIDO, type DecisaoDeSuficiencia } from '../validation/tipos/suficienciaDoPedido';
 import { ReflectionMemory } from '../memory/ReflectionMemory';
@@ -60,8 +61,18 @@ interface RecentCompletedGoal {
     isGoal: boolean;
 }
 
+/** Resposta do pedido que o usuário interrompeu (botão "Parar" / /cancelar) antes de o trabalho terminar. */
+export const MENSAGEM_PEDIDO_INTERROMPIDO = '⏹ Pedido interrompido.';
+
 export class GoalOrchestrator {
     private readonly goalStore: GoalStore;
+    /**
+     * Um token de cancelamento por TURNO em andamento, da chegada da mensagem até a resposta — não só do goal. Achado real
+     * (10/10/2026, log de produção): o botão "Parar" chegou como /cancelar 4 s depois do pedido, ainda na extração/roteador/
+     * suficiência — fase em que não existe goal nem turno do agente. cancelActiveGoal e agentLoop.cancel não acharam nada,
+     * a resposta foi "nada em andamento" e o pedido seguiu, criou o goal e rodou por minutos.
+     */
+    private readonly turnosAtivos = new Map<string, AbortController>();
     private readonly extractor: GoalExtractor;
     /** ADR-014/015: motor único de validação, com os tipos registrados em validation/motorPadrao. */
     private readonly motorDeValidacao: ValidationEngine;
@@ -149,6 +160,50 @@ export class GoalOrchestrator {
         recentMessages?: Array<{ role: string; content: string }>,
         options?: { onStatus?: (event: SemanticStatusEvent) => void }
     ): Promise<string | ProcessedResult> {
+        const chaveDoTurno = composeSessionKey(
+            context ? { channel: context.channel, userId: context.userId ?? userId } : { channel: 'unknown', userId }
+        );
+        const turno = new AbortController();
+        this.turnosAtivos.set(chaveDoTurno, turno);
+        try {
+            return await executarNoTurno(turno.signal, () => this.processarTurno(conversationId, message, userId, context, recentMessages, options, turno.signal));
+        } finally {
+            if (this.turnosAtivos.get(chaveDoTurno) === turno) this.turnosAtivos.delete(chaveDoTurno);
+        }
+    }
+
+    /**
+     * Cancela TUDO que a sessão tem em andamento: o turno (qualquer fase — extração, roteador, suficiência, planejamento),
+     * a chamada em curso do agente e o goal ativo. `turno` = havia um turno rodando; `goal` = o goal abandonado, se existia.
+     */
+    cancelarTurno(channel: string, userId: string): { turno: boolean; goal: Goal | null } {
+        const chave = composeSessionKey({ channel, userId });
+        const ctrl = this.turnosAtivos.get(chave);
+        if (ctrl && !ctrl.signal.aborted) {
+            ctrl.abort();
+            log.info(`[GoalOrchestrator] turno da sessão ${chave} cancelado pelo usuário (trigger=user_cancel)`);
+        }
+        const goal = this.cancelActiveGoal(channel, userId);
+        return { turno: !!ctrl, goal };
+    }
+
+    /** Entrega ao AgentLoop — a menos que o turno já tenha sido cancelado (o cancelamento nunca se perde entre as fases). */
+    private async entregarAoAgente(
+        signal: AbortSignal, conversationId: string, message: string, userId: string, context?: ChannelContext,
+    ): Promise<string | ProcessedResult> {
+        if (signal.aborted) return MENSAGEM_PEDIDO_INTERROMPIDO;
+        return this.agentLoop.process(conversationId, message, userId, context);
+    }
+
+    private async processarTurno(
+        conversationId: string,
+        message: string,
+        userId: string,
+        context: ChannelContext | undefined,
+        recentMessages: Array<{ role: string; content: string }> | undefined,
+        options: { onStatus?: (event: SemanticStatusEvent) => void } | undefined,
+        signal: AbortSignal,
+    ): Promise<string | ProcessedResult> {
         // TTL cleanup a cada processamento (query lightweight)
         this.goalStore.expireStale();
 
@@ -221,7 +276,7 @@ export class GoalOrchestrator {
                 } else {
                     log.info(`[GoalOrchestrator] [AUTH-DETECTED] workflowEngine not set — delegating to AgentLoop`);
                 }
-                return this.agentLoop.process(conversationId, message, userId, context);
+                return this.entregarAoAgente(signal, conversationId, message, userId, context);
             }
         }
 
@@ -337,12 +392,16 @@ export class GoalOrchestrator {
             ` message="${message.slice(0, 80)}"`
         );
 
+        // Cancelamento: depois da classificação e do roteador (a parte lenta e sem goal ainda), antes de qualquer outra fase.
+        if (signal.aborted) return MENSAGEM_PEDIDO_INTERROMPIDO;
+
         // ── ADR-015: suficiência do pedido — antes de qualquer ferramenta, nos DOIS caminhos (goal e agente) ──
         // Falta um dado do usuário e nem a memória o tem → a pergunta é obrigatória; a resposta volta junto do pedido
         // original (pendingClarifications). Quando este tipo decide, ele é a autoridade única de "perguntar ou não".
         let suficienciaDecidiu = false;
         if ((routerRequiresTools || routerRequiresGoal) && process.env.VALIDACAO_SUFICIENCIA !== 'off') {
-            const decisao = await this.verificarSuficiencia(message, recentMessages, conversationId);
+            const decisao = await this.verificarSuficiencia(message, recentMessages, conversationId, signal);
+            if (signal.aborted) return MENSAGEM_PEDIDO_INTERROMPIDO;
             if (decisao.acao !== 'sem_veredito') suficienciaDecidiu = true;
             if (decisao.acao === 'perguntar') {
                 log.info(`[SUFICIENCIA] faltando=[${decisao.faltando.join(' | ')}] — pergunta ao usuário; pedido guardado para session=${sessionKey}`);
@@ -359,7 +418,7 @@ export class GoalOrchestrator {
                 `[GOAL-ROUTING] route=agentloop reason=${classification.reason ?? 'goal_extractor_timeout'}` +
                 ` classificationMs=${classificationMs} timedOut=true usedFastPath=false`
             );
-            return this.agentLoop.process(conversationId, message, userId, context);
+            return this.entregarAoAgente(signal, conversationId, message, userId, context);
         }
 
         // P1 — Telemetria de roteamento: emitida em TODAS as decisões de routing.
@@ -376,7 +435,7 @@ export class GoalOrchestrator {
         if (!routerRequiresGoal) {
             log.debug(`[GoalOrchestrator] not-goal reason=${classification.reason}`);
             const roiStart = Date.now();
-            const agentResult = await this.agentLoop.process(conversationId, message, userId, context);
+            const agentResult = await this.entregarAoAgente(signal, conversationId, message, userId, context);
 
             // Registra intent mesmo para mensagens não-goal (heuristic_negative),
             // para que follow-ups recebam o tópico correto como contexto.
@@ -461,7 +520,7 @@ export class GoalOrchestrator {
         // espera receber como texto no chat, não como arquivo anexo.
         if (this.isPlainTextGoal(message)) {
             log.info(`[GOAL-ROUTING] route=agentloop_inline reason=plain_text_goal intent="${message.slice(0, 80)}"`);
-            const inlineResult = await this.agentLoop.process(conversationId, message, userId, context);
+            const inlineResult = await this.entregarAoAgente(signal, conversationId, message, userId, context);
             // Registra como goal concluído para Sugestão 3: follow-ups recebem o output anterior.
             // isGoal=true porque passou pela classificação de goal (mesmo que roteado inline).
             this.recentCompletedGoals.set(sessionKey, {
@@ -491,6 +550,7 @@ export class GoalOrchestrator {
         // Aviso inline: se havia goal com auth pendente, será anexado à resposta final
         const abandonedAuthPending = currentActiveGoal?.status === 'blocked' && !!currentActiveGoal.pendingTxnId;
 
+        if (signal.aborted) return MENSAGEM_PEDIDO_INTERROMPIDO;   // cancelado antes de existir o goal: nada é criado
         const goal = this.goalStore.create({
             sessionKey,
             conversationId,
@@ -629,7 +689,7 @@ export class GoalOrchestrator {
         }
 
         // Nunca chegou a executar — cai para AgentLoop normal
-        return this.agentLoop.process(conversationId, message, userId, context);
+        return this.entregarAoAgente(signal, conversationId, message, userId, context);
     }
 
     /**
@@ -657,6 +717,7 @@ export class GoalOrchestrator {
         pedido: string,
         recentMessages: Array<{ role: string; content: string }> | undefined,
         conversationId: string,
+        signal?: AbortSignal,
     ): Promise<DecisaoDeSuficiencia> {
         try {
             const preferencias = ContextBuilder.blocoDePreferencias(
@@ -671,7 +732,7 @@ export class GoalOrchestrator {
                 return `- ${t.name}: ${(t.description || '').replace(/\s+/g, ' ').slice(0, 200)}${exige.length ? ` | exige: ${exige.join('; ')}` : ''}`;
             }).join('\n');
             const r = await this.motorDeValidacao.validar<DecisaoDeSuficiencia>(TIPO_SUFICIENCIA_DO_PEDIDO,
-                { pedido, preferencias, memoria, conversa, ferramentas }, { conversationId, phase: 'suficiencia' });
+                { pedido, preferencias, memoria, conversa, ferramentas }, { conversationId, phase: 'suficiencia', signal });
             const d = r.adaptado;
             log.info(`[SUFICIENCIA] acao=${d.acao} faltando=[${d.faltando.join(' | ')}] resolvidos=[${d.resolvidos.map(x => `${x.dado}=${x.valor ?? '?'}`).join(' | ')}]${d.motivo ? ` motivo="${d.motivo.slice(0, 120)}"` : ''}`);
             return d;

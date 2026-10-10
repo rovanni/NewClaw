@@ -268,6 +268,14 @@ export interface ChatFallbackOptions {
      * que não suporta ignora — a telemetria registra o que foi pedido.
      */
     raciocinio?: 'desligado' | 'livre';
+    /**
+     * Saída ESTRUTURADA: pede ao provedor que a resposta seja um único objeto JSON (Ollama: `format: 'json'`; servidor
+     * OpenAI-compatível: `response_format: json_object`). Existe para o validador único (ADR-014): com `glm-5.3:cloud` e o
+     * raciocínio desligado o modelo escrevia 22–25 mil caracteres de análise ANTES do JSON, estourava o prazo e a saída "sem a
+     * estrutura do contrato" bloqueava a resposta (produção, 10/10/2026). Pedir no prompt não basta; o provedor restringe.
+     * Provedor que não suporta ignora.
+     */
+    saidaJson?: boolean;
 }
 
 /** Gravador de voo (ADR-013): o que aconteceu numa chamada ao LLM, tentativa por tentativa. */
@@ -380,4 +388,6 @@ export interface ChatOptions {
     telemetry?: AttemptTelemetry;
     /** Ver `ChatFallbackOptions.raciocinio` (ADR-014). */
     raciocinio?: 'desligado' | 'livre';
+    /** Ver `ChatFallbackOptions.saidaJson`. */
+    saidaJson?: boolean;
 }

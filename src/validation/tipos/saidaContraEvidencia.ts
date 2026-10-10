@@ -67,7 +67,7 @@ export const descritorSaidaContraEvidencia: DescritorDeValidacao<DecisaoDeGround
     agregacao: 'itens',
     preVerificacoes: ['citacao_existe_na_fonte'],
     // Medição pedida pelo ADR-014 ("a qualidade dos vereditos sem raciocínio não foi medida — M1 mede, na sombra").
-    raciocinio: 'desligado',
+    raciocinio: 'livre',   // respeita o provedor e o modelo: com think:false o glm-5.3 escrevia ~25 mil chars de análise no CONTEÚDO (produção 10/10)
     semVeredito: 'bloquear',   // ADR-010 §9: o juiz que não conclui nunca é aprovação (fail-closed)
     adaptador: adaptarGrounding,
 };

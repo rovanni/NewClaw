@@ -2077,6 +2077,17 @@ export class GoalExecutionLoop {
         while (totalCycles < GOAL_LIMITS.MAX_CYCLES) {
             totalCycles++;
 
+            // Cancelamento (botão "Parar" / /cancelar): também no INÍCIO de cada ciclo. Antes só se olhava depois de um passo
+            // executado; um cancelamento que chegava durante o planejamento ou a validação esperava o próximo passo inteiro.
+            const noInicioDoCiclo = this.goalStore.getById(currentGoal.id);
+            if (noInicioDoCiclo?.status === 'abandoned') {
+                const motivo = this.goalStore.consumeAbandonReason(noInicioDoCiclo.id)
+                    ?? 'Goal interrompido: cancelado pelo usuário.';
+                log.info(`[GoalLoop] goal=${noInicioDoCiclo.id} foi abandonado antes do ciclo ${totalCycles} — saindo do loop (${motivo})`);
+                const explicacao = this.gracefulDelivery.buildFailureMessage(noInicioDoCiclo, state.cognitiveContext, motivo);
+                return this.buildResult(noInicioDoCiclo, false, totalCycles, totalReplans, explicacao);
+            }
+
             await onProgress?.({
                 goalId: currentGoal.id,
                 cycle: totalCycles,

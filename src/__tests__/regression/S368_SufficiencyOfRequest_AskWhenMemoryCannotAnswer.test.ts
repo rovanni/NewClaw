@@ -54,8 +54,8 @@ async function main(): Promise<void> {
             'campo extra que colide com o veredito, fora de snake_case ou sem instrução é recusado no registro', erros);
         const semFonte = { ...descritorSuficienciaDoPedido, tipo: 'x_sem_fonte', fontesDaCitacao: ['contexto_do_usuario'] };
         assert(validarDescritor(semFonte as never).some(e => /fonte da citação/.test(e)), 'citação sem nenhuma entrada no papel declarado é recusada');
-        assert(descritorSuficienciaDoPedido.raciocinio === 'desligado' && descritorSuficienciaDoPedido.semVeredito === 'liberar',
-            'raciocínio desligado; sem veredito não bloqueia (política declarada no descritor)');
+        assert(descritorSuficienciaDoPedido.raciocinio === 'livre' && descritorSuficienciaDoPedido.semVeredito === 'liberar',
+            'raciocínio do provedor/modelo (livre); sem veredito não bloqueia (política declarada no descritor)');
     }
 
     console.log('\n=== S368-2 — prompt: campo extra pedido; citação pode vir do pedido ===');
@@ -76,7 +76,7 @@ async function main(): Promise<void> {
 
         const nada = motorCom({ estado: 'aprovado', itens: [] });
         assert((await validar(nada.motor, { pedido: 'Por que as criptomoedas caíram hoje?' })).acao === 'seguir', 'nenhum dado do usuário exigido → seguir');
-        assert(nada.opcoes[0]?.raciocinio === 'desligado', 'a chamada leva raciocinio=desligado (declarado pelo tipo)');
+        assert(nada.opcoes[0]?.raciocinio === 'livre', 'a chamada leva raciocinio=livre (declarado pelo tipo)');
 
         const memoria = motorCom({ estado: 'aprovado', itens: [{ item: 'cidade da previsão', confere: 'sim', evidencia: 'Curitiba', trecho: 'considere Curitiba para a previsão do tempo' }], pergunta_ao_usuario: 'Para qual cidade?' });
         const d1 = await validar(memoria.motor, { pedido: 'Vai chover amanhã de manhã?', preferencias: PREF });

@@ -7,7 +7,7 @@
  * mexia nos outros e eles divergiam. Agora decidem TODOS pelo mesmo motor (`ValidationEngine`); o que muda de um para
  * outro é o descritor (dados). Este teste trava a padronização:
  *
- * S373-1 — o registro: todo tipo declara a política de "sem veredito", tem adaptador, raciocínio desligado e nenhum tem
+ * S373-1 — o registro: todo tipo declara a política de "sem veredito", tem adaptador, raciocínio livre e nenhum tem
  *          chave de modelo própria.
  * S373-2 — um ÚNICO ponto muda o modelo de todos os tipos (e o `setModel` do observador do painel chega nele).
  * S373-3 — nenhum consumidor tem mais prompt/leitor de JSON/modelo de juiz próprios; todos chamam o motor; sem sombra.
@@ -48,7 +48,7 @@ console.log('\n=== S373-1 — todo tipo segue o mesmo padrão ===');
     for (const d of tipos) {
         assert(d.semVeredito === 'bloquear' || d.semVeredito === 'liberar', `${d.tipo}: declara a política de "sem veredito"`, d.semVeredito);
         assert(typeof d.adaptador === 'function', `${d.tipo}: tem adaptador (a tradução para o consumidor é do tipo, não do consumidor)`);
-        assert(d.raciocinio === 'desligado', `${d.tipo}: raciocínio desligado`);
+        assert(d.raciocinio === 'livre', `${d.tipo}: raciocínio livre (respeita o provedor/modelo; think:false fazia o glm-5.3 escrever análise no conteúdo)`);
         assert(!('modeloConfig' in d), `${d.tipo}: sem chave de modelo própria (um modelo do juiz para todos)`);
     }
     const porTipo = Object.fromEntries(tipos.map(t => [t.tipo, t.semVeredito]));

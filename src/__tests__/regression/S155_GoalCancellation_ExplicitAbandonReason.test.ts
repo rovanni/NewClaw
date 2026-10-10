@@ -176,7 +176,11 @@ async function main() {
     {
         const src = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'agentControllerCommands.ts'), 'utf-8');
         assert(/agentLoop\.cancel\(msg\.userId\)/.test(src), 'ainda aborta a chamada de LLM/tool em curso (comportamento original preservado)');
-        assert(/goalOrchestrator\.cancelActiveGoal\(msg\.channel, msg\.userId\)/.test(src), 'NOVO: também marca o goal ativo da sessão como abandonado');
+        // S375 (10/10/2026): o comando usa cancelarTurno, que cobre o turno inteiro (inclusive antes de existir goal) E marca o
+        // goal ativo como abandonado — via o mesmo cancelActiveGoal, que continua sendo a única autoridade do abandono.
+        const orq = fs.readFileSync(path.join(process.cwd(), 'src', 'loop', 'GoalOrchestrator.ts'), 'utf-8');
+        assert(/goalOrchestrator\.cancelarTurno\(msg\.channel, msg\.userId\)/.test(src) && /const goal = this\.cancelActiveGoal\(channel, userId\);/.test(orq),
+            'também marca o goal ativo da sessão como abandonado (cancelarTurno → cancelActiveGoal)');
         assert(/goalOrchestrator: GoalOrchestrator/.test(src), 'registerCommands() recebe goalOrchestrator como parâmetro tipado');
     }
 

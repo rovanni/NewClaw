@@ -3,6 +3,7 @@
  * Suporta: Gemini, DeepSeek, Groq, OpenAI, OpenRouter, Anthropic, Ollama
  */
 
+import { combinarSinais, sinalDoTurno } from '../shared/turnCancellation';
 import { createLogger } from '../shared/AppLogger';
 import { errorMessage } from '../shared/errors';
 import { circuitRegistry } from './CircuitBreaker';
@@ -293,6 +294,8 @@ export class ProviderFactory {
      */
     async chatWithFallback(messages: LLMMessage[], tools?: ToolDefinition[], preferredProvider?: string, timeoutMs?: number, externalSignal?: AbortSignal, modelOverride?: string, opts?: ChatFallbackOptions): Promise<LLMResult> {
         const t0 = Date.now();
+        // Cancelamento do TURNO (botão "Parar"): vale para a chamada em voo de QUALQUER componente, sem passar o sinal à mão.
+        externalSignal = combinarSinais(externalSignal, sinalDoTurno());
         const result = await this.chatWithFallbackImpl(messages, tools, preferredProvider, timeoutMs, externalSignal, modelOverride, opts);
         try {
             log.info(`[LLM-CALL] ${buildLlmCallSummary(opts?.diag, messages, result, Date.now() - t0)}`);
@@ -500,7 +503,7 @@ export class ProviderFactory {
                     // O que sobra do prazo de quem chamou (na primeira tentativa, o próprio `timeoutMs`).
                     const restanteDaTentativa = restanteDoPrazo();
                     const timeoutDaTentativa = (timeoutMs && restanteDaTentativa !== undefined) ? Math.min(timeoutMs, Math.max(1, restanteDaTentativa)) : timeoutMs;
-                    const chatOptions: ChatOptions = { signal: currentAbort.signal, timeoutMs: timeoutDaTentativa, reasoningIntensive: opts?.reasoningIntensive, telemetry: tentativaTele, raciocinio: opts?.raciocinio };
+                    const chatOptions: ChatOptions = { signal: currentAbort.signal, timeoutMs: timeoutDaTentativa, reasoningIntensive: opts?.reasoningIntensive, telemetry: tentativaTele, raciocinio: opts?.raciocinio, saidaJson: opts?.saidaJson };
                     const chatPromise = provider.chat(mensagensDoProvider, tools, chatOptions);
                     let result: LLMResponse;
 
@@ -709,7 +712,7 @@ export class ProviderFactory {
                         ? { provider: 'ollama', model: `${ollamaProvider.getModel()} (sem streaming)`, startedAt: new Date().toISOString() } : undefined;
                     if (teleNaoStreaming) opts!.telemetry!.attempts.push(teleNaoStreaming);
                     const t0NaoStreaming = Date.now();
-                    const result = await ollamaProvider.fallbackNonStreaming(mensagensNaoStreaming, tools, effectiveNonStreamingTimeoutMs, undefined, opts?.raciocinio)
+                    const result = await ollamaProvider.fallbackNonStreaming(mensagensNaoStreaming, tools, effectiveNonStreamingTimeoutMs, undefined, opts?.raciocinio, opts?.saidaJson)
                         .catch((e) => { if (teleNaoStreaming) Object.assign(teleNaoStreaming, { status: 'error', errorMessage: errorMessage(e), durationMs: Date.now() - t0NaoStreaming }); throw e; });
                     if (teleNaoStreaming) Object.assign(teleNaoStreaming, { status: result.content?.trim() ? 'success' : 'empty', durationMs: Date.now() - t0NaoStreaming, contentChars: (result.content || '').length, contentText: result.content || '' });
                     if (result.content && result.content.trim()) {

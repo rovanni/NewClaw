@@ -62,7 +62,8 @@ async function main(): Promise<void> {
     console.log('\n=== S283.1 [estrutural] — os 3 pontos de expiração/abandono chamam a autoridade com o motivo ===');
     {
         const calls = loopSrc.match(/this\.gracefulDelivery\.buildFailureMessage\(/g) ?? [];
-        assert(calls.length === 8, 'total de chamadas à autoridade = 5 (issue 020) + 3 (issue 028)', calls.length);
+        // 9 = 5 (issue 020) + 3 (issue 028) + 1 (S375: cancelamento no início do ciclo — a MESMA autoridade, não uma segunda).
+        assert(calls.length === 9, 'total de chamadas à autoridade = 5 (issue 020) + 3 (issue 028) + 1 (cancelamento no início do ciclo)', calls.length);
         assert(/buildFailureMessage\(goal, state\.cognitiveContext, 'Objetivo expirou por tempo limite\.'\)/.test(loopSrc),
             'expiração (runValidationNotAchievedPhase) chama a autoridade com o motivo');
         assert(/buildFailureMessage\(currentGoal, state\.cognitiveContext, 'Objetivo expirou por tempo limite\.'\)/.test(loopSrc),

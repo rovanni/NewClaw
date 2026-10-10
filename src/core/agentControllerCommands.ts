@@ -26,9 +26,11 @@ export function registerCommands(
             // uma falha comum de step e replanejar/continuar o MESMO goal. cancelActiveGoal()
             // marca o goal ativo da sessão como 'abandoned', para que o checkpoint dedicado em
             // GoalExecutionLoop.ts realmente encerre o loop (ver comentário no método).
+            // cancelarTurno cobre também a fase ANTES de existir goal (extração, roteador, suficiência, planejamento): o
+            // clique em "Parar" logo depois do pedido caía num vazio (10/10/2026) e o pedido seguia.
             agentLoop.cancel(msg.userId);
-            const cancelledGoal = goalOrchestrator.cancelActiveGoal(msg.channel, msg.userId);
-            return cancelledGoal ? '⏹ Operação cancelada.' : '⏹ Nada em andamento para cancelar.';
+            const cancelado = goalOrchestrator.cancelarTurno(msg.channel, msg.userId);
+            return cancelado.turno || cancelado.goal ? '⏹ Operação cancelada.' : '⏹ Nada em andamento para cancelar.';
         });
     }
 

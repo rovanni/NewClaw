@@ -66,7 +66,7 @@ export const descritorSuficienciaDoPedido: DescritorDeValidacao<DecisaoDeSuficie
         nome: 'pergunta_ao_usuario',
         instrucao: 'Escreva sempre que houver itens: a pergunta curta e cordial que pediria ao usuário exatamente os dados listados, no MESMO IDIOMA do pedido do usuário. O sistema só a usa se algum dado não estiver comprovado. Vazio quando não há itens.',
     }],
-    raciocinio: 'desligado',
+    raciocinio: 'livre',   // respeita o provedor e o modelo: com think:false o glm-5.3 escrevia ~25 mil chars de análise no CONTEÚDO (produção 10/10)
     semVeredito: 'liberar',   // ADR-015: sem veredito não bloqueia o pedido
     adaptador: adaptarSuficiencia,
 };

@@ -106,7 +106,7 @@ export class ValidationEngine {
         const extras = d.camposExtras ?? [];
         if (extras.length) secoes.push(`CAMPOS ADICIONAIS DA RESPOSTA:\n${extras.map(c => `- "${c.nome}": ${c.instrucao}`).join('\n')}`);
         const camposExtrasJson = extras.map(c => `,"${c.nome}":"..."`).join('');
-        secoes.push(`Responda APENAS com JSON:\n{"estado":"aprovado|reprovado","itens":[{"item":"...","confere":"sim|nao|sem_evidencia","evidencia":"(opcional)","trecho":"(opcional)"}],"confianca":0.0,"motivo":"curto","faltou":"(opcional)","dificuldade":"(opcional)"${camposExtrasJson}}`);
+        secoes.push(`Responda APENAS com JSON — a sua resposta INTEIRA é o objeto abaixo: comece em { e termine em }, sem análise, raciocínio ou comentário antes ou depois:\n{"estado":"aprovado|reprovado","itens":[{"item":"...","confere":"sim|nao|sem_evidencia","evidencia":"(opcional)","trecho":"(opcional)"}],"confianca":0.0,"motivo":"curto","faltou":"(opcional)","dificuldade":"(opcional)"${camposExtrasJson}}`);
         return secoes.join('\n\n');
     }
 
@@ -166,7 +166,7 @@ export class ValidationEngine {
         try {
             resultado = await this.providerFactory.chatWithFallback(
                 [{ role: 'user', content: prompt }], undefined, undefined, orcamento.timeoutMs, opcoes.signal, modelo || undefined,
-                { reasoningIntensive: d.raciocinio === 'livre', raciocinio: d.raciocinio, diag: { component: 'ValidationEngine', role: 'validator', phase: d.tipo, goalId: opcoes.goalId }, telemetry: telemetria },
+                { reasoningIntensive: d.raciocinio === 'livre', raciocinio: d.raciocinio, saidaJson: true, diag: { component: 'ValidationEngine', role: 'validator', phase: d.tipo, goalId: opcoes.goalId }, telemetry: telemetria },
             );
         } catch (err) {
             return naoAvaliavel(`erro na chamada: ${String(err).slice(0, 120)}`, 'erro');

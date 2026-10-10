@@ -54,7 +54,7 @@ export const descritorQualidadeDaResposta: DescritorDeValidacao<DecisaoDeQualida
         { nome: 'correcao_sugerida', instrucao: 'Se reprovado: a ação sugerida para corrigir (uma frase). Vazio se aprovado.' },
         { nome: 'mensagem_ao_usuario', instrucao: 'Só quando tipo_de_falha for claimed_without_execution: 2 a 3 frases, no MESMO IDIOMA do pedido do usuário, dizendo com honestidade que a ação NÃO foi executada (nada foi feito) e o que o usuário pode fazer a seguir — pedir de novo, ou dar o dado que faltar. Sem desculpas longas e sem repetir a resposta rejeitada. Vazio nos outros casos.' },
     ],
-    raciocinio: 'desligado',
+    raciocinio: 'livre',   // respeita o provedor e o modelo: com think:false o glm-5.3 escrevia ~25 mil chars de análise no CONTEÚDO (produção 10/10)
     semVeredito: 'liberar',
     adaptador: adaptarQualidadeDaResposta,
 };
@@ -86,7 +86,7 @@ export const descritorResultadoDoPasso: DescritorDeValidacao<DecisaoDoPasso> = {
         'Liste UM item: "o resultado trata do que o passo pediu (as mesmas entidades, o mesmo arquivo, a mesma ação)". confere="sim" se trata; confere="nao" SÓ quando houver desencontro claro (ex.: o passo pede cotações de BTC/ZEC e o resultado lista ETH/ENA; o passo pede criar arquivo e o resultado é um erro genérico); confere="sem_evidencia" quando o resultado não permite dizer se o passo foi atendido. Informe a confiança do veredito em "confianca".',
     ],
     agregacao: 'itens',
-    raciocinio: 'desligado',
+    raciocinio: 'livre',   // respeita o provedor e o modelo: com think:false o glm-5.3 escrevia ~25 mil chars de análise no CONTEÚDO (produção 10/10)
     semVeredito: 'liberar',   // o consumidor trata "não verificável" como estado intermediário próprio
     adaptador: adaptarResultadoDoPasso,
 };
@@ -121,7 +121,7 @@ export const descritorRiscoDoPlano: DescritorDeValidacao<DecisaoDeRisco> = {
     ],
     agregacao: 'modelo',
     camposExtras: [{ nome: 'riscos', instrucao: 'Os riscos encontrados, separados por " | " (vazio se o plano estiver completo e correto).' }],
-    raciocinio: 'desligado',
+    raciocinio: 'livre',   // respeita o provedor e o modelo: com think:false o glm-5.3 escrevia ~25 mil chars de análise no CONTEÚDO (produção 10/10)
     semVeredito: 'liberar',   // revisão de risco que não conclui deixa o plano como está
     adaptador: adaptarRiscoDoPlano,
 };
@@ -167,7 +167,7 @@ export const descritorConclusaoDoObjetivo: DescritorDeValidacao<DecisaoDeConclus
         { nome: 'resumo', instrucao: 'Se aprovado: resumo do que foi feito e entregue neste marco/objetivo. Vazio se reprovado.' },
         { nome: 'sugestoes', instrucao: 'Se reprovado: ações para concluir o que falta, separadas por " | " (e o que falta em "motivo"). Vazio se aprovado.' },
     ],
-    raciocinio: 'desligado',
+    raciocinio: 'livre',   // respeita o provedor e o modelo: com think:false o glm-5.3 escrevia ~25 mil chars de análise no CONTEÚDO (produção 10/10)
     semVeredito: 'bloquear',   // Outcome Integrity (S5.5a): não confirmar não é sucesso
     adaptador: adaptarConclusaoDoObjetivo,
 };
@@ -197,7 +197,7 @@ export const descritorConteudoMolde: DescritorDeValidacao<DecisaoDeMolde> = {
         'O texto responde ao pedido real — não é uma DESCRIÇÃO do que deveria ser gerado (menciona "passo N", "dados obtidos anteriormente", identificadores entre colchetes como [resultado_do_passo_1], "conteúdo será gerado", ou descreve o processo em vez de responder)?',
     ],
     agregacao: 'modelo',
-    raciocinio: 'desligado',
+    raciocinio: 'livre',   // respeita o provedor e o modelo: com think:false o glm-5.3 escrevia ~25 mil chars de análise no CONTEÚDO (produção 10/10)
     semVeredito: 'bloquear',   // fail-closed: falso positivo é aceitável, falso negativo não
     adaptador: adaptarConteudoMolde,
 };
