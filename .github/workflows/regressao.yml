@@ -1,0 +1,60 @@
+name: regressao
+
+# Suíte de regressão do NewClaw (src/__tests__/regression/*.test.ts), um subprocesso por arquivo, decidido pelo exit code.
+# O runner (scripts/run-regression-tests.cjs) é a ÚNICA fonte da decisão passa/falha: falha quando nenhum teste é descoberto,
+# quando um teste pendura (timeout) ou sai com 0 mas imprimiu "FALHOU:"; e grava um relatório estruturado com a duração de cada teste.
+# Sem segredos e sem serviços externos: nada aqui chama a nuvem.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: regressao-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  regressao:
+    name: regressão (${{ matrix.os }}, node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        node: [22]   # o README declara Node >= 22
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      # Instalação reproduzível: o package-lock.json manda. O pacote opcional newclaw-kernel-adapter (file:../) não existe em um
+      # clone isolado — o npm ignora a falha de uma optionalDependency; o projeto compila e roda sem ele (S203).
+      - name: Instalar dependências
+        run: npm ci
+
+      - name: Tipos (código de produção)
+        run: npx tsc --noEmit
+
+      # Prova que o próprio runner detecta falha, inconsistência, timeout e "zero testes" antes de confiar no verde dele.
+      - name: Autoteste do runner
+        run: npm run test:regression:selftest
+
+      - name: Suíte de regressão
+        run: npm run test:regression -- --report regressao-relatorio.json
+
+      - name: Relatório (duração por teste)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: regressao-relatorio-${{ matrix.os }}
+          path: regressao-relatorio.json
+          if-no-files-found: error
