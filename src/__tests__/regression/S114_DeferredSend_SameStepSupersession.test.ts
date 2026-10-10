@@ -26,8 +26,16 @@
  * REGRESSÃO SE: a filtragem de supersessão for removida, ou originStepId deixar de ser
  * propagado ao criar os PlanStep de deferred send.
  *
+ * AUDITORIA DA SUÍTE (10/10/2026): a reconciliação vive INLINE em `runLoopInternal` (sem função pública nem ponto de acesso), então os
+ * cenários 1–3 exercitam uma ESPECIFICAÇÃO EXECUTÁVEL — réplica do filtro — e não o código de produção. Extrair uma função só para o
+ * teste alteraria a arquitetura; em vez disso o cenário 4 TRAVA a réplica contra o código real: a condição de supersessão, a propagação
+ * de `originStepId: step.id` e a composição do plano precisam existir, com este formato, em GoalExecutionLoop.ts. Se alguém mudar a
+ * condição em produção, o cenário 4 falha e obriga a revisar a especificação (e vice-versa).
+ *
  * Execução: npx ts-node src/__tests__/regression/S114_DeferredSend_SameStepSupersession.test.ts
  */
+import * as fs from 'fs';
+import * as path from 'path';
 
 let passed = 0;
 let failed = 0;
@@ -148,6 +156,27 @@ assert(
     plan3
 );
 assert(r4.supersededPaths.length === 0, 'nenhuma supersessão aplicada sobre step já despachado');
+
+// ── Cenário 4: a especificação acima está TRAVADA contra o código de produção ─────────────
+
+console.log('\n=== S114 — Cenário 4: a réplica reflete o código real de GoalExecutionLoop.ts ===');
+
+// Caminho sobrescrevível só para a prova de detecção (cópia mutada da produção); em uso normal é sempre o arquivo real.
+const FONTE_DE_PRODUCAO = process.env.NC_S114_FONTE ?? path.join(__dirname, '..', '..', 'loop', 'GoalExecutionLoop.ts');
+const producao = fs.readFileSync(FONTE_DE_PRODUCAO, 'utf-8').replace(/\s+/g, ' ');
+
+assert(
+    /\.filter\(\s*s => \{ const superseded = s\.status === 'pending' && s\.toolName === 'send_document' && s\.originStepId === step\.id;/.test(producao),
+    'produção: supersede só send_document AINDA pendente da MESMA origem (status pending + toolName + originStepId === step.id)',
+);
+assert(
+    /toolName: 'send_document', toolArgs: sendArgs, status: 'pending' as const, fallbackSteps: \[\], originStepId: step\.id,/.test(producao),
+    'produção: todo deferred send injetado carrega originStepId: step.id (sem isso a supersessão nunca casa)',
+);
+assert(
+    /const updatedPlan = \[\.\.\.planWithoutSuperseded, \.\.\.newSendSteps\];/.test(producao),
+    'produção: o plano novo = plano sem os superados + os novos (nunca acumula os dois)',
+);
 
 // ── Resultado ────────────────────────────────────────────────────────────────
 
