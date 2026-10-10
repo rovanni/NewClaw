@@ -90,3 +90,29 @@ O motor então:
   espaço não separável, markdown) e instrução de citação curta no prompt do grounding — o juiz reprovava citações
   corretas por diferença de caractere.
 - Cobertura: `S374` (leitor/citação), `S376` (perfil, famílias de modelo simuladas, disjuntor, fiação).
+
+## Adendo (10/10/2026, mesmo dia) — o orçamento acompanha o tamanho do trabalho
+
+**Evidência (produção, 14:29, `glm-5.3-flash:cloud`):** "salvar na memória" com a análise da River colada no pedido →
+prompt de 12.634 caracteres, 17 afirmações a conferir. O juiz de grounding estourou os 30 s nos dois modos e a resposta
+— verdadeira, a memória foi mesmo gravada — foi bloqueada (`UNVALIDATED`). Reproduzido com o mesmo prompt: 84 s (com
+raciocínio) e 71 s (sem), ambos `aprovado`. O mesmo modelo, em prompts de ~3 mil caracteres, leva 2–8 s. O orçamento era
+o **piso** do perfil (30 s) porque a latência típica do provedor é uma média de chamadas rápidas e não enxerga o tamanho
+do trabalho — a "correção estrutural pendente" já registrada em `auxTimeout.ts`.
+
+**Decisão (ordem do operador: "ele tem que levar em conta o tamanho do trabalho"):**
+- `getBudgetAuxiliar(perfil, …, tamanhoDoTrabalhoChars)`: o perfil `validacao` declara `msPorMilCaracteres = 8000` (pior caso
+  medido ≈ 6,7 s/mil caracteres, +20% de folga). Orçamento = o MAIOR entre o derivado da latência e o proporcional ao
+  trabalho, sempre dentro do teto do perfil (300 s). Sem informar o tamanho (ou noutros perfis), nada muda.
+- O motor informa o tamanho do prompt montado; o resultado expõe `orcamentoMs`, e o `[GROUNDING-TRACE]` passa a registrar
+  o orçamento real (antes mostrava sempre o piso).
+- Modo **confiável** (≥ 2 chamadas e ≥ 60% de sucesso para aquele modelo) recebe o orçamento restante inteiro; só o modelo
+  ainda desconhecido divide o tempo entre os dois modos (proteção contra quem se perde raciocinando).
+
+**Verificado ao vivo** (mesmo prompt que foi bloqueado, motor real, modelo barato): perfil aquecido → `VALIDATED` em 56 s
+(orçamento 101 s); a frio → `VALIDATED` em 44 s.
+
+**Pendente (sem dados suficientes):** a taxa de 8 s/mil caracteres vem de um único prompt grande. Afinar com mais casos
+reais do registro do juiz (`orcamentoMs` × `duracaoMs`) e, se fizer sentido, aprender a taxa por modelo no perfil.
+Modelo que se perde raciocinando num prompt grande, ainda desconhecido, pode gastar o orçamento esticado uma vez antes de o
+disjuntor passar a protegê-lo. A política para "sem veredito" (bloquear × entregar com aviso) segue como está, decisão do operador.

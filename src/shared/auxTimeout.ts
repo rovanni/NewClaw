@@ -58,6 +58,12 @@ interface DefinicaoPerfil {
     maxMs: number;
     /** Usado enquanto não há nenhuma medição para o provedor (partida a frio). */
     padraoMs: number;
+    /**
+     * Quanto tempo o trabalho costuma levar por mil caracteres de prompt. Só existe nos perfis em que o TAMANHO do trabalho
+     * muda o tempo de forma que a latência típica não enxerga (o juiz confere uma afirmação por vez: prompt maior = mais
+     * afirmações = mais tempo). Sem isto, o piso fixo vira o orçamento de qualquer trabalho, grande ou pequeno.
+     */
+    msPorMilCaracteres?: number;
 }
 
 const PERFIS: Record<PerfilAuxiliar, DefinicaoPerfil> = {
@@ -99,7 +105,13 @@ const PERFIS: Record<PerfilAuxiliar, DefinicaoPerfil> = {
     // margem para o resto do turno num provedor genuinamente lento. 300_000 (5 min) dá bastante
     // folga sobre os ~120s antigos sem consumir sozinho o teto do turno. Ajustável se, na prática
     // com modelo local, ainda for insuficiente — é um parâmetro, não uma decisão arquitetural nova.
-    validacao: { fator: 4, minMs: 30_000, maxMs: 300_000, padraoMs: 45_000 },
+    //
+    // msPorMilCaracteres (10/10/2026, ADR-016) — a "correção estrutural pendente" acima, pelo eixo que a produção mostrou: o
+    // MESMO juiz que leva 2–8 s num prompt de 3 mil caracteres levou 71–84 s num de 12,6 mil (17 afirmações a conferir; os
+    // dois modos de raciocínio, medidos com o glm-5.3-flash) e a resposta — verdadeira — foi bloqueada aos 30 s. 84 s ÷ 12,6
+    // mil ≈ 6,7 s por mil caracteres no pior caso medido; 8 s dá ~20% de folga. O orçamento passa a ser o MAIOR entre o
+    // derivado da latência e o proporcional ao trabalho, sempre dentro do teto do perfil.
+    validacao: { fator: 4, minMs: 30_000, maxMs: 300_000, padraoMs: 45_000, msPorMilCaracteres: 8_000 },
 };
 
 /** Fonte da latência típica — injetada para manter este módulo sem dependência de runtime. */
@@ -109,6 +121,8 @@ export interface FonteDeLatencia {
 
 export interface OrcamentoAuxiliar {
     timeoutMs: number;
+    /** O orçamento foi esticado porque o TRABALHO é grande (e não pela latência do provedor). */
+    escaladoPeloTrabalho?: boolean;
     /** De onde veio o número — `medido` ou `padrao`. Para o log dizer a verdade. */
     origem: 'medido' | 'padrao';
     latenciaTipicaMs: number | null;
@@ -125,15 +139,23 @@ export function getBudgetAuxiliar(
     perfil: PerfilAuxiliar,
     provedor: string | null | undefined,
     fonte: FonteDeLatencia | null | undefined,
+    /** Tamanho do trabalho (caracteres do prompt). Só conta nos perfis que declaram `msPorMilCaracteres`. */
+    tamanhoDoTrabalhoChars?: number,
 ): OrcamentoAuxiliar {
     const def = PERFIS[perfil];
     const latencia = provedor && fonte ? fonte.getLatenciaTipicaMs(provedor) : null;
 
+    let base: OrcamentoAuxiliar;
     if (latencia === null || !Number.isFinite(latencia) || latencia <= 0) {
-        return { timeoutMs: def.padraoMs, origem: 'padrao', latenciaTipicaMs: null };
+        base = { timeoutMs: def.padraoMs, origem: 'padrao', latenciaTipicaMs: null };
+    } else {
+        const bruto = latencia * def.fator;
+        base = { timeoutMs: Math.round(Math.min(Math.max(bruto, def.minMs), def.maxMs)), origem: 'medido', latenciaTipicaMs: latencia };
     }
 
-    const bruto = latencia * def.fator;
-    const timeoutMs = Math.round(Math.min(Math.max(bruto, def.minMs), def.maxMs));
-    return { timeoutMs, origem: 'medido', latenciaTipicaMs: latencia };
+    if (def.msPorMilCaracteres && tamanhoDoTrabalhoChars && tamanhoDoTrabalhoChars > 0) {
+        const pelaTarefa = Math.round(Math.min((tamanhoDoTrabalhoChars / 1000) * def.msPorMilCaracteres, def.maxMs));
+        if (pelaTarefa > base.timeoutMs) return { ...base, timeoutMs: pelaTarefa, escaladoPeloTrabalho: true };
+    }
+    return base;
 }

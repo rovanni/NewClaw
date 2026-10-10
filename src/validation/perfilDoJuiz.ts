@@ -111,6 +111,12 @@ export class PerfilDoJuiz {
         });
     }
 
+    /** Este modo já provou funcionar para este modelo (amostra mínima e taxa de sucesso alta)? Então merece o tempo todo. */
+    confiavel(chave: string, modo: ModoDoJuiz): boolean {
+        const s = this.perfil(chave)[modo];
+        return s.n >= 2 && s.ok / s.n >= 0.6;
+    }
+
     /**
      * Disjuntor: este modelo vem falhando como juiz em TODOS os modos? Enquanto aberto, o motor nem chama (o usuário não
      * espera minutos por um veredito que não vem); passado o tempo, deixa passar uma sondagem.

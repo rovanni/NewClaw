@@ -24,6 +24,7 @@ import * as path from 'path';
 import { PerfilDoJuiz, DISJUNTOR_MS, FALHAS_PARA_DISJUNTOR } from '../../validation/perfilDoJuiz';
 import { ValidationEngine } from '../../validation/ValidationEngine';
 import { criarRegistroPadrao } from '../../validation/motorPadrao';
+import { getBudgetAuxiliar } from '../../shared/auxTimeout';
 
 let passed = 0;
 let failed = 0;
@@ -183,6 +184,48 @@ console.log('\n=== S376-7 — fiação de produção ===');
     const padrao = lerFonte('src/validation/motorPadrao.ts');
     assert(/perfilDoJuizDoProcesso\.persistente/.test(padrao), 'o motor padrão só compartilha o perfil do processo quando ele está persistido (testes isolados)');
     assert(!/glm|qwen|gemma|llama/i.test(lerFonte('src/validation/perfilDoJuiz.ts').replace(/\/\*[\s\S]*?\*\//g, '')), 'nenhum nome de modelo no código do perfil — comportamento observado, não escrito à mão');
+}
+
+console.log('\n=== S376-8 — o orçamento do juiz acompanha o TAMANHO do trabalho (produção 10/10: 12,6 mil chars levaram 71–84 s; o piso de 30 s bloqueou uma resposta verdadeira) ===');
+{
+    const rapido = { getLatenciaTipicaMs: () => 2000 };
+    const pequeno = getBudgetAuxiliar('validacao', 'ollama', rapido, 3000);
+    assert(pequeno.timeoutMs === 30_000 && !pequeno.escaladoPeloTrabalho, 'trabalho pequeno: continua o piso do perfil (30 s)', pequeno);
+    const grande = getBudgetAuxiliar('validacao', 'ollama', rapido, 12_634);
+    assert(grande.timeoutMs >= 84_000 && grande.escaladoPeloTrabalho === true, 'o caso real (12.634 chars) ganha mais que os 84 s medidos', grande);
+    assert(getBudgetAuxiliar('validacao', 'ollama', rapido, 5_000_000).timeoutMs === 300_000, 'e nunca passa do teto do perfil (300 s)');
+    assert(getBudgetAuxiliar('validacao', 'ollama', rapido).timeoutMs === 30_000, 'sem informar o tamanho: o comportamento anterior, intacto');
+    assert(getBudgetAuxiliar('validacao', null, null, 12_634).timeoutMs >= 84_000, 'também sem nenhuma medição de latência (partida a frio)');
+    const lento = getBudgetAuxiliar('validacao', 'ollama', { getLatenciaTipicaMs: () => 40_000 }, 3000);
+    assert(lento.timeoutMs === 160_000 && !lento.escaladoPeloTrabalho, 'provedor lento: a latência medida continua valendo quando é maior que a estimativa pelo tamanho', lento);
+    assert(getBudgetAuxiliar('classificacao', 'ollama', rapido, 50_000).timeoutMs === 6_000, 'perfil de classificação não escala pelo tamanho');
+
+    let pedido: number | undefined;
+    const pf = { getBudgetAuxiliar: (_p: string, tamanho?: number) => { pedido = tamanho; return { timeoutMs: 30_000, origem: 'padrao', latenciaTipicaMs: null }; }, chatWithFallback: async () => ({ status: 'success', content: VEREDITO, attempts: [] }) } as any;
+    const r = await motorCom(pf, new PerfilDoJuiz()).validar('qualidade_da_resposta', { pedido: 'p'.repeat(5000), resposta: 'r' });
+    assert(typeof pedido === 'number' && pedido > 5000, 'o motor informa o tamanho do prompt montado ao pedir o orçamento', pedido);
+    assert(r.orcamentoMs === 30_000, 'e o resultado expõe o orçamento usado (para o log e o trace)', r.orcamentoMs);
+}
+
+console.log('\n=== S376-9 — o modo que já provou funcionar recebe o tempo todo ===');
+{
+    const p = new PerfilDoJuiz();
+    assert(!p.confiavel('m', 'livre'), 'sem histórico: sem confiança');
+    p.registrar('m', 'livre', true, 5000);
+    assert(!p.confiavel('m', 'livre'), 'uma amostra só não basta');
+    p.registrar('m', 'livre', true, 5000); p.registrar('m', 'livre', false, 30000);
+    assert(p.confiavel('m', 'livre'), '2 sucessos em 3: confiável', p.resumo('m'));
+    p.registrar('m', 'livre', false, 30000); p.registrar('m', 'livre', false, 30000);
+    assert(!p.confiavel('m', 'livre'), 'falhas seguidas tiram a confiança');
+
+    const confiante = new PerfilDoJuiz();
+    for (let i = 0; i < 3; i++) confiante.registrar('modelo-teste', 'livre', true, 5000);
+    const chamadas: Chamada[] = [];
+    await motorCom(fabrica('nunca', chamadas, 600), confiante).validar('qualidade_da_resposta', ENTRADAS);
+    assert(chamadas[0].fatiaMs > 550, 'modo confiável: a 1ª chamada recebe o orçamento todo, sem cortar para sobrar tempo ao outro modo', chamadas[0]);
+    const novo: Chamada[] = [];
+    await motorCom(fabrica('nunca', novo, 600), new PerfilDoJuiz()).validar('qualidade_da_resposta', ENTRADAS);
+    assert(novo[0].fatiaMs < 400, 'modelo ainda desconhecido: a 1ª chamada divide o tempo (proteção contra quem se perde raciocinando)', novo[0]);
 }
 
 console.log(`\n${'─'.repeat(60)}`);

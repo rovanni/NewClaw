@@ -192,7 +192,7 @@ console.log('\n=== S186-8b — StepSemanticValidator: a evidência apareceu, o t
     // getBudgetAuxiliar('validacao') para TODOS os tipos de validação.
     const motor = fs.readFileSync(path.join(process.cwd(), 'src/validation/ValidationEngine.ts'), 'utf-8');
     assert(/obterMotor\(/.test(src) && !/chatWithFallback/.test(src), 'o validador de passo valida pelo motor único (não tem prazo próprio)');
-    assert(/getBudgetAuxiliar\('validacao'\)/.test(motor) && /orcamento\.timeoutMs/.test(motor),
+    assert(/getBudgetAuxiliar\('validacao'[,)]/.test(motor) && /orcamento\.timeoutMs/.test(motor),
         "o motor usa getBudgetAuxiliar('validacao') como prazo da chamada — um lugar só para todos os juízes");
 }
 
@@ -215,7 +215,7 @@ console.log('\n=== S186-9 — contentStubClassifier: a evidência apareceu, o te
     // Troca ao motor único (ADR-014): o prazo é o do motor (perfil 'validacao', derivado da latência observada).
     const motor = fs.readFileSync(path.join(process.cwd(), 'src/validation/ValidationEngine.ts'), 'utf-8');
     assert(
-        /obterMotor\(/.test(src) && !/chatWithFallback/.test(src) && /getBudgetAuxiliar\('validacao'\)/.test(motor),
+        /obterMotor\(/.test(src) && !/chatWithFallback/.test(src) && /getBudgetAuxiliar\('validacao'[,)]/.test(motor),
         "valida pelo motor único, cujo prazo vem de getBudgetAuxiliar('validacao') — nenhum número fixo neste arquivo",
     );
     assert(

@@ -263,11 +263,11 @@ export class ProviderFactory {
      * provedor será tentado primeiro e quanto ele tem levado. Assim o ponto de chamada declara
      * só a intenção ("isto é uma classificação") e não precisa conhecer o registro de circuitos.
      */
-    getBudgetAuxiliar(perfil: PerfilAuxiliar): OrcamentoAuxiliar {
+    getBudgetAuxiliar(perfil: PerfilAuxiliar, tamanhoDoTrabalhoChars?: number): OrcamentoAuxiliar {
         return getBudgetAuxiliar(perfil, this.defaultProvider, {
             getLatenciaTipicaMs: (provedor: string) =>
                 this.circuitBreakers.getOrCreate({ name: provedor }).getLatenciaTipicaMs(),
-        });
+        }, tamanhoDoTrabalhoChars);
     }
 
     setDefaultProvider(name: string): void {

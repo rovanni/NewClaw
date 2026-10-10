@@ -450,7 +450,8 @@ export class ObserverValidator {
     ): Promise<GroundingVerdict> {
         const t0 = Date.now();
         const orcamento = this.providerFactory.getBudgetAuxiliar('validacao');
-        const base = { budgetMs: orcamento.timeoutMs, budgetOrigin: orcamento.origem };
+        // O orçamento REAL é o do motor (esticado pelo tamanho do trabalho); este é só o ponto de partida até o motor responder.
+        let base = { budgetMs: orcamento.timeoutMs, budgetOrigin: orcamento.origem };
 
         // Fatos do julgamento para o log. A evidência vai INTEIRA (nada é cortado; se o conjunto não couber no teto do
         // motor, o resultado é UNVALIDATED — nunca um veredito sobre um pedaço).
@@ -461,7 +462,7 @@ export class ObserverValidator {
             ObserverValidator.traceGrounding({
                 v: 1, phase: traceCtx?.phase ?? 'initial', traceId: traceCtx?.traceId, conversationId: traceCtx?.conversationId,
                 goalId: traceCtx?.goalId, stepId: traceCtx?.stepId, stepDescription: traceCtx?.stepDescription, planGeneration: traceCtx?.planGeneration,
-                outcome, elapsedMs: Date.now() - t0, budgetMs: orcamento.timeoutMs,
+                outcome, elapsedMs: Date.now() - t0, budgetMs: base.budgetMs,
                 responseChars: response.length, evidences: evidenceFacts, ...extra,
             }, response, evidences);
         };
@@ -486,6 +487,7 @@ export class ObserverValidator {
             const r = await obterMotor(this.providerFactory).validar<DecisaoDeGrounding>(TIPO_SAIDA_CONTRA_EVIDENCIA, {
                 pedido: traceCtx?.userRequest?.trim() || undefined, resposta: response, evidencias: blocoEvidencias,
             }, { traceId: traceCtx?.traceId, conversationId: traceCtx?.conversationId, goalId: traceCtx?.goalId, stepId: traceCtx?.stepId, phase: traceCtx?.phase ?? 'initial', signal });
+            if (r.orcamentoMs !== undefined) base = { ...base, budgetMs: r.orcamentoMs };
             if (r.semVeredito) {
                 const porque = r.veredito.naoAvaliavelPorque ?? 'n/d';
                 log.warn(`[GROUNDING] juiz não concluiu (${porque.slice(0, 80)}) — UNVALIDATED`);

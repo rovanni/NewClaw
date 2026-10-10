@@ -55,6 +55,8 @@ export interface ResultadoDaValidacao<T> {
     saidaBruta?: string;
     /** `semVeredito` + a política declarada pelo tipo é bloquear. O consumidor só lê isto — não reescreve a política. */
     deveBloquear: boolean;
+    /** Orçamento de tempo que o motor deu ao juiz nesta validação (esticado pelo tamanho do trabalho); ausente se nem chegou a chamar. */
+    orcamentoMs?: number;
     /** Saída do adaptador do descritor; sem adaptador, o próprio veredito. */
     adaptado: T;
 }
@@ -127,6 +129,8 @@ export class ValidationEngine {
         let prompt = '';
         let saidaBruta: string | undefined;
         const modosTentados: string[] = [];
+        let orcamentoMs: number | undefined;
+        let orcamentoEscalado = false;
 
         const concluir = (veredito: VereditoPadrao, desfecho: string): ResultadoDaValidacao<T> => {
             const v = { ...veredito, avaliacaoId };
@@ -138,6 +142,8 @@ export class ValidationEngine {
                     fatos: {
                         raciocinio: d.raciocinio,
                         modosTentados,
+                        orcamentoMs,
+                        orcamentoEscaladoPeloTrabalho: orcamentoEscalado,
                         entradas: Object.fromEntries(d.entradas.map(e => [e.nome, entradas[e.nome] === undefined ? 'ausente' : `${String(entradas[e.nome]).length} chars`])),
                     },
                     conteudo: { prompt, entradas },
@@ -150,7 +156,7 @@ export class ValidationEngine {
                 },
             });
             const semVeredito = v.estado === 'nao_avaliavel' && !!v.naoAvaliavelPorque;
-            return { veredito: v, semVeredito, desfecho, saidaBruta, deveBloquear: semVeredito && d.semVeredito === 'bloquear', adaptado: (d.adaptador ? d.adaptador(v) : v) as T };
+            return { veredito: v, semVeredito, desfecho, saidaBruta, deveBloquear: semVeredito && d.semVeredito === 'bloquear', orcamentoMs, adaptado: (d.adaptador ? d.adaptador(v) : v) as T };
         };
         const naoAvaliavel = (porque: string, desfecho: string) =>
             concluir({ estado: 'nao_avaliavel', itens: [], naoAvaliavelPorque: porque }, desfecho);
@@ -172,7 +178,10 @@ export class ValidationEngine {
         // 4. O modelo do juiz — chamado do jeito que FUNCIONA para ele (ADR-016): capacidade declarada pelo provedor + perfil
         //    aprendido pelo uso. Cada modo (raciocínio do provedor / desligado) tem um PRAZO REAL, dentro do orçamento do juiz: o
         //    juiz nunca passa do orçamento declarado. Modelo que vem falhando como juiz em todos os modos: o motor nem chama.
-        const orcamento = this.providerFactory.getBudgetAuxiliar('validacao');
+        //    O orçamento acompanha o TAMANHO do trabalho: prompt grande = mais a conferir = mais tempo (ver auxTimeout).
+        const orcamento = this.providerFactory.getBudgetAuxiliar('validacao', prompt.length);
+        orcamentoMs = orcamento.timeoutMs;
+        orcamentoEscalado = orcamento.escaladoPeloTrabalho === true;
         const chaveDoModelo = modelo || '(padrão do provedor)';
         const disjuntor = this.perfil.estadoDoDisjuntor(chaveDoModelo);
         if (disjuntor.aberto) {
@@ -188,7 +197,10 @@ export class ValidationEngine {
             const restante = limite - Date.now();
             if (restante < Math.min(5000, orcamento.timeoutMs * 0.1)) break;
             const ultimo = i === modos.length - 1;
-            const fatia = ultimo ? restante : Math.max(1, Math.round(restante * FATIA_DO_PRIMEIRO_MODO));
+            // Modo que vem funcionando para este modelo recebe o que resta (não há por que cortá-lo para sobrar tempo ao outro);
+            // só quando ainda não há confiança num modo é que o primeiro divide o tempo com o segundo.
+            const confiavel = i === 0 && this.perfil.confiavel(chaveDoModelo, modos[0]);
+            const fatia = ultimo || confiavel ? restante : Math.max(1, Math.round(restante * FATIA_DO_PRIMEIRO_MODO));
             const ctrl = new AbortController();
             const timer = setTimeout(() => ctrl.abort(), fatia);
             const t1 = Date.now();

@@ -84,7 +84,7 @@ console.log('\n=== S258-1 — estrutural: nem validate() nem validateGrounding()
     const bodyGrounding = source.slice(startGrounding, endGrounding);
     assert(!/\.getProviderWithModel\(/.test(bodyGrounding), 'validateGrounding() não CHAMA mais getProviderWithModel (menção em comentário é esperada)');
     assert(/obterMotor\(this\.providerFactory\)/.test(bodyGrounding), 'validateGrounding() valida pelo motor (que chama chatWithFallback)');
-    assert(/getBudgetAuxiliar\('validacao'\)/.test(engine) && /orcamento\.timeoutMs/.test(engine), 'o motor usa o orçamento de getBudgetAuxiliar(\'validacao\') — nenhuma constante de timeout nova');
+    assert(/getBudgetAuxiliar\('validacao'[,)]/.test(engine) && /orcamento\.timeoutMs/.test(engine), 'o motor usa o orçamento de getBudgetAuxiliar(\'validacao\') — nenhuma constante de timeout nova');
 }
 
 console.log('\n=== S258-2 — validateGrounding(): repassa observerModel como modelOverride, preferredProvider livre ===');

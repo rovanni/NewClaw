@@ -195,7 +195,7 @@ console.log('\n=== S215-5 — C3: o classificador de stub usa o orçamento medid
     // Troca ao motor único (ADR-014): o prazo é o do motor, derivado da latência observada (perfil 'validacao').
     const motorSrc = fs.readFileSync(path.join(__dirname, '../../validation/ValidationEngine.ts'), 'utf-8');
     assert(
-        /obterMotor\(/.test(source) && /getBudgetAuxiliar\('validacao'\)/.test(motorSrc),
+        /obterMotor\(/.test(source) && /getBudgetAuxiliar\('validacao'[,)]/.test(motorSrc),
         "deriva o prazo da latência observada, via o motor único (getBudgetAuxiliar('validacao'))",
     );
     assert(
