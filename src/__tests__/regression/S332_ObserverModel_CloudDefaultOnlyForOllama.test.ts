@@ -11,7 +11,6 @@
  * Execução: npx ts-node src/__tests__/regression/S332_ObserverModel_CloudDefaultOnlyForOllama.test.ts
  */
 import { ObserverValidator } from '../../loop/ObserverValidator';
-import './_fixtures/motorLegado';   // juízes simulados no formato antigo → formato do motor único (ADR-014)
 
 let passed = 0;
 let failed = 0;

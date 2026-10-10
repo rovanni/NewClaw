@@ -34,7 +34,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import './_fixtures/motorLegado';   // juízes simulados no formato antigo → formato do motor único (ADR-014)
 
 let passed = 0;
 let failed = 0;

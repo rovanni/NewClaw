@@ -16,7 +16,6 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { ProviderFactory, buildLlmCallSummary } from '../../core/ProviderFactory';
 import type { LLMResult } from '../../core/providerTypes';
-import './_fixtures/motorLegado';   // juízes simulados no formato antigo → formato do motor único (ADR-014)
 
 let passed = 0;
 let failed = 0;

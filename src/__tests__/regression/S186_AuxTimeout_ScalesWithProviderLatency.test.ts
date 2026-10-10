@@ -48,7 +48,6 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { getBudgetAuxiliar } from '../../shared/auxTimeout';
 import { CircuitBreaker } from '../../core/CircuitBreaker';
-import './_fixtures/motorLegado';   // juízes simulados no formato antigo → formato do motor único (ADR-014)
 
 let passed = 0;
 let failed = 0;

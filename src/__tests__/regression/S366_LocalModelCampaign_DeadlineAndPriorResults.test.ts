@@ -26,7 +26,6 @@ import { ProviderFactory } from '../../core/ProviderFactory';
 import { OpenAIProvider } from '../../core/OpenAIProvider';
 import { limiteComum } from '../../shared/orcamentoDeTexto';
 import { GoalExecutionLoop } from '../../loop/GoalExecutionLoop';
-import './_fixtures/motorLegado';   // juízes simulados no formato antigo → formato do motor único (ADR-014)
 
 let passed = 0;
 let failed = 0;

@@ -51,7 +51,6 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { sanitizePlanSteps } from '../../loop/planning/sanitizePlanSteps';
 import { detectMissingRequiredArgs } from '../../loop/GoalPlanner';
-import './_fixtures/motorLegado';   // juízes simulados no formato antigo → formato do motor único (ADR-014)
 
 let passed = 0;
 let failed = 0;

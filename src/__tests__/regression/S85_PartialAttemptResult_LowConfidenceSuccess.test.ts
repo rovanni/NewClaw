@@ -41,7 +41,6 @@ import { ToolRegistry } from '../../core/ToolRegistry';
 import { Goal, PlanStep, GoalAttempt } from '../../loop/GoalTypes';
 import { ChannelContext } from '../../loop/agentLoopTypes';
 import { vereditoPasso } from './_fixtures/veredito';
-import './_fixtures/motorLegado';   // juízes simulados no formato antigo → formato do motor único (ADR-014)
 
 let passed = 0;
 let failed = 0;
