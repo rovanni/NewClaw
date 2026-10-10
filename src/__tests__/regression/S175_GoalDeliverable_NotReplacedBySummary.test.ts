@@ -299,6 +299,12 @@ console.log('\n=== S175-7 — D1 presente estruturalmente, nos DOIS pontos que g
         /function attemptOutputLimit\(toolName: string \| undefined\): number/.test(SOURCE),
         'a regra vive numa função única — não duplicada nos call sites',
     );
+    // Auditoria da suíte (10/10/2026): `attemptOutputLimit` não é exportada, então os cenários acima exercitam a REPRODUÇÃO local. Travar só
+    // a assinatura deixava passar a inversão dos ramos (entregável cortado em 300, evidência com 8000); aqui o CORPO é travado também.
+    assert(
+        /function attemptOutputLimit\(toolName: string \| undefined\): number \{\s*return \(toolName \?\? 'agentloop'\) === 'agentloop'\s*\? ATTEMPT_OUTPUT_DELIVERABLE_LIMIT\s*: ATTEMPT_OUTPUT_EVIDENCE_LIMIT;\s*\}/.test(SOURCE),
+        'o corpo da regra é o reproduzido neste teste: agentloop/sem ferramenta → limite do ENTREGÁVEL; qualquer outra → limite da EVIDÊNCIA',
+    );
 
     const usosDoHelper = (SOURCE.match(/slice\(0, attemptOutputLimit\(step\.toolName\)\)/g) ?? []).length;
     assert(
