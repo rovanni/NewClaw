@@ -123,7 +123,7 @@ export class ValidationEngine {
         const extras = d.camposExtras ?? [];
         if (extras.length) secoes.push(`CAMPOS ADICIONAIS DA RESPOSTA:\n${extras.map(c => `- "${c.nome}": ${c.instrucao}`).join('\n')}`);
         const camposExtrasJson = extras.map(c => `,"${c.nome}":"..."`).join('');
-        secoes.push(`Responda APENAS com JSON — a sua resposta INTEIRA é o objeto abaixo: comece em { e termine em }, sem análise, raciocínio ou comentário antes ou depois:\n{"estado":"aprovado|reprovado","itens":[{"item":"...","confere":"sim|nao|sem_evidencia","evidencia":"(opcional)","trecho":"(opcional)"}],"confianca":0.0,"motivo":"curto","faltou":"(opcional)","dificuldade":"(opcional)"${camposExtrasJson}}`);
+        secoes.push(`Responda APENAS com JSON — a sua resposta INTEIRA é o objeto abaixo: comece em { e termine em }, sem análise, raciocínio ou comentário antes ou depois. Nos campos "faltou" e "dificuldade", omita a propriedade se não houver algo a relatar; se incluir uma propriedade, escreva uma descrição específica e útil, nunca deixe vazia nem use texto genérico:\n{"estado":"aprovado|reprovado","itens":[{"item":"...","confere":"sim|nao|sem_evidencia","evidencia":"(opcional)","trecho":"(opcional)"}],"confianca":0.0,"motivo":"curto","faltou":"(omita ou descreva a lacuna)","dificuldade":"(omita ou descreva o problema)"${camposExtrasJson}}`);
         return secoes.join('\n\n');
     }
 
@@ -229,11 +229,12 @@ export class ValidationEngine {
             if (opcoes.signal?.aborted || sinalDoTurno()?.aborted) return naoAvaliavel('cancelado pelo usuário', 'llm_cancelled');
             if (resultado.status === 'success') {
                 saidaBruta = resultado.content;
-                lido = lerSaidaDoModelo(saidaBruta || '', (d.camposExtras ?? []).map(c => c.nome));
+                const diagnosticoLeitura: { motivo?: string } = {};
+                lido = lerSaidaDoModelo(saidaBruta || '', (d.camposExtras ?? []).map(c => c.nome), diagnosticoLeitura);
                 this.perfil.registrar(chaveDoModelo, modos[i], !!lido, ms);
                 log.info(`[VALIDACAO] tipo=${d.tipo} modelo=${chaveDoModelo} modo=${modos[i]} ${lido ? 'veredito' : 'saída sem estrutura'} em ${ms} ms${lido || ultimo ? '' : ' — tentando o outro modo'}`);
                 if (lido) break;
-                falha = { porque: 'saída do modelo sem a estrutura do contrato', desfecho: 'saida_invalida' };
+                falha = { porque: diagnosticoLeitura.motivo ?? 'saída do modelo sem a estrutura do contrato', desfecho: 'saida_invalida' };
                 continue;
             }
             if (resultado.status === 'timeout' || resultado.status === 'cancelled') {

@@ -15,7 +15,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { ValidationEngine } from '../../validation/ValidationEngine';
-import { RegistroDeValidacoes, validarDescritor, type DescritorDeValidacao } from '../../validation/contratoDeValidacao';
+import { lerSaidaDoModelo, RegistroDeValidacoes, validarDescritor, type DescritorDeValidacao } from '../../validation/contratoDeValidacao';
 import { DECISION_PROMPT_MAX_CHARS } from '../../core/providerTypes';
 import { INSTRUCAO_FALTOU, INSTRUCAO_DIFICULDADE } from '../../shared/evaluatorFlightRecorder';
 import { ProviderFactory } from '../../core/ProviderFactory';
@@ -113,6 +113,18 @@ async function main(): Promise<void> {
     assert(c4.length === 0 && r4.veredito.estado === 'nao_avaliavel' && /teto/.test(r4.veredito.naoAvaliavelPorque ?? ''), 'acima do teto → não avaliável sem chamar o modelo');
     const r5 = await quiet(() => new ValidationEngine(fabrica('isto não é json', []), reg).validar('dados_contra_ferramenta', { pedido: 'p', resposta: 'r', evidencia: 'e' }));
     assert(r5.veredito.estado === 'nao_avaliavel' && /estrutura/.test(r5.veredito.naoAvaliavelPorque ?? ''), 'saída sem a estrutura → não avaliável (nunca "consertada")');
+    assert(lerSaidaDoModelo('{"estado":"aprovado","itens":[]}') !== null, 'relatos opcionais omitidos → saída válida');
+    assert(lerSaidaDoModelo('{"estado":"aprovado","itens":[],"faltou":"faltou a saída da ferramenta e ela é necessária para conferir o resultado"}') !== null,
+        'relato incluído com descrição → saída válida');
+    assert(lerSaidaDoModelo('{"estado":"aprovado","itens":[],"faltou":""}') === null, 'faltou incluído vazio → saída inválida');
+    assert(lerSaidaDoModelo('{"estado":"aprovado","itens":[],"dificuldade":null}') === null, 'dificuldade incluída sem texto → saída inválida');
+    const diagnostico: { motivo?: string } = {};
+    assert(lerSaidaDoModelo('{"estado":"aprovado","itens":[],"dificuldade":""}', [], diagnostico) === null && /dificuldade/.test(diagnostico.motivo ?? ''),
+        'saída inválida informa qual relato foi selecionado sem descrição');
+    const saidaRelatoVazio = JSON.stringify({ estado: 'aprovado', itens: [], faltou: '' });
+    const r5b = await quiet(() => new ValidationEngine(fabrica(saidaRelatoVazio, []), reg).validar('dados_contra_ferramenta', { pedido: 'p', resposta: 'r', evidencia: 'e' }));
+    assert(r5b.veredito.estado === 'nao_avaliavel' && /faltou/.test(r5b.veredito.naoAvaliavelPorque ?? ''),
+        `motor registra o relato selecionado sem descrição como saída inválida (${r5b.veredito.naoAvaliavelPorque})`);
     const reg2 = new RegistroDeValidacoes();
     reg2.registrar({ ...DADOS, tipo: 'com_adaptador', agregacao: 'modelo', preVerificacoes: [], adaptador: (v) => ({ aprovado: v.estado === 'aprovado' }) } as DescritorDeValidacao<unknown>);
     const r6 = await quiet(() => new ValidationEngine(fabrica('{"estado":"aprovado","itens":[]}', []), reg2).validar<{ aprovado: boolean }>('com_adaptador', { pedido: 'p', resposta: 'r', evidencia: 'e' }));

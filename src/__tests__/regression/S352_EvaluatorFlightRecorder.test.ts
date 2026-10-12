@@ -148,6 +148,17 @@ async function main(): Promise<void> {
     assert(rr?.antes?.fatos?.passosRecebidos === 1 && /^[0-9a-f]{8}$/.test(rr?.antes?.versaoPrompt ?? ''), 'plano recebido e versão do prompt registrados');
     assert(Array.isArray(rr?.depois?.conteudo?.riscos) && typeof rr?.antes?.conteudo?.prompt === 'string', 'com TRACE_CONTENT: riscos e prompt gravados');
 
+    console.log('\n=== S352-6b — revisor de risco rejeita campo de observação selecionado sem descrição ===');
+    const riscoComRelatoVazio = new RiskAnalyzer(fakeFactory(JSON.stringify({
+        risks: [], plan: [{ id: 'step_1', description: 'ler notas.txt', toolName: 'read', toolArgs: { path: 'notas.txt' } }], dificuldade: '',
+    })), ToolRegistry, { findHardConstraints: () => [], findToolFailures: () => '' } as never);
+    const resultadoRelatoVazio = await quiet(() => riscoComRelatoVazio.analyze(goal, plano, []));
+    assert(resultadoRelatoVazio.planRejected === true && /dificuldade/.test(resultadoRelatoVazio.rejectionReason ?? ''),
+        'revisor não aplica plano quando incluiu dificuldade sem explicação', resultadoRelatoVazio);
+    const rrVazio = lerRegistros(pasta, 'analise_risco-').find(x => x.depois?.desfecho === 'invalid_observation');
+    assert(rrVazio?.depois?.conteudo?.motivoRejeicao === resultadoRelatoVazio.rejectionReason,
+        'gravador registra qual campo foi incluído sem descrição');
+
     console.log('\n=== S352-7 — sem LOG_FILE nada é gravado; retenção apaga os antigos ===');
     const antigo = path.join(pasta, 'juiz_grounding-2020-01-01.jsonl');
     fs.writeFileSync(antigo, '{}\n');
