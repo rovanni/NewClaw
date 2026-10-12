@@ -51,7 +51,7 @@ console.log('\n=== S269-1 — recuperação parcial vive DENTRO do bloco de bloq
     const blockStart = agentLoopSource.indexOf("[GROUNDING] estado=${g.state}");
     const failureRecordIdx = agentLoopSource.indexOf("pattern: 'grounding_blocked'");
     const supportedClaimsIdx = agentLoopSource.indexOf('const supportedClaims = g.claims.filter');
-    const blockedMessageIdx = agentLoopSource.indexOf('return AgentLoop.groundingBlockedMessage(g.state);');
+    const blockedMessageIdx = agentLoopSource.indexOf('return AgentLoop.groundingBlockedMessage(g.state');
 
     assert(blockStart > -1 && failureRecordIdx > blockStart, 'o record() de falha (pattern=grounding_blocked) continua sendo o primeiro efeito do bloqueio (comportamento do Sprint 1 preservado)');
     assert(supportedClaimsIdx > failureRecordIdx, 'a tentativa de recuperação parcial roda DEPOIS do record() de falha, não antes (a falha original continua sempre registrada)');

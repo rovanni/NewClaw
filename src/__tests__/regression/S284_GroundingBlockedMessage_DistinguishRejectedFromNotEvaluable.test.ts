@@ -100,9 +100,18 @@ async function main(): Promise<void> {
         // groundingBlockedMessage(g.state) como fallback. Esta correção mudou só o CONTEÚDO da
         // função, nunca ONDE/QUANDO ela é chamada.
         const supportedClaimsIdx = src.indexOf('const supportedClaims = g.claims.filter');
-        const blockedMessageCallIdx = src.indexOf('return AgentLoop.groundingBlockedMessage(g.state);');
+        const blockedMessageCallIdx = src.indexOf('return AgentLoop.groundingBlockedMessage(g.state');
         assert(supportedClaimsIdx !== -1 && blockedMessageCallIdx > supportedClaimsIdx,
             'groundingBlockedMessage(g.state) continua sendo chamada DEPOIS da tentativa de recuperação parcial — S269 intocado');
+    }
+
+    console.log('\n=== S284.7 — unconfirmedClaims inclui os pontos não confirmados e o próximo passo ===');
+    {
+        const claims = [{ claim: 'A checagem da caixa de e-mails retornou 0 mensagens', verdict: 'NOT_EVALUABLE' }];
+        const msg = (AgentLoop as unknown as { groundingBlockedMessage: (s: string, c?: unknown) => string }).groundingBlockedMessage('NOT_EVALUABLE', claims);
+        assert(msg.includes('Pontos que não foram confirmados pelas fontes:'), 'contém cabeçalho de pontos não confirmados', msg);
+        assert(msg.includes('A checagem da caixa de e-mails retornou 0 mensagens'), 'contém o texto da afirmação pendente', msg);
+        assert(/solicitar que eu execute a verificação diretamente/i.test(msg), 'contém sugestão de próximo passo concreto', msg);
     }
 
     console.log(`\n${'─'.repeat(60)}`);

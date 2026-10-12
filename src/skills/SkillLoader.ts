@@ -140,7 +140,8 @@ export class SkillLoader {
      * Parser de frontmatter YAML simples
      */
     private parseFrontmatter(content: string): SkillMeta {
-        const match = content.match(/^---\n([\s\S]*?)\n---/);
+        const cleanContent = content.replace(/^\uFEFF/, '');
+        const match = cleanContent.match(/^---\r?\n([\s\S]*?)\r?\n---/);
         if (!match) return { name: '', description: '' };
 
         const frontmatter = match[1];
@@ -200,7 +201,8 @@ export class SkillLoader {
      * Remove frontmatter do conteúdo
      */
     private stripFrontmatter(content: string): string {
-        return content.replace(/^---\n[\s\S]*?\n---\n/, '').trim();
+        const cleanContent = content.replace(/^\uFEFF/, '');
+        return cleanContent.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, '').trim();
     }
 
     /**

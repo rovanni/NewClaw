@@ -937,14 +937,25 @@ export class AgentLoop {
      * passo 6). Herda o mesmo débito de idioma que toda mensagem fixa deste método já tinha antes
      * desta correção (Core só emite pt-BR — issue 018, fora do escopo aqui).
      */
-    private static groundingBlockedMessage(state: GroundingState): string {
+    private static groundingBlockedMessage(state: GroundingState, unconfirmedClaims?: Array<{ claim: string; verdict: string }>): string {
+        const claimsList = unconfirmedClaims && unconfirmedClaims.length > 0
+            ? '\n\n' + (state === 'REJECTED' ? 'Pontos divergentes encontrados:\n' : 'Pontos que não foram confirmados pelas fontes:\n') +
+              unconfirmedClaims.slice(0, 3).map(c => `• ${c.claim.slice(0, 140)}`).join('\n')
+            : '';
+
         if (state === 'UNVALIDATED') {
             return 'Não consegui confirmar se a resposta é sustentada pelos dados obtidos nesta tentativa. Pode pedir de novo?';
         }
         if (state === 'NOT_EVALUABLE') {
-            return 'Não encontrei, nas fontes que consultei, confirmação específica o suficiente para os detalhes da minha resposta — não é que os dados contradigam o que eu ia dizer, é que eles não chegam a confirmar. Pode reformular pedindo menos detalhe, ou apontar uma fonte específica para eu consultar?';
+            const nextStep = unconfirmedClaims && unconfirmedClaims.length > 0
+                ? '\n\nPode reformular pedindo menos detalhe, apontar uma fonte específica, ou solicitar que eu execute a verificação diretamente (por exemplo: "verifique meus e-mails").'
+                : ' Pode reformular pedindo menos detalhe, ou apontar uma fonte específica para eu consultar?';
+            return `Não encontrei, nas fontes que consultei, confirmação específica o suficiente para os detalhes da minha resposta — não é que os dados contradigam o que eu ia dizer, é que eles não chegam a confirmar.${claimsList}${nextStep}`;
         }
-        return 'A resposta que eu ia enviar continha uma afirmação que os dados coletados contradizem. Pode pedir de novo? Vou revisar antes de responder.';
+        const nextStep = unconfirmedClaims && unconfirmedClaims.length > 0
+            ? '\n\nPode pedir de novo ou indicar a fonte correta? Vou revisar antes de responder.'
+            : ' Pode pedir de novo? Vou revisar antes de responder.';
+        return `A resposta que eu ia enviar continha uma afirmação que os dados coletados contradizem.${claimsList}${nextStep}`;
     }
 
     /**
@@ -1236,7 +1247,7 @@ export class AgentLoop {
                             .filter((c): c is GroundedClaim & { verdict: 'NOT_SUPPORTED' | 'NOT_EVALUABLE' } => c.verdict !== 'SUPPORTED')
                             .map(c => ({ claim: c.claim, verdict: c.verdict })),
                     };
-                    return AgentLoop.groundingBlockedMessage(g.state);
+                    return AgentLoop.groundingBlockedMessage(g.state, turnState.groundingBlock.unconfirmedClaims);
                 }
             } catch (groundingErr) {
                 log.warn(`[${this.ts()}] [GROUNDING] falha antes do julgamento (${errorMessage(groundingErr)}) — bloqueando por segurança`);
@@ -1530,9 +1541,9 @@ export class AgentLoop {
         }
 
         const extras = AgentLoop.CATEGORY_TOOLS[intent.category] ?? null;
-        // Unknown category or low confidence → send all tools to be safe.
-        if (extras === null || intent.confidence < 0.65) {
-            log.info(`[TOOLS] Sending all tools (category=${intent.category}, confidence=${intent.confidence})`);
+        // Unknown category, low confidence, or conversation with specific topicSlug (indicates a concrete operational capability) → send all tools to be safe.
+        if (extras === null || intent.confidence < 0.65 || (intent.category === 'conversation' && intent.topicSlug)) {
+            log.info(`[TOOLS] Sending all tools (category=${intent.category}, confidence=${intent.confidence}${intent.topicSlug ? `, topicSlug=${intent.topicSlug}` : ''})`);
             return Array.from(this.tools.values()).map(t => ({ name: t.name, description: t.description, parameters: t.parameters }));
         }
 
@@ -2204,13 +2215,20 @@ export class AgentLoop {
             })();
             // Distinguish info-retrieval tools from file-operation tools so the synthesis
             // instruction is context-appropriate: "present the data" vs "confirm changes".
-            const INFO_TOOLS = new Set(['web_search', 'web_navigate', 'weather', 'crypto_analysis', 'memory_search', 'api_request']);
+            const INFO_TOOLS = new Set([
+                'web_search', 'web_navigate', 'weather', 'crypto_analysis', 'memory_search', 'api_request',
+                'read', 'read_document', 'list_workspace', 'analyze_workspace_groups',
+            ]);
             // Leitura do deck aberto (powerpoint_control getPresentation/getSlide) também é recuperação de informação:
             // o resultado É o dado a ser julgado. Antes, só o ÚLTIMO resultado chegava à síntese ("consegui acessar apenas
             // o slide 21", 03/10/2026). Distingue pela AÇÃO: addTextBox escreve e continua sendo uma operação.
             const deckReads = cycleHistory.filter(h => hostReadAction(h.tool, h.input) !== undefined);
             const isInfoRetrieval = cycleHistory.length > 0
                 && cycleHistory.every(h => INFO_TOOLS.has(h.tool) || hostReadAction(h.tool, h.input) !== undefined);
+            const reachedMaxSteps = stepCount >= maxSteps;
+            const budgetNotice = reachedMaxSteps
+                ? `\n\nATENÇÃO AO LIMITE DE PASSOS: O orçamento de passos deste turno foi esgotado (${stepCount}/${maxSteps} passos executados). Se a solicitação do usuário envolvia checagens, testes ou execuções que NÃO aparecem na lista de ferramentas executadas acima, declare explicitamente ao usuário que elas NÃO foram executadas (por exemplo: se você apenas leu um script ou arquivo, diga que leu as informações, mas NÃO afirme que executou a checagem ou o script).`
+                : '';
             // For info-retrieval, always present collected data — even when dedup aborted.
             // dedupSynthesisBody is reserved for file/command loops where "how to proceed" makes sense.
             const infoRetrievalSynthesisBody = (() => {
@@ -2246,14 +2264,14 @@ export class AgentLoop {
                     ` Se a pergunta do usuário pede opinião, avaliação ou análise, responda com ela, fundamentada SOMENTE no conteúdo lido` +
                     ` (a regra de apresentar dados, e não o que você fez, não impede uma avaliação).` +
                     ` Diga quais slides você leu e que os demais NÃO foram lidos; não avalie nem descreva slide que não foi lido.`;
-                if (failedTools.length === 0) return base + deckNote + noFabrication;
-                return base + deckNote + ` Para as fontes que falharam, explique brevemente o motivo. NÃO peça ao usuário para repetir ou especificar novamente o que já foi solicitado.` + noFabrication;
+                if (failedTools.length === 0) return base + deckNote + budgetNotice + noFabrication;
+                return base + deckNote + budgetNotice + ` Para as fontes que falharam, explique brevemente o motivo. NÃO peça ao usuário para repetir ou especificar novamente o que já foi solicitado.` + noFabrication;
             })();
             const synthesisBody = isInfoRetrieval
                 ? infoRetrievalSynthesisBody
                 : dedupAbort
                     ? dedupSynthesisBody
-                    : `Você executou as seguintes ações:\n${toolSummary}\n\nConfirme ao usuário O QUE foi realizado, com detalhes específicos. Não diga "vou fazer" — você JÁ fez.`;
+                    : `Você executou as seguintes ações:\n${toolSummary}\n\nConfirme ao usuário O QUE foi realizado, com detalhes específicos. Não diga "vou fazer" — você JÁ fez.\n\nREGRA ABSOLUTA — NÃO AFIRME AÇÕES NÃO EXECUTADAS: Se uma ação não consta como executada com sucesso acima, NÃO afirme que ela foi feita.${budgetNotice}`;
 
             // Trim context for synthesis: the full step history (15+ tool rounds) causes the model
             // to produce massive thinking without content and time out at MAX_TIMEOUT (420s).
@@ -3513,6 +3531,11 @@ export class AgentLoop {
 
             skillContext = skillContext ? `${skillContext}\n\n${manualBlock}` : manualBlock;
             log.info(`[SKILL] Injetando ${matchedManual.length} skill(s) manual(ais): ${matchedManual.map(s => s.name).join(', ')}`);
+        }
+
+        const manualTools = matchedManual.flatMap(s => s.tools ?? []);
+        if (manualTools.length > 0) {
+            intentDecision.preferredTools = Array.from(new Set([...(intentDecision.preferredTools ?? []), ...manualTools]));
         }
 
         // RFC-008 (HOST_CONTEXT=on): ferramentas do aplicativo hospedeiro entram em TODA categoria — só acrescenta.

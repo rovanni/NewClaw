@@ -73,7 +73,7 @@ async function main() {
     const agentLoopSrc = readSource('loop/AgentLoop.ts');
     const groundingBlockSite = agentLoopSrc.slice(
         agentLoopSrc.indexOf("[GROUNDING] estado=${g.state}"),
-        agentLoopSrc.indexOf("return AgentLoop.groundingBlockedMessage(g.state);"),
+        agentLoopSrc.indexOf("return AgentLoop.groundingBlockedMessage(g.state"),
     );
     assert(
         /pattern:\s*'grounding_blocked'/.test(groundingBlockSite),

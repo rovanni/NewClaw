@@ -214,8 +214,8 @@ const SEMANTIC_RULES: SemanticRule[] = [
     {
         category: 'system_operation',
         modelCategory: 'execution',
-        keywords: ['servidor', 'docker', 'deploy', 'nginx', 'ssh', 'banco de dados', 'database'],
-        patterns: [/\b(servidor|docker|deploy|nginx|ssh|database|postgres|mysql)\w*\b/i],
+        keywords: ['servidor', 'docker', 'deploy', 'nginx', 'ssh', 'banco de dados', 'database', 'email', 'e-mail', 'emails', 'e-mails', 'gmail', 'inbox', 'himalaya'],
+        patterns: [/\b(servidor|docker|deploy|nginx|ssh|database|postgres|mysql|email|e-?mail|gmail|himalaya|inbox)\w*\b/i],
         cognitiveLoad: 'deep',
         requiresReasoning: true,
     },
@@ -346,11 +346,11 @@ export function buildClassificationMessages(input: string, context?: RouterConte
 - information: factual questions, web searches, explanations, definitions
 - data_analysis: analyzing data, statistics, crypto/market prices, financial data, reports
 - memory_operation: saving to or retrieving from memory/notes
-- system_operation: shell commands, servers, deployment, infrastructure, SSH
+- system_operation: executing commands, running scripts, servers, deployment, infrastructure, SSH, checking/managing local services or user accounts (e.g. emails, inboxes, gmail, git, docker, database)
 - audio: generating audio, TTS, voice narration
 - vision: analyzing images, screenshots, OCR
 - destructive: deleting files/databases, formatting disks, dangerous system commands
-- conversation: general chat, opinions, follow-ups, ambiguous requests`;
+- conversation: general chat, opinions, small talk, casual social follow-ups. IMPORTANT: requests to check real-world data, emails, account status, files or run tools are NEVER conversation, even if short or phrased casually.`;
 
     // Ponte para Fast Path: campos opcionais além de category/cognitiveLoad/confidence. A
     // autoridade sobre "isto pode ser respondido direto, sem mais interpretação" é sempre sua —
@@ -388,7 +388,7 @@ If the request represents a narrow, specific, potentially recurring capability t
         ];
     }
 
-    const systemContent = `You are an intent classifier. Classifique a intenção da mensagem atual do usuário considerando a conversa recente. A última resposta do assistente é o antecedente mais imediato, mas use o histórico para detectar mudança de assunto, referência, confirmação, rejeição, dúvida, adiamento ou continuação.
+    const systemContent = `You are an intent classifier. Classifique a intenção da mensagem atual do usuário considerando a conversa recente. A última resposta do assistente é o antecedente mais imediato, mas use o histórico para detectar mudança de assunto, referência, confirmação, rejeição, dúvida, adiamento ou continuação. Pedidos do usuário para checar novidades, status de contas, e-mails, arquivos ou serviços reais devem ser classificados na categoria funcional apropriada (ex: system_operation ou information), NUNCA como conversation.
 
 ${baseCategories}
 ${toolBridge}

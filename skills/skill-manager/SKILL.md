@@ -52,9 +52,10 @@ mkdir -p /tmp/skill_staging
 # Clonar o repositório
 git clone "<URL_REPO>" /tmp/skill_staging/<NOME_SKILL>
 
-# Verificar estrutura básica
+# Verificar estrutura básica e frontmatter obrigatório (name: e description:)
 ls /tmp/skill_staging/<NOME_SKILL>/
 cat /tmp/skill_staging/<NOME_SKILL>/SKILL.md 2>/dev/null || echo "Sem SKILL.md"
+# O SKILL.md DEVE começar com frontmatter YAML delimitado por --- contendo 'name:' e 'description:'. Sem 'name:', o SkillLoader não carrega a skill.
 ```
 
 Windows (PowerShell):
@@ -65,9 +66,14 @@ New-Item -ItemType Directory -Force -Path "$env:TEMP\skill_staging" | Out-Null
 # Clonar o repositório
 git clone "<URL_REPO>" "$env:TEMP\skill_staging\<NOME_SKILL>"
 
-# Verificar estrutura básica
+# Verificar estrutura básica e frontmatter obrigatório
 Get-ChildItem "$env:TEMP\skill_staging\<NOME_SKILL>"
-if (Test-Path "$env:TEMP\skill_staging\<NOME_SKILL>\SKILL.md") { Get-Content "$env:TEMP\skill_staging\<NOME_SKILL>\SKILL.md" } else { "Sem SKILL.md" }
+if (Test-Path "$env:TEMP\skill_staging\<NOME_SKILL>\SKILL.md") {
+    Get-Content "$env:TEMP\skill_staging\<NOME_SKILL>\SKILL.md" -TotalCount 10
+} else {
+    "Sem SKILL.md"
+}
+# O SKILL.md DEVE conter frontmatter YAML delimitado por --- com 'name:' e 'description:'. Sem isso, o SkillLoader registrará 'SKILL.md sem nome' e ignorará a skill.
 ```
 
 ### Etapa 4 — Executar auditoria de segurança
