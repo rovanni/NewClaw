@@ -55,9 +55,9 @@ export interface VereditoPadrao {
     itens: ItemJulgado[];
     confianca?: number;
     motivo?: string;
-    /** Observação do modelo: informação que faltou para decidir. Só observabilidade. */
+    /** Observação opcional do modelo; quando incluída, deve explicar especificamente a lacuna. Só observabilidade. */
     faltou?: string;
-    /** Observação do modelo: outro problema que dificultou a decisão. Só observabilidade. */
+    /** Observação opcional do modelo; quando incluída, deve explicar especificamente a dificuldade. Só observabilidade. */
     dificuldade?: string;
     /** Por que o motor não chegou a um veredito do modelo (entrada ausente, orçamento, falha). */
     naoAvaliavelPorque?: string;
@@ -198,10 +198,15 @@ export function extrairObjetoDoVeredito(texto: string): Record<string, unknown> 
 }
 
 /**
- * Lê a saída do modelo. Estrutural: só existência, tipo e valores permitidos — o texto não é interpretado.
+ * Lê a saída do modelo. Estrutural: valida forma, tipos, valores permitidos e descrições não vazias nos relatos opcionais;
+ * não interpreta semanticamente o texto desses relatos.
  * Devolve null quando a forma não confere (o motor trata como não avaliável; uma saída malformada nunca é "consertada").
  */
-export function lerSaidaDoModelo(saida: string, nomesExtras: readonly string[] = []): Omit<VereditoPadrao, 'estado'> & { estadoDoModelo?: 'aprovado' | 'reprovado' } | null {
+export function lerSaidaDoModelo(
+    saida: string,
+    nomesExtras: readonly string[] = [],
+    diagnostico?: { motivo?: string },
+): Omit<VereditoPadrao, 'estado'> & { estadoDoModelo?: 'aprovado' | 'reprovado' } | null {
     const bruto = extrairObjetoDoVeredito(saida);
     if (!bruto) return null;
 
@@ -222,14 +227,27 @@ export function lerSaidaDoModelo(saida: string, nomesExtras: readonly string[] =
     }
     const estado = typeof bruto.estado === 'string' ? bruto.estado.trim().toLowerCase() : '';
     const texto = (v: unknown, max = 500): string | undefined => (typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : undefined);
+    const observacao = (campo: 'faltou' | 'dificuldade'): string | undefined | null => {
+        if (!Object.prototype.hasOwnProperty.call(bruto, campo)) return undefined;
+        const valor = bruto[campo];
+        if (typeof valor !== 'string' || !valor.trim()) {
+            diagnostico && (diagnostico.motivo = `campo "${campo}" foi incluído sem uma descrição; descreva o que faltou ou aconteceu`);
+            return null;
+        }
+        return valor.trim().slice(0, 500);
+    };
+    const faltou = observacao('faltou');
+    if (faltou === null) return null;
+    const dificuldade = observacao('dificuldade');
+    if (dificuldade === null) return null;
     const conf = typeof bruto.confianca === 'number' && bruto.confianca >= 0 && bruto.confianca <= 1 ? bruto.confianca : undefined;
     return {
         itens,
         estadoDoModelo: ESTADOS.has(estado) ? estado as 'aprovado' | 'reprovado' : undefined,
         confianca: conf,
         motivo: texto(bruto.motivo, 1000),
-        faltou: texto(bruto.faltou),
-        dificuldade: texto(bruto.dificuldade),
+        faltou,
+        dificuldade,
         extras: nomesExtras.length
             ? Object.fromEntries(nomesExtras.map(n => [n, texto(bruto[n], 2000)]).filter(([, v]) => v !== undefined)) as Record<string, string>
             : undefined,

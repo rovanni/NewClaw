@@ -3,7 +3,8 @@
  * TESTE DE REGRESSÃO — S354 (Sprint C, 08/10/2026 — campo de observação "faltou" dos avaliadores)
  *
  * Proposta do operador: o LLM dá um feedback quando não tem informação para decidir — como a avaliação de fim de
- * curso. O campo é opcional e só de observabilidade: vai para o gravador de voo e nenhuma decisão o lê.
+ * curso. Cada campo é opcional; se incluído, exige uma descrição não vazia. Os relatos são observabilidade e nenhuma
+ * decisão lê o conteúdo.
  *
  * REGRESSÃO SE:
  *  - um dos três prompts (juiz de grounding, validador de qualidade, análise de risco) deixar de pedir o campo;
@@ -17,7 +18,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { ObserverValidator } from '../../loop/ObserverValidator';
-import { INSTRUCAO_FALTOU, lerFaltou } from '../../shared/evaluatorFlightRecorder';
+import { INSTRUCAO_DIFICULDADE, INSTRUCAO_FALTOU, lerDificuldade, lerFaltou } from '../../shared/evaluatorFlightRecorder';
 import './_fixtures/motorLegado';   // juízes simulados no formato antigo → formato do motor único (ADR-014)
 
 let passed = 0;
@@ -52,6 +53,8 @@ async function main(): Promise<void> {
     assert(lerFaltou('{"claims":[],"faltou":"o pedido do usuário"}') === 'o pedido do usuário', 'lê o campo');
     assert(lerFaltou('```json\n{"approved":true,"faltou":"  x  "}\n```') === 'x', 'tolera cerca de código e espaços');
     assert(lerFaltou('{"claims":[]}') === undefined && lerFaltou('{"faltou":""}') === undefined && lerFaltou('não é json') === undefined, 'ausente, vazio ou sem JSON → nada');
+    assert(lerDificuldade('{"dificuldade":"evidências contraditórias; faltou a confirmação da fonte"}') === 'evidências contraditórias; faltou a confirmação da fonte', 'lê a descrição de dificuldade');
+    assert(INSTRUCAO_FALTOU.includes('frase específica') && INSTRUCAO_DIFICULDADE.includes('descreva especificamente'), 'instruções pedem descrições concretas quando a opção é incluída');
 
     console.log('\n=== S354-2 — juiz de grounding: prompt pede o campo; veredito igual com e sem ele; observação gravada ===');
     const pj: string[] = [];
@@ -75,7 +78,9 @@ async function main(): Promise<void> {
 
     console.log('\n=== S354-4 — análise de risco: o prompt pede o campo, pela mesma instrução ===');
     const srcRisco = fs.readFileSync(path.join(process.cwd(), 'src', 'loop', 'RiskAnalyzer.ts'), 'utf8');
-    assert(srcRisco.includes('${INSTRUCAO_FALTOU}') && srcRisco.includes('faltou: lerFaltou(reg.saidaBruta)'), 'RiskAnalyzer usa a instrução única e grava a observação');
+    assert(srcRisco.includes('${INSTRUCAO_FALTOU}') && srcRisco.includes('${INSTRUCAO_DIFICULDADE}') &&
+        srcRisco.includes('faltou: lerFaltou(reg.saidaBruta)') && srcRisco.includes('dificuldade: lerDificuldade(reg.saidaBruta)'),
+    'RiskAnalyzer usa as instruções únicas e grava os dois relatos');
     const srcObs = fs.readFileSync(path.join(process.cwd(), 'src', 'loop', 'ObserverValidator.ts'), 'utf8');
     assert(!/Campo OPCIONAL "faltou"/.test(srcObs + srcRisco), 'nenhuma cópia local do texto da instrução (fonte única: evaluatorFlightRecorder)');
 

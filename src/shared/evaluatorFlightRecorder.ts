@@ -72,36 +72,44 @@ const MAX_TEXTO_CHARS = 300_000;
 /**
  * Campo de observação dos avaliadores (Sprint C, 08/10/2026 — proposta do operador: "o LLM poderia dar um feedback
  * de algum problema que encontrou e não está conseguindo fazer a tomada de decisão", como a avaliação de fim de curso).
- * Texto ÚNICO, usado pelos três prompts (juiz de grounding, validador de qualidade, análise de risco). O campo é só
- * observabilidade: vai para o gravador de voo e NENHUMA decisão o lê. Opcional de propósito — obrigatório, o modelo o
- * preencheria sempre, por obrigação, e o sinal viraria ruído.
+ * Texto ÚNICO, usado pelo motor compartilhado por todos os tipos de validação. Cada campo é opcional: o modelo só o inclui
+ * quando houver algo a relatar. Se incluir, precisa fornecer uma descrição não vazia; o prompt pede que seja específica e
+ * útil, e o leitor do contrato rejeita campo selecionado sem descrição. O conteúdo continua sendo observabilidade e não
+ * altera a decisão julgada.
  */
 export const INSTRUCAO_FALTOU =
-    'Campo OPCIONAL "faltou": se faltou alguma informação para você decidir com segurança, diga qual e por quê, em uma ' +
-    'frase (ex.: "o pedido do usuário — a resposta cita o curso pedido e não tenho como conferir"). Omita o campo se não ' +
-    'faltou nada. Ele não muda a sua decisão: serve para melhorar o sistema depois.';
+    'Campo OPCIONAL "faltou": inclua-o somente se faltou informação para decidir com segurança. Se incluir, descreva em ' +
+    'uma frase específica qual informação faltou, por que ela é necessária e, quando souber, que evidência resolveria a ' +
+    'lacuna (ex.: "faltou o conteúdo da caixa de entrada; preciso da saída da leitura da conta para confirmar os e-mails"). ' +
+    'Não escreva apenas "faltou informação" ou outra frase genérica. Omita o campo se nada faltou. Este relato não muda o veredito.';
 
 /**
  * Campo de observação `dificuldade` (ADR-014, proposta do operador: "o validador vai ter o campo opcional para o LLM
  * registrar problemas e dificuldades, para utilizar como logs"). Complementa `faltou`: não é informação ausente, é outro
- * problema que atrapalhou a decisão. Mesmas regras: opcional, só observabilidade, nenhuma decisão o lê.
+ * problema que atrapalhou a decisão. É opcional; se incluído, precisa descrever o que aconteceu e como isso afetou a
+ * avaliação. Só observabilidade: nenhuma decisão lê o conteúdo.
  */
 export const INSTRUCAO_DIFICULDADE =
-    'Campo OPCIONAL "dificuldade": se outra coisa dificultou a sua decisão (pedido ambíguo, evidências que se ' +
-    'contradizem, regra destas instruções que não se aplica bem ao caso), diga o quê, em uma frase. Omita se não houve.';
+    'Campo OPCIONAL "dificuldade": inclua-o somente se algo dificultou a decisão (por exemplo, pedido ambíguo, evidências ' +
+    'contraditórias ou regra que não se aplica bem ao caso). Se incluir, descreva especificamente o que aconteceu, qual ' +
+    'parte da avaliação foi afetada e, quando souber, o que permitiria corrigir ou esclarecer o problema. Não escreva apenas ' +
+    '"houve dificuldade" ou outra frase genérica. Omita o campo se não houve dificuldade. Este relato não muda o veredito.';
 
-/** Lê o campo `faltou` da saída JSON de um avaliador. Estrutural: só existência e tipo — o texto não é interpretado. */
-export function lerFaltou(saida: string | undefined): string | undefined {
+/** Lê uma observação opcional da saída JSON. Estrutural: existência e tipo — o texto não é interpretado. */
+function lerObservacao(saida: string | undefined, campo: 'faltou' | 'dificuldade'): string | undefined {
     if (!saida) return undefined;
     const limpo = saida.replace(/```json\n?/gi, '').replace(/```\n?/g, '');
     const inicio = limpo.indexOf('{');
     const fim = limpo.lastIndexOf('}');
     if (inicio < 0 || fim <= inicio) return undefined;
     try {
-        const v = (JSON.parse(limpo.slice(inicio, fim + 1)) as { faltou?: unknown }).faltou;
+        const v = (JSON.parse(limpo.slice(inicio, fim + 1)) as Record<string, unknown>)[campo];
         return typeof v === 'string' && v.trim() ? v.trim().slice(0, 500) : undefined;
     } catch { return undefined; }
 }
+
+export const lerFaltou = (saida: string | undefined): string | undefined => lerObservacao(saida, 'faltou');
+export const lerDificuldade = (saida: string | undefined): string | undefined => lerObservacao(saida, 'dificuldade');
 
 export function novaAvaliacaoId(): string {
     return `av_${Date.now().toString(36)}_${randomBytes(3).toString('hex')}`;
