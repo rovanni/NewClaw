@@ -1239,6 +1239,24 @@ export class AgentLoop {
                         }
                     }
 
+                    if (g.state === 'UNVALIDATED') {
+                        // ADR-010 §9: UNVALIDATED é falha transitória do verificador (timeout/recurso),
+                        // não falsidade do conteúdo. Revalida a MESMA resposta uma vez antes de descartá-la.
+                        try {
+                            const reval = await this.observer.validateGrounding(response, evidences, signal, {
+                                traceId: trace.id, conversationId, phase: 'revalidation', userRequest: userText,
+                                recentMessages: channelContext?.recentMessages, ...channelContext?.goalTrace,
+                            });
+                            if (reval.state === 'VALIDATED' || reval.state === 'NOT_APPLICABLE') {
+                                log.info(`[${this.ts()}] [GROUNDING] resposta revalidada com sucesso após UNVALIDATED inicial`);
+                                efeitoDoJuiz('resposta_liberada_apos_unvalidated', { estado: reval.state });
+                                return response;
+                            }
+                        } catch (revalErr) {
+                            log.warn(`[${this.ts()}] [GROUNDING] revalidação de UNVALIDATED falhou: ${errorMessage(revalErr)}`);
+                        }
+                    }
+
                     log.info(`[GROUNDING-TRACE] ${JSON.stringify({ v: 1, phase: 'decision', traceId: trace.id, conversationId, ...channelContext?.goalTrace, state: g.state, claimsTotal: g.claims.length, supported: supportedClaims.length, path: supportedClaims.length > 0 ? 'blocked_partial_rejected' : 'blocked_no_supported_claims', evidenceSources: { turn: evidences.length - (channelContext?.priorStepEvidence?.length ?? 0), priorSteps: channelContext?.priorStepEvidence?.length ?? 0 } })}`);
                     efeitoDoJuiz('resposta_bloqueada', { estado: g.state, sustentadas: supportedClaims.length, total: g.claims.length, tentouParcial: supportedClaims.length > 0 });
                     turnState.groundingBlock = {

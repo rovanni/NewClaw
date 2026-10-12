@@ -205,10 +205,12 @@ export class ValidationEngine {
             const restante = limite - Date.now();
             if (restante < Math.min(5000, orcamento.timeoutMs * 0.1)) break;
             const ultimo = i === modos.length - 1;
-            // Modo que vem funcionando para este modelo recebe o que resta (não há por que cortá-lo para sobrar tempo ao outro);
-            // só quando ainda não há confiança num modo é que o primeiro divide o tempo com o segundo.
             const confiavel = i === 0 && this.perfil.confiavel(chaveDoModelo, modos[0]);
-            const fatia = ultimo || confiavel ? restante : Math.max(1, Math.round(restante * FATIA_DO_PRIMEIRO_MODO));
+            const fatia = ultimo
+                ? restante
+                : (confiavel
+                    ? (orcamento.timeoutMs >= 15000 ? Math.max(1, Math.round(restante * 0.75)) : restante)
+                    : Math.max(1, Math.round(restante * FATIA_DO_PRIMEIRO_MODO)));
             const ctrl = new AbortController();
             const timer = setTimeout(() => ctrl.abort(), fatia);
             const t1 = Date.now();

@@ -119,7 +119,10 @@ export class PerfilDoJuiz {
      */
     ordemDosModos(chave: string, preferido: ModoDoJuiz): ModoDoJuiz[] {
         const p = this.perfil(chave);
-        const pontos = (m: ModoDoJuiz): number => (p[m].ok + 1) / (p[m].n + 2) + (m === preferido ? 0.01 : 0);
+        const pontos = (m: ModoDoJuiz): number => {
+            const penalidadeFalha = p[m].falhasSeguidas > 0 ? 0.15 * p[m].falhasSeguidas : 0;
+            return (p[m].ok + 1) / (p[m].n + 2) + (m === preferido ? 0.01 : 0) - penalidadeFalha;
+        };
         return [...MODOS].sort((a, b) => {
             const d = pontos(b) - pontos(a);
             if (Math.abs(d) > 1e-9) return d;
@@ -127,10 +130,10 @@ export class PerfilDoJuiz {
         });
     }
 
-    /** Este modo já provou funcionar para este modelo (amostra mínima e taxa de sucesso alta)? Então merece o tempo todo. */
+    /** Este modo já provou funcionar para este modelo (amostra mínima, taxa alta e sem falhas seguidas no limite do disjuntor)? */
     confiavel(chave: string, modo: ModoDoJuiz): boolean {
         const s = this.perfil(chave)[modo];
-        return s.n >= 2 && s.ok / s.n >= 0.6;
+        return s.n >= 2 && s.ok / s.n >= 0.6 && s.falhasSeguidas < FALHAS_PARA_DISJUNTOR;
     }
 
     /**

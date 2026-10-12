@@ -2438,9 +2438,13 @@ export class GoalExecutionLoop {
             description: `Step '${cleanDesc.slice(0, 100)}' teve a resposta bloqueada pela verificação contra os dados (${block.state})${alreadyHinted ? ' após 2 tentativas' : ''}: ${fact}.`,
             userSummary: block.state === 'UNVALIDATED'
                 ? `Não foi possível verificar a tempo a resposta da etapa "${cleanDesc.slice(0, 100)}" contra os dados coletados.`
+                : block.state === 'NOT_EVALUABLE'
+                ? `As evidências coletadas na etapa "${cleanDesc.slice(0, 100)}" não foram suficientes para confirmar os detalhes da resposta.`
                 : `A resposta da etapa "${cleanDesc.slice(0, 100)}" trazia afirmações que os dados coletados não confirmaram.`,
             suggestedActions: block.state === 'UNVALIDATED'
                 ? ['A falha foi da verificação, não do conteúdo — o mesmo resultado pode ser obtido de novo']
+                : block.state === 'NOT_EVALUABLE'
+                ? ['Buscar mais detalhes ou usar comando com saída estruturada (--json)', 'Responder com menos detalhes inferidos']
                 : ['Obter com ferramenta o dado que sustenta as afirmações não confirmadas', 'Responder só com o que os dados coletados mostram'],
             detectedAt: Date.now(),
         };

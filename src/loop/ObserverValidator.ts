@@ -111,10 +111,10 @@ export interface GroundingTraceContext {
     /** S4: a janela de turnos recentes da conversa (sem a mensagem atual) — contexto para o juiz, nunca evidência. */
     recentMessages?: Array<{ role: string; content: string }>;
     /**
-     * `initial` = julgamento da resposta do turno; `partial-revalidation` = revalidação da resposta
-     * parcial; `shadow-extended` = a execução em sombra com evidência ampliada (nunca vira decisão).
+     * `initial` = julgamento da resposta do turno; `revalidation` = revalidação da mesma resposta após UNVALIDATED inicial;
+     * `partial-revalidation` = revalidação da resposta parcial; `shadow-extended` = a execução em sombra com evidência ampliada (nunca vira decisão).
      */
-    phase?: 'initial' | 'partial-revalidation' | 'shadow-extended' | 'shadow-model';
+    phase?: 'initial' | 'revalidation' | 'partial-revalidation' | 'shadow-extended' | 'shadow-model';
 }
 
 interface GroundingEvidenceFact {
