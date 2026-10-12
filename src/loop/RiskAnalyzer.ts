@@ -28,7 +28,7 @@ import { resolveArtifactPathFromEvidence } from './planning/artifactContract';
 import { KNOWN_DEPS } from './GoalEvaluator';
 import { resolvePath } from '../utils/crossPlatform';
 import { createHash } from 'crypto';
-import { gravarAvaliacao, novaAvaliacaoId, versaoDoPrompt, INSTRUCAO_FALTOU, lerFaltou } from '../shared/evaluatorFlightRecorder';
+import { gravarAvaliacao, novaAvaliacaoId, versaoDoPrompt, INSTRUCAO_FALTOU, INSTRUCAO_DIFICULDADE, lerFaltou, lerDificuldade } from '../shared/evaluatorFlightRecorder';
 import type { CallTelemetry } from '../core/providerTypes';
 import { obterMotor } from '../validation/motorPadrao';
 import type { DecisaoDeRisco } from '../validation/tipos/demaisTipos';
@@ -683,8 +683,8 @@ export class RiskAnalyzer {
                 desfecho: reg.outcome ?? 'desconhecido',
                 estado: r.planRejected ? 'plano_rejeitado' : r.planAdjusted ? 'plano_ajustado' : 'plano_mantido',
                 duracaoMs: Date.now() - t0,
-                fatos: { llmStatus: reg.llmStatus, riscos: r.risks.length, passosPropostos: reg.proposed?.length, mutacoesDoSanitizer: reg.sanitizerMutations?.length, faltouInformado: !!lerFaltou(reg.saidaBruta) },
-                conteudo: { riscos: r.risks, motivoRejeicao: r.rejectionReason, saidaBruta: reg.saidaBruta, propostaCrua: reg.rawProposal, proposta: reg.proposed, faltou: lerFaltou(reg.saidaBruta) },
+                fatos: { llmStatus: reg.llmStatus, riscos: r.risks.length, passosPropostos: reg.proposed?.length, mutacoesDoSanitizer: reg.sanitizerMutations?.length, faltouInformado: !!lerFaltou(reg.saidaBruta), dificuldadeInformada: !!lerDificuldade(reg.saidaBruta), faltou: lerFaltou(reg.saidaBruta), dificuldade: lerDificuldade(reg.saidaBruta) },
+                conteudo: { riscos: r.risks, motivoRejeicao: r.rejectionReason, saidaBruta: reg.saidaBruta, propostaCrua: reg.rawProposal, proposta: reg.proposed, faltou: lerFaltou(reg.saidaBruta), dificuldade: lerDificuldade(reg.saidaBruta) },
             },
         });
         return r;
@@ -766,11 +766,12 @@ Retorne o plano completo corrigido, com os riscos acima resolvidos (ex.: step fa
                — text é OBRIGATÓRIO. NÃO use "file_path" (send_audio gera o áudio a partir de texto, não lê arquivo).
 
 ${INSTRUCAO_FALTOU}
+${INSTRUCAO_DIFICULDADE}
 
-Responda APENAS com JSON válido (sem markdown, máximo 5 steps):
-{"risks": ["risco 1"], "plan": [{"id": "step_1", "description": "...", "toolName": "...", "toolArgs": {...}}, ...], "faltou": "(opcional)"}
+Responda APENAS com JSON válido (sem markdown, máximo 5 steps). Se incluir "faltou" ou "dificuldade", o valor precisa explicar o problema; não deixe o campo vazio nem use texto genérico:
+{"risks": ["risco 1"], "plan": [{"id": "step_1", "description": "...", "toolName": "...", "toolArgs": {...}}, ...], "faltou": "(omita ou descreva a lacuna)", "dificuldade": "(omita ou descreva o problema)"}
 OU
-{"risks": [], "plan": null}`;
+{"risks": [], "plan": null, "faltou": "(omita ou descreva a lacuna)", "dificuldade": "(omita ou descreva o problema)"}`;
 
         try {
             // gemma4:31b-cloud: gera JSON rápido sem extended thinking (60s é sobra).
@@ -806,6 +807,22 @@ OU
 
             const detectedRisks: string[] = Array.isArray(parsed.risks) && parsed.risks.length > 0 ? parsed.risks : riscosDoJuiz;
             if (sink) sink.detectedRisks = detectedRisks.length;
+
+            const relatoInvalido = (['faltou', 'dificuldade'] as const).find(campo =>
+                Object.prototype.hasOwnProperty.call(parsed, campo) && (typeof parsed[campo] !== 'string' || !parsed[campo].trim()),
+            );
+            if (relatoInvalido) {
+                const motivo = `Saída do revisor inválida: o campo "${relatoInvalido}" foi incluído sem descrição do problema.`;
+                if (sink) { sink.outcome = 'invalid_observation'; sink.rejectionReason = motivo; }
+                const temPlanoProposto = Array.isArray(parsed.plan) && parsed.plan.length > 0;
+                return {
+                    risks: [...detectedRisks, motivo],
+                    adjustedPlan: plan,
+                    planAdjusted: false,
+                    planRejected: temPlanoProposto || undefined,
+                    rejectionReason: temPlanoProposto ? motivo : undefined,
+                };
+            }
 
             if (!parsed.plan || !Array.isArray(parsed.plan) || parsed.plan.length === 0) {
                 if (sink) sink.outcome = 'confirmed';
