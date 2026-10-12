@@ -54,7 +54,7 @@ async function main(): Promise<void> {
         assert(/if\s*\(reval\.state === 'VALIDATED' \|\| reval\.state === 'NOT_APPLICABLE'\)/.test(blockContent),
             'se a revalidação retornar VALIDATED ou NOT_APPLICABLE, aceita');
 
-        assert(/return response;/.test(blockContent),
+        assert(/return revalidatedResponse;/.test(blockContent),
             'resposta original é liberada e retornada quando a revalidação tem sucesso');
 
         assert(/resposta_liberada_apos_unvalidated/.test(blockContent),

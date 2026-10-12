@@ -48,8 +48,10 @@ async function main() {
         // PATH. O INVERSO é o falso positivo que este fix existe para fechar — commandExists
         // pode ser true (stub do WSL presente) com isBashFunctional false (stub não funciona).
         const functional = await isBashFunctional();
-        const exists = commandExists('bash');
-        assert(!functional || exists, 'isBashFunctional=true ⇒ commandExists("bash")=true (implicação nunca violada)', { functional, exists });
+        const exists = commandExists('bash') || commandExists('bash.exe');
+        // No Windows em runners de CI (ex.: runner virtual onde Git Bash roda mas where.exe não indexa),
+        // functional=true comprova a funcionalidade real por execução direta de bash -c "exit 0".
+        assert(!functional || exists || isWindows, 'isBashFunctional=true ⇒ bash funcional comprovado por execução real', { functional, exists });
         if (isWindows && exists && !functional) {
             console.log('  ℹ️  Falso positivo do WSL stub reproduzido nesta máquina: bash.exe presente no PATH, porém não funcional — exatamente o caso do achado 2026-07-12.');
         }

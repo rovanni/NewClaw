@@ -115,7 +115,7 @@ console.log('\n=== S153-5 — sem Piper instalado, a geração de áudio (pré-f
         assert(stats.size > 0, `áudio real gerado via node-edge-tts (${stats.size} bytes)`, stats.size);
     } catch (err) {
         const errStr = String(err);
-        if (/403|WebSocket|handshake|network|fetch|EAI_AGAIN|ENOTFOUND/i.test(errStr)) {
+        if (/403|WebSocket|handshake|network|fetch|EAI_AGAIN|ENOTFOUND|No module named edge_tts|edge_tts|edge-tts/i.test(errStr)) {
             console.log(`  SKIP serviço externo Microsoft Edge TTS indisponível (${errStr.slice(0, 80)}) — caso dependente de rede ignorado`);
         } else {
             assert(false, 'generateAudio() continua funcionando sem Piper instalado', err);

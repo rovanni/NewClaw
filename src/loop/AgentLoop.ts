@@ -1250,7 +1250,8 @@ export class AgentLoop {
                             if (reval.state === 'VALIDATED' || reval.state === 'NOT_APPLICABLE') {
                                 log.info(`[${this.ts()}] [GROUNDING] resposta revalidada com sucesso após UNVALIDATED inicial`);
                                 efeitoDoJuiz('resposta_liberada_apos_unvalidated', { estado: reval.state });
-                                return response;
+                                const revalidatedResponse = response;
+                                return revalidatedResponse;
                             }
                         } catch (revalErr) {
                             log.warn(`[${this.ts()}] [GROUNDING] revalidação de UNVALIDATED falhou: ${errorMessage(revalErr)}`);
