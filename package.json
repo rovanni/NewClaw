@@ -4,6 +4,7 @@
   "description": "Agente pessoal de IA 100% local com Telegram",
   "main": "dist/index.js",
   "scripts": {
+    "preinstall": "node scripts/check-runtime.cjs",
     "dev": "ts-node src/index.ts",
     "build": "tsc && node -e \"const fs=require('fs'); const path=require('path'); const src=path.join('src','dashboard','public'); const dest=path.join('dist','dashboard','public'); fs.mkdirSync(path.dirname(dest), {recursive:true}); fs.cpSync(src, dest, {recursive:true, force:true}); console.log('Dashboard static files copied to dist/')\"",
     "start": "node dist/index.js",
@@ -13,9 +14,22 @@
     "test:regression:selftest": "node scripts/run-regression-tests.cjs --selftest",
     "test:integration": "ts-node scripts/testes/integration-campaign-runner.ts"
   },
-  "//optionalDependencies": "newclaw-kernel-adapter é um pacote NÃO publicado, resolvido por caminho relativo (file:../newclaw-kernel-adapter) que só existe quando os dois repositórios são irmãos na mesma máquina. Como dependência normal, quebrava `npm run build` em toda instalação que não fosse a do autor — inclusive qualquer clone do GitHub. Fica como opcional: npm ignora a falha de instalação, e CognitiveKernelGate carrega o pacote sob demanda, desativando o gate quando ausente.",
-  "optionalDependencies": {
-    "newclaw-kernel-adapter": "file:../newclaw-kernel-adapter"
+  "engines": {
+    "node": "^22.22.2 || ^24.15.0",
+    "npm": ">=12.2.0"
+  },
+  "allowScripts": {
+    "@whiskeysockets/baileys@7.0.0-rc13": true,
+    "protobufjs@7.6.5": true,
+    "better-sqlite3": true
+  },
+  "peerDependencies": {
+    "newclaw-kernel-adapter": "^0.1.0"
+  },
+  "peerDependenciesMeta": {
+    "newclaw-kernel-adapter": {
+      "optional": true
+    }
   },
   "dependencies": {
     "@types/better-sqlite3": "^7.6.13",
@@ -47,6 +61,7 @@
     "undici": "6.28.1",
     "sharp": "^0.35.5",
     "qs": "^6.16.0",
-    "image-size": "^2.0.4"
+    "image-size": "^2.0.4",
+    "music-metadata": "^11.16.0"
   }
 }

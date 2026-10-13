@@ -9,10 +9,10 @@
  *       Cannot find module 'newclaw-kernel-adapter' or its corresponding type declarations.
  *     ❌ Falha na atualização: Command failed: npm run build
  *
- * Causa: `newclaw-kernel-adapter` é um pacote NÃO publicado, declarado como
- * `file:../newclaw-kernel-adapter` — caminho relativo que só resolve na máquina onde os dois
- * repositórios são irmãos. Em qualquer outra instalação (outra máquina do autor, VPS, ou qualquer
- * clone do repositório público) o caminho não existe, e o `import` estático quebrava o build.
+ * Causa: `newclaw-kernel-adapter` é um pacote local NÃO publicado. Um `file:` em
+ * optionalDependencies deixava um link quebrado no npm ci de clones sem o repositório irmão,
+ * embora o pacote estivesse marcado como opcional. A dependência agora é um peer opcional, que
+ * não instala um link ausente; em desenvolvimento, o pacote local é instalado explicitamente.
  *
  * A ironia está no cabeçalho do próprio arquivo, que sempre prometeu:
  *
@@ -50,6 +50,8 @@ async function main() {
         dependencies?: Record<string, string>;
         devDependencies?: Record<string, string>;
         optionalDependencies?: Record<string, string>;
+        peerDependencies?: Record<string, string>;
+        peerDependenciesMeta?: Record<string, { optional?: boolean }>;
     };
 
     // ── 1. Nenhum import estático do pacote opcional ──────────────────────────
@@ -82,8 +84,9 @@ async function main() {
             'o pacote não está em "devDependencies"',
         );
         check(
-            !!(pkg.optionalDependencies && nome in pkg.optionalDependencies),
-            'o pacote está declarado em "optionalDependencies"',
+            pkg.peerDependencies?.[nome] === '^0.1.0'
+                && pkg.peerDependenciesMeta?.[nome]?.optional === true,
+            'o pacote é um peer opcional, sem instalação local forçada',
         );
     }
 

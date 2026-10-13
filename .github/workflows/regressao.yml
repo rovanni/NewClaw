@@ -32,7 +32,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-        node: [22]   # o README declara Node >= 22
+        node: [22.22.2, 24.15.0]   # mínimos declarados; cada runner instala npm 12.2.0
     steps:
       - uses: actions/checkout@v4
 
@@ -41,8 +41,11 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: npm
 
-      # Instalação reproduzível: o package-lock.json manda. O pacote opcional newclaw-kernel-adapter (file:../) não existe em um
-      # clone isolado — o npm ignora a falha de uma optionalDependency; o projeto compila e roda sem ele (S203).
+      - name: Fixar npm com allowScripts
+        run: npm install --global npm@12.2.0
+
+      # Instalação reproduzível: o lockfile manda. O peer opcional newclaw-kernel-adapter não força
+      # um link local ausente em clones isolados; build e runtime sem ele têm cobertura S203.
       - name: Instalar dependências
         run: npm ci
 
