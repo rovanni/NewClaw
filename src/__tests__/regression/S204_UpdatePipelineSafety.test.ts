@@ -85,7 +85,13 @@ async function main(): Promise<void> {
     await rollbackUpdate('abc123', null, command => recoveryCommands.push(command), () => {
         recoveryCommands.push('restart');
     }, async () => { recoveryCommands.push('health'); });
-    assert(recoveryCommands.join('|') === 'git reset --hard abc123|npm ci|npm run build|node scripts/link-local-kernel-adapter.cjs|restart|health',
+    const expectedRecoveryCommands = [
+        'git reset --hard abc123', 'npm ci', 'npm run build',
+        ...(fs.existsSync(path.resolve(root, '..', 'newclaw-kernel-adapter', 'package.json'))
+            ? ['node scripts/link-local-kernel-adapter.cjs'] : []),
+        'restart', 'health',
+    ];
+    assert(recoveryCommands.join('|') === expectedRecoveryCommands.join('|'),
         'rollback só confirma após restaurar commit, reinstalar, compilar, reiniciar e checar health');
     assert(await rejects(() => rollbackUpdate('abc123', null, command => {
         if (command.startsWith('git reset --hard')) throw new Error('mock git failure');
