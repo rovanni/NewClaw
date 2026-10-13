@@ -41,8 +41,10 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: npm
 
-      - name: Fixar npm com allowScripts
-        run: npm install --global npm@12.2.0
+      - name: Instalar npm 12.2.0 em prefixo isolado
+        run: |
+          npm install --prefix "$RUNNER_TEMP/npm12" --no-save --ignore-scripts --no-audit --no-fund npm@12.2.0
+          echo "$RUNNER_TEMP/npm12/node_modules/.bin" >> "$GITHUB_PATH"
 
       # Instalação reproduzível: o lockfile manda. O peer opcional newclaw-kernel-adapter não força
       # um link local ausente em clones isolados; build e runtime sem ele têm cobertura S203.
