@@ -195,11 +195,11 @@ un PR humano manual leyendo la evidencia aprendida y decidiendo incorporarla al 
 
 | Categoría | Herramientas |
 |---|---|
-| **Memoria** | `memory_search`, `memory_write`, `memory_admin`, `manage_memory`, `cmi_inspect` |
+| **Memoria** | `memory_search`, `memory_write`, `memory_admin` |
 | **Web** | `web_search`, `web_navigate` (usa `w3m`/`lynx`/`links`/`elinks` cuando está disponible, fallback a HTML), `api_request` |
 | **Sistema/archivos** | `exec_command`, `ssh_exec`, `read`, `write`, `edit`, `read_document`, `list_workspace`, `organize_workspace`, `refresh_workspace`, `analyze_workspace_groups`, `schedule` |
 | **Media/documentos** | `send_document`, `send_audio`, `powerpoint_control` |
-| **Datos/financiero** | `crypto_analysis`, `crypto_report`, `weather` |
+| **Datos/financiero** | `crypto_analysis`, `weather` |
 
 Las herramientas peligrosas (`exec_command`, `ssh_exec`, `api_request` contra hosts arbitrarios)
 requieren autorización — ver la sección de modos más abajo.
@@ -229,23 +229,20 @@ Skills instaladas hoy:
 
 ## Proveedores de LLM y enrutamiento por modelo
 
-### Cadena de fallback
+### Solo el proveedor y el modelo elegidos
 
 ```mermaid
 flowchart LR
-    A["Solicitud LLM"] --> O{"Ollama"}
-    O -->|"✅"| Z["Respuesta"]
-    O -->|"❌"| C{"Custom Provider\n(llamafile, LM Studio, vLLM...)"}
-    C -->|"✅"| Z
-    C -->|"❌"| G{"Gemini / OpenRouter /\nAnthropic / DeepSeek / Groq"}
-    G -->|"✅"| Z
-    G -->|"❌"| F["⚠️ Todos los proveedores fallaron"]
+    A["Solicitud LLM"] --> P{"Proveedor elegido\n(el del perfil, o DEFAULT_PROVIDER)"}
+    P -->|"✅"| Z["Respuesta"]
+    P -->|"❌"| F["⚠️ La falla es el resultado — con el nombre del proveedor"]
 ```
 
-Orden real (`ProviderFactory.getFallbackOrder`): el proveedor preferido (si lo hay) va primero;
-si no, `['ollama', 'openrouter', 'anthropic', 'gemini', 'deepseek', 'groq']`, filtrado a lo que
-esté realmente configurado, con los custom providers añadidos al final. `DEFAULT_PROVIDER` en el
-`.env` tiene prioridad sobre este orden cuando está definido.
+Desde el ADR-018 (14/10/2026) NewClaw usa **solo** el proveedor y el modelo que el usuario eligió en el panel o en la
+configuración inicial: `ProviderFactory.getFallbackOrder` devuelve solo el proveedor declarado (el del perfil de la
+llamada, o `DEFAULT_PROVIDER`). No hay modelo incrustado en el código ni respaldo en otro proveedor. Sin proveedor o sin
+modelo elegido, la llamada no sale y el mensaje dice qué elegir (`OLLAMA_MODEL`, `GEMINI_MODEL`, `DEEPSEEK_MODEL`,
+`GROQ_MODEL`, `OPENROUTER_MODEL`, `ANTHROPIC_MODEL`, o el modelo del proveedor personalizado).
 
 ### Enrutamiento por categoría
 
@@ -275,9 +272,8 @@ servicio externo, ni siquiera del propio Ollama.
 - Al elegir "usar este modelo" en el Dashboard, NewClaw levanta (`spawn`, sin shell — sin riesgo
   de inyección de comandos) un proceso local `llamafile`/`llama-server`, sirviendo un endpoint
   compatible con OpenAI en el puerto configurado (`LOCAL_SERVER_PORT`, por defecto `8080`).
-- Ese endpoint pasa a comportarse como **un proveedor más** en la cadena de fallback — puede
-  definirse como `DEFAULT_PROVIDER`, asignarse a categorías específicas vía
-  `PROVIDER_<CATEGORÍA>`, o quedar como fallback silencioso si todo lo demás falla.
+- Ese endpoint pasa a comportarse como **un proveedor más** — puede definirse como `DEFAULT_PROVIDER` o asignarse
+  a categorías específicas vía `PROVIDER_<CATEGORÍA>`. Nunca reemplaza a otro proveedor en silencio (ADR-018).
 - Los modelos locales añadidos manualmente vía `CUSTOM_PROVIDERS`/`CUSTOM_MODELS` (JSON en el
   `.env`) siguen el mismo contrato — cualquier servidor compatible con OpenAI (LM Studio, vLLM, un
   llamafile ya corriendo en otra máquina de la red) se integra de la misma forma, sin código nuevo.

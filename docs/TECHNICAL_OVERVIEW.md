@@ -195,11 +195,11 @@ crossing is a human manually reading the learned evidence and deciding to fold i
 
 | Category | Tools |
 |---|---|
-| **Memory** | `memory_search`, `memory_write`, `memory_admin`, `manage_memory`, `cmi_inspect` |
+| **Memory** | `memory_search`, `memory_write`, `memory_admin` |
 | **Web** | `web_search`, `web_navigate` (uses `w3m`/`lynx`/`links`/`elinks` when available, HTML fallback otherwise), `api_request` |
 | **System/files** | `exec_command`, `ssh_exec`, `read`, `write`, `edit`, `read_document`, `list_workspace`, `organize_workspace`, `refresh_workspace`, `analyze_workspace_groups`, `schedule` |
 | **Media/documents** | `send_document`, `send_audio`, `powerpoint_control` |
-| **Data/financial** | `crypto_analysis`, `crypto_report`, `weather` |
+| **Data/financial** | `crypto_analysis`, `weather` |
 
 Dangerous tools (`exec_command`, `ssh_exec`, `api_request` against arbitrary hosts) require
 authorization — see the modes section below.
@@ -229,23 +229,20 @@ Skills installed today:
 
 ## LLM providers and model routing
 
-### Fallback chain
+### Only the chosen provider and model
 
 ```mermaid
 flowchart LR
-    A["LLM request"] --> O{"Ollama"}
-    O -->|"✅"| Z["Response"]
-    O -->|"❌"| C{"Custom Provider\n(llamafile, LM Studio, vLLM...)"}
-    C -->|"✅"| Z
-    C -->|"❌"| G{"Gemini / OpenRouter /\nAnthropic / DeepSeek / Groq"}
-    G -->|"✅"| Z
-    G -->|"❌"| F["⚠️ All providers failed"]
+    A["LLM request"] --> P{"Chosen provider\n(the profile's, or DEFAULT_PROVIDER)"}
+    P -->|"✅"| Z["Response"]
+    P -->|"❌"| F["⚠️ The failure is the result — naming the provider"]
 ```
 
-Real order (`ProviderFactory.getFallbackOrder`): the preferred provider (if any) goes first;
-otherwise `['ollama', 'openrouter', 'anthropic', 'gemini', 'deepseek', 'groq']`, filtered down to
-what's actually configured, with custom providers appended at the end. `DEFAULT_PROVIDER` in
-`.env` takes priority over this order when set.
+Since ADR-018 (2026-10-14) NewClaw uses **only** the provider and model the user chose in the dashboard or during initial
+setup: `ProviderFactory.getFallbackOrder` returns just the declared provider (the call's profile, or `DEFAULT_PROVIDER`).
+There is no model embedded in the code and no fallback to another provider. With no provider or no model chosen, the call
+is not made and the message says what to choose (`OLLAMA_MODEL`, `GEMINI_MODEL`, `DEEPSEEK_MODEL`, `GROQ_MODEL`,
+`OPENROUTER_MODEL`, `ANTHROPIC_MODEL`, or the custom provider's model).
 
 ### Category-based routing
 
@@ -275,9 +272,8 @@ external service, not even on Ollama itself.
 - Clicking "use this model" in the Dashboard spawns (`spawn`, no shell — no command-injection
   risk) a local `llamafile`/`llama-server` process, serving an OpenAI-compatible endpoint on the
   configured port (`LOCAL_SERVER_PORT`, default `8080`).
-- That endpoint then behaves like **just another provider** in the fallback chain — it can be set
-  as `DEFAULT_PROVIDER`, assigned to specific categories via `PROVIDER_<CATEGORY>`, or left as a
-  silent fallback if everything else fails.
+- That endpoint then behaves like **just another provider** — it can be set as `DEFAULT_PROVIDER` or assigned
+  to specific categories via `PROVIDER_<CATEGORY>`. It never silently replaces another provider (ADR-018).
 - Local models added manually via `CUSTOM_PROVIDERS`/`CUSTOM_MODELS` (JSON in `.env`) follow the
   same contract — any OpenAI-compatible server (LM Studio, vLLM, a llamafile already running on
   another machine on the network) plugs in the same way, no new code required.

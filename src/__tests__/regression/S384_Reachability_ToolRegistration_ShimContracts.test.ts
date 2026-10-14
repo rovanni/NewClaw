@@ -45,21 +45,11 @@ const SEM_CONSUMIDOR: Record<string, { categoria: Categoria; porque: string }> =
     'loop/DecisionPostProcessor.ts': { categoria: 'shim-deprecado', porque: 'Re-exporta de ResponseBuilder (Fase 2.2). S384-3 trava a identidade dos símbolos.' },
     'channels/index.ts': { categoria: 'barrel', porque: 'Barrel de conveniência dos canais; os consumidores importam cada módulo direto. S384-4 trava as exportações.' },
     'memory/conversational/index.ts': { categoria: 'barrel', porque: 'Barrel do CMI; os consumidores importam cada módulo direto. S384-4 trava as exportações.' },
-    'session/index.ts': { categoria: 'barrel', porque: 'Barrel de session (v2); único importador de EventRanker. S384-4 trava as exportações.' },
-    'core/StateStabilityGuard.ts': { categoria: 'sem-consumidor', porque: 'Lógica própria (61 linhas) sem nenhum import, teste ou menção em documento; só refatorações de tipo desde 16/05/2026. CANDIDATO À REMOÇÃO — decisão do dono; não apagado por falta de cobertura.' },
-    'loop/GoalStateMachine.ts': { categoria: 'sem-consumidor', porque: 'Máquina de estados de goals (107 linhas) criada em 24/05/2026 e nunca ligada ao GoalOrchestrator; sem teste nem documento. CANDIDATO À LIGAÇÃO OU REMOÇÃO — decisão do dono.' },
-    'memory/MemoryScoringEngine.ts': { categoria: 'sem-consumidor', porque: 'Lógica própria (97 linhas) sem import, teste ou documento; últimas mudanças só de refatoração. CANDIDATO À REMOÇÃO — decisão do dono.' },
-    'session/EventRanker.ts': { categoria: 'sem-consumidor', porque: 'Importado somente pelo barrel session/index.ts (que também ninguém importa); criado em 27/04/2026 e sem uso desde então. CANDIDATO À REMOÇÃO — decisão do dono.' },
-    'tools/ToolRegistry.ts': { categoria: 'registro-duplicado', porque: 'Registro de instância anterior; o registro oficial é core/ToolRegistry.ts (estático, usado por AgentController e rotas). Ninguém importa este.' },
-    'tools/cmi_inspect.ts': { categoria: 'ferramenta-nao-registrada', porque: 'CMIInspectTool nunca é instanciada; "cmi_inspect" consta em GoalPlanner.STANDARD_TOOLS e na documentação técnica como ferramenta disponível.' },
-    'tools/crypto_report.ts': { categoria: 'ferramenta-nao-registrada', porque: 'CryptoReportTool nunca é instanciada; "crypto_report" aparece na lista fixa de /api/tools e na documentação técnica.' },
-    'tools/manage_memory.ts': { categoria: 'ferramenta-nao-registrada', porque: 'ManageMemoryTool nunca é instanciada (substituída por memory_search/memory_write/memory_admin); ainda listada na documentação técnica.' },
 };
-const FERRAMENTAS_NAO_REGISTRADAS: Record<string, string> = {
-    CMIInspectTool: 'tools/cmi_inspect.ts',
-    CryptoReportTool: 'tools/crypto_report.ts',
-    ManageMemoryTool: 'tools/manage_memory.ts',
-};
+// Sprint 4 (14/10/2026, decisão da mantenedora): as 3 ferramentas nunca registradas (cmi_inspect, crypto_report,
+// manage_memory) e os 6 módulos sem consumidor (StateStabilityGuard, GoalStateMachine, MemoryScoringEngine, EventRanker,
+// session/index, tools/ToolRegistry) foram REMOVIDOS. A lista vazia trava que nenhuma ferramenta nova fique sem registro.
+const FERRAMENTAS_NAO_REGISTRADAS: Record<string, string> = {};
 
 // ── Grafo de imports relativos (estáticos, dinâmicos e re-exports) ───────────────────────────────────────────────────────────────────
 const RE_IMPORT = /(?:from\s+|import\s*\(\s*|require\s*\(\s*|import\s+)['"](\.{1,2}\/[^'"]*)['"]/g;
@@ -110,7 +100,7 @@ console.log('\n=== S384-1 — alcançabilidade: o conjunto sem consumidor é exa
     assert(obsoletos.length === 0, 'nenhuma entrada declarada passou a ser alcançada (tire-a de SEM_CONSUMIDOR)', obsoletos);
     assert(declarados.every(f => fs.existsSync(path.join(SRC, f))), 'todo arquivo declarado ainda existe');
     assert(declarados.every(f => SEM_CONSUMIDOR[f].porque.length >= 40), 'toda entrada tem justificativa de verdade (>= 40 caracteres)');
-    assert(declarados.length === 16, `o registro cobre os 16 arquivos levantados pela auditoria (tem ${declarados.length})`);
+    assert(declarados.length === 7, `o registro cobre os 7 que restam dos 16 da auditoria — 9 removidos na Sprint 4 (tem ${declarados.length})`);
 }
 
 console.log('\n=== S384-2 — registro de ferramentas: toda classe ToolExecutor está registrada ou declarada ===');
@@ -121,7 +111,7 @@ console.log('\n=== S384-2 — registro de ferramentas: toda classe ToolExecutor 
     for (const f of fs.readdirSync(dirTools).filter(n => n.endsWith('.ts'))) {
         for (const m of fs.readFileSync(path.join(dirTools, f), 'utf-8').matchAll(/export class (\w+) implements ToolExecutor/g)) classes.push({ nome: m[1], arquivo: `tools/${f}` });
     }
-    assert(classes.length >= 24, `a varredura encontrou as classes de ferramenta (${classes.length})`);
+    assert(classes.length >= 21, `a varredura encontrou as classes de ferramenta (${classes.length}; 3 nunca registradas removidas na Sprint 4)`);
     const registradas = classes.filter(c => new RegExp(`new ${c.nome}\\(`).test(controller));
     const semRegistro = classes.filter(c => !registradas.includes(c)).map(c => c.nome).sort();
     const declaradas = Object.keys(FERRAMENTAS_NAO_REGISTRADAS).sort();
@@ -159,7 +149,6 @@ console.log('\n=== S384-3 — shims @deprecated: mesmo objeto do módulo canôni
 console.log('\n=== S384-4 — barrels: exportam os símbolos que declaram ===');
 {
     const esperado: Record<string, string[]> = {
-        '../../session/index': ['SessionTranscript', 'SessionManager', 'estimateTokens', 'SessionContext', 'SessionLearner', 'EventRanker', 'SessionAutoCleaner'],
         '../../memory/conversational/index': ['CMIEngine', 'CMIRepository', 'CMIBuffer', 'CMIIngestionPipeline'],
         '../../channels/index': ['MessageBus', 'TelegramAdapter', 'DiscordAdapter', 'WhatsAppAdapter', 'SignalAdapter'],
     };

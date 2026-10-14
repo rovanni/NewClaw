@@ -14,10 +14,10 @@
  * usuário via dashboard ou na configuração inicial, não deve ter nenhum modelo em código nem de
  * fallback". A cadeia passou a ter só o provedor declarado (ProviderFactory.getFallbackOrder) e a
  * refação sem streaming no Ollama só vale quando o declarado JÁ é o Ollama. Não há mais troca a
- * anunciar: os mesmos cinco cenários agora provam que o substituto nunca é chamado.
+ * anunciar: três cenários provam que o substituto nunca é chamado; a Sprint 4 removeu a política (RFC-005) e o anúncio, e S208-4 trava a remoção.
  *
- * REGRESSÃO SE: qualquer outro provedor — nuvem ou local, com ou sem opt-in de anúncio, com qualquer
- * SUBSTITUTION_POLICY — responder no lugar do escolhido; a falha do escolhido voltar como sucesso; ou
+ * REGRESSÃO SE: qualquer outro provedor — nuvem ou local —
+ * responder no lugar do escolhido; a falha do escolhido voltar como sucesso; ou
  * o array de mensagens de quem chamou for mutado.
  *
  * Execução: npx ts-node src/__tests__/regression/S208_SubstitutionAnnounced.test.ts
@@ -78,7 +78,7 @@ function declaradoFalha(pf: ProviderFactory, nome: string): void {
 
 const PERGUNTA: LLMMessage[] = [{ role: 'user', content: 'qual é a capital da França?' }];
 
-type Cenario = { titulo: string; declarado: string; substituto: string; ollamaUrl: string; customProviders: Array<Record<string, unknown>>; politica?: string };
+type Cenario = { titulo: string; declarado: string; substituto: string; ollamaUrl: string; customProviders: Array<Record<string, unknown>> };
 
 const CENARIOS: Cenario[] = [
     { titulo: 'S208-1 — local declarado, nuvem disponível', declarado: 'Modelo local', substituto: 'Nuvem', ollamaUrl: MORTO,
@@ -87,50 +87,31 @@ const CENARIOS: Cenario[] = [
       customProviders: [{ label: 'Nuvem A', baseUrl: 'https://a.exemplo.test/v1', model: 'm-a' }, { label: 'Nuvem B', baseUrl: 'https://b.exemplo.test/v1', model: 'm-b' }] },
     { titulo: 'S208-3 — local declarado, Ollama local disponível', declarado: 'Modelo local', substituto: 'ollama', ollamaUrl: 'http://localhost:11434',
       customProviders: [{ label: 'Modelo local', baseUrl: 'http://127.0.0.1:8080/v1', model: 'm-local' }] },
-    { titulo: 'S208-4 — política `livre` (a mais permissiva) também não substitui', declarado: 'Nuvem A', substituto: 'Nuvem B', ollamaUrl: MORTO, politica: 'livre',
-      customProviders: [{ label: 'Nuvem A', baseUrl: 'https://a.exemplo.test/v1', model: 'm-a' }, { label: 'Nuvem B', baseUrl: 'https://b.exemplo.test/v1', model: 'm-b' }] },
 ];
 
 async function main(): Promise<void> {
-    const envOriginal = process.env.SUBSTITUTION_POLICY;
-    try {
-        for (const c of CENARIOS) {
-            console.log(`\n=== ${c.titulo} ===`);
-            if (c.politica) process.env.SUBSTITUTION_POLICY = c.politica; else delete process.env.SUBSTITUTION_POLICY;
-            const pf = new ProviderFactory({ defaultProvider: c.declarado, ollamaUrl: c.ollamaUrl, ollamaModel: 'm-ollama', customProviders: c.customProviders } as any);
-            const espiao = comEspiao(pf, c.substituto);
-            declaradoFalha(pf, c.declarado);
-            const original = [...PERGUNTA];
-            for (const anunciar of [true, false]) {
-                const r = await pf.chatWithFallback(PERGUNTA, undefined, c.declarado, 2000, undefined, undefined, anunciar ? { anunciarSubstituicao: true } : undefined);
-                assert(espiao.recebidas.length === 0, `${anunciar ? 'com' : 'sem'} opt-in de anúncio: "${c.substituto}" nunca é chamado no lugar de "${c.declarado}"`, espiao.recebidas.length);
-                assert((r.attempts || []).length >= 1 && (r.attempts || []).every(a => a.provider === c.declarado), 'o escolhido foi de fato tentado, e só ele', r.attempts);
-                assert(r.status !== 'success', `a falha do escolhido é o resultado (${r.status}), não mascarada`, r.status);
-                assert(r.substitution === undefined, 'não há substituição a registrar', r.substitution);
-            }
-            assert(PERGUNTA.length === original.length && PERGUNTA[0].content === original[0].content, 'o array de mensagens de quem chamou não é mutado');
-        }
+    for (const c of CENARIOS) {
+        console.log(`\n=== ${c.titulo} ===`);
+        const pf = new ProviderFactory({ defaultProvider: c.declarado, ollamaUrl: c.ollamaUrl, ollamaModel: 'm-ollama', customProviders: c.customProviders } as any);
+        const espiao = comEspiao(pf, c.substituto);
+        declaradoFalha(pf, c.declarado);
+        const original = [...PERGUNTA];
+        const r = await pf.chatWithFallback(PERGUNTA, undefined, c.declarado, 2000);
+        assert(espiao.recebidas.length === 0, `"${c.substituto}" nunca é chamado no lugar de "${c.declarado}"`, espiao.recebidas.length);
+        assert((r.attempts || []).length >= 1 && (r.attempts || []).every(a => a.provider === c.declarado), 'o escolhido foi de fato tentado, e só ele', r.attempts);
+        assert(r.status !== 'success', `a falha do escolhido é o resultado (${r.status}), não mascarada`, r.status);
+        assert(PERGUNTA.length === original.length && PERGUNTA[0].content === original[0].content, 'o array de mensagens de quem chamou não é mutado');
+    }
 
-        console.log('\n=== S208-5 — `estrita` continua recusando com o motivo próprio ===');
-        {
-            delete process.env.SUBSTITUTION_POLICY;
-            const pf = new ProviderFactory({
-                defaultProvider: 'Modelo local', ollamaUrl: MORTO,
-                customProviders: [
-                    { label: 'Modelo local', baseUrl: MORTO, model: 'm-local', substitutionPolicy: 'estrita' },
-                    { label: 'Nuvem', baseUrl: 'https://api.exemplo.test/v1', model: 'm-nuvem' },
-                ],
-            } as any);
-            const espiao = comEspiao(pf, 'Nuvem');
-            declaradoFalha(pf, 'Modelo local');
-            const r = await pf.chatWithFallback(PERGUNTA, undefined, 'Modelo local', 2000, undefined, undefined, { anunciarSubstituicao: true });
-            assert(espiao.recebidas.length === 0, 'o substituto nem chega a ser chamado', espiao.recebidas.length);
-            assert(r.fallbackReason === 'policy_strict', 'a recusa continua valendo', r.fallbackReason);
-            assert(r.substitution === undefined, 'e não há substituição a registrar', r.substitution);
-        }
-    } finally {
-        if (envOriginal === undefined) delete process.env.SUBSTITUTION_POLICY;
-        else process.env.SUBSTITUTION_POLICY = envOriginal;
+    console.log('\n=== S208-4 — a política de substituição e o anúncio saíram do código (Sprint 4) ===');
+    {
+        const fs = require('fs') as typeof import('fs');
+        const path = require('path') as typeof import('path');
+        const ler = (...p: string[]) => fs.readFileSync(path.join(process.cwd(), 'src', ...p), 'utf-8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+        const pf = ler('core', 'ProviderFactory.ts');
+        const tipos = ler('core', 'providerTypes.ts');
+        assert(!/mensagensComFatoDaSubstituicao|substituicaoAtravessaFronteira|resolveSubstitutionPolicy|SUBSTITUTION_POLICY/.test(pf), 'o ProviderFactory não tem mais política nem anúncio de substituição');
+        assert(!/SubstitutionPolicy|anunciarSubstituicao|policy_strict|substitution\?:/.test(tipos), 'os tipos também saíram (sem campo que ninguém preenche)');
     }
 
     console.log(`\nS208 RESULTADO: ✅ ${passed} passou | ❌ ${failed} falhou`);

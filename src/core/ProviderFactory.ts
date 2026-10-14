@@ -8,7 +8,7 @@ import { createLogger } from '../shared/AppLogger';
 import { errorMessage } from '../shared/errors';
 import { circuitRegistry } from './CircuitBreaker';
 import { getLocalRuntimeLifecycle } from './localRuntimeState';
-import { LLMMessage, LLMResponse, ToolDefinition, LLMResult, AttemptInfo, FallbackReason, ToolCall, ILLMProvider, ChatOptions, CustomProviderConfig, SubstitutionPolicy, DEFAULT_SUBSTITUTION_POLICY, isSubstitutionPolicy, ChatFallbackOptions, LlmCallDiag, REASONING_INTENSIVE_TIMEOUT_FLOOR_MS, AttemptTelemetry, ehModeloDaNuvemDoOllama, mensagemSemModeloEscolhido } from './providerTypes';
+import { LLMMessage, LLMResponse, ToolDefinition, LLMResult, AttemptInfo, FallbackReason, ToolCall, ILLMProvider, ChatOptions, CustomProviderConfig, ChatFallbackOptions, LlmCallDiag, REASONING_INTENSIVE_TIMEOUT_FLOOR_MS, AttemptTelemetry, ehModeloDaNuvemDoOllama, mensagemSemModeloEscolhido } from './providerTypes';
 import { GeminiProvider } from './GeminiProvider';
 import { DeepSeekProvider } from './DeepSeekProvider';
 import { GroqProvider } from './GroqProvider';
@@ -44,7 +44,7 @@ export function modelosNativosDoAmbiente(env: NodeJS.ProcessEnv = process.env): 
 }
 
 // Re-export everything so all existing imports continue to work unchanged
-export type { LLMMessage, LLMResponse, ToolCall, ToolDefinition, FallbackReason, AttemptInfo, LLMResult, MetricsSummary, ILLMProvider, ChatOptions, StreamChunk, SubstitutionPolicy } from './providerTypes';
+export type { LLMMessage, LLMResponse, ToolCall, ToolDefinition, FallbackReason, AttemptInfo, LLMResult, MetricsSummary, ILLMProvider, ChatOptions, StreamChunk } from './providerTypes';
 export { TaskPriority } from './providerQueue';
 export { GeminiProvider } from './GeminiProvider';
 export { DeepSeekProvider } from './DeepSeekProvider';
@@ -335,28 +335,12 @@ export class ProviderFactory {
             return { status: 'cancelled', content: '', fallbackReason: 'cancelled', fallbackMessage: 'Operação cancelada.', attempts: [] };
         }
 
-        // Política do recurso declarado. `semSubstituicao` exige que o provider preferido exista de
-        // fato: declarar um provider que não está registrado não dá o que proteger, e nesse caso o
-        // comportamento continua o de sempre.
-        const politicaDeSubstituicao = this.resolveSubstitutionPolicy(preferredProvider);
-        const semSubstituicao = politicaDeSubstituicao === 'estrita'
-            && !!preferredProvider
-            && this.providers.has(preferredProvider);
-
-        // Diretiva de 14/10/2026: a cadeia tem só o provedor declarado — nunca há reserva em outro provedor ou modelo.
-        // (Antes, a issue 071 filtrava aqui a reserva que sairia da máquina, com a opção PERMITIR_NUVEM_COMO_RESERVA;
-        // sem reserva, o filtro e a opção perderam o objeto.)
-        const providerOrder = semSubstituicao
-            ? [preferredProvider as string]
-            : this.getFallbackOrder(preferredProvider);
+        // ADR-018 (14/10/2026): a cadeia tem só o provedor declarado — nunca há reserva em outro provedor ou modelo. Com
+        // isso saíram também a política de substituição (estrita/anunciada/livre, RFC-005) e o anúncio da troca: não há
+        // troca para permitir, recusar nem anunciar. (Antes, a issue 071 ainda filtrava aqui a reserva que sairia da
+        // máquina, com a opção PERMITIR_NUVEM_COMO_RESERVA.)
+        const providerOrder = this.getFallbackOrder(preferredProvider);
         const declarado = preferredProvider || this.defaultProvider;
-
-        // `anunciada` só produz aviso quando quem chamou disse que este resultado vai ao usuário.
-        // Ver ChatFallbackOptions para por que o opt-in é explícito em vez de inferido.
-        const podeAnunciar = opts?.anunciarSubstituicao === true
-            && politicaDeSubstituicao === 'anunciada'
-            && !!preferredProvider;
-        let substituicao: LLMResult['substitution'];
 
         const attemptLog: AttemptInfo[] = [];
         // Issue 064b: alguma tentativa terminou porque o PRAZO de quem chamou acabou — então não há refação sem
@@ -508,21 +492,7 @@ export class ProviderFactory {
 
                     log.info(`[${attemptId}] START provider=${providerName}/${modelUsed} timeout=${timeoutMs || 'none'}ms`);
 
-                    // Esta tentativa é uma substituição do recurso declarado? E, se for, ela sai da
-                    // máquina do usuário? Só nesse caso o fato entra no prompt — trocar um provedor
-                    // de nuvem por outro equivalente é resiliência ordinária (§1.2).
-                    const ehSubstituicao = !!preferredProvider && providerName !== preferredProvider;
-                    const deveAnunciar = podeAnunciar && ehSubstituicao
-                        && this.substituicaoAtravessaFronteira(preferredProvider as string, providerName);
-                    if (ehSubstituicao) {
-                        substituicao = { declared: preferredProvider as string, used: providerName, announced: deveAnunciar };
-                    }
-                    if (deveAnunciar) {
-                        log.info(`[${attemptId}] SUBSTITUICAO-ANUNCIADA: '${preferredProvider}' → '${providerName}' (sai da máquina do usuário; o fato foi entregue ao modelo para verbalizar).`);
-                    }
-                    const mensagensDoProvider = deveAnunciar
-                        ? this.mensagensComFatoDaSubstituicao(messages, preferredProvider as string, providerName)
-                        : messages;
+                    const mensagensDoProvider = messages;
 
                     // Gravador de voo (ADR-013): uma entrada por tentativa; o provider preenche o que observou no streaming.
                     if (opts?.telemetry) {
@@ -614,7 +584,6 @@ export class ProviderFactory {
                             // Issue 060: o abort desta tentativa (teto de tempo) com conteúdo parcial também é interrupção.
                             interrupted: result.interrupted === true || currentAbort.signal.aborted ? true : result.interrupted,
                             attempts: attemptLog,
-                            substitution: substituicao
                         };
                     }
 
@@ -685,20 +654,11 @@ export class ProviderFactory {
             }
         }
 
-        // All streaming providers exhausted — try non-streaming fallback
-        //
-        // SEGUNDO caminho de substituição deste método, e por isso a política precisa valer aqui
-        // também: este bloco troca o provider preferido pelo Ollama incondicionalmente. Gatear
-        // apenas a ordem de fallback deixaria `estrita` decorativa — quem pediu o modelo local
-        // receberia resposta do Ollama assim mesmo. É o mesmo tipo de bypass que a `ADR-005` §5.1
-        // registrou ao descobrir que o gate de autorização vivia em um caminho de cinco.
-        //
-        // Quando o próprio preferido JÁ é o Ollama, isto não é substituição: é o mesmo recurso por
-        // outro transporte, e `estrita` não tem o que proibir.
-        // Diretiva de 14/10/2026: só nesse caso. Com outro provedor declarado, a refação no Ollama seria um provedor
-        // e um modelo que o usuário não escolheu — não é tentada.
-        const naoStreamingSubstituiria = declarado !== 'ollama';
-        const podeTentarNaoStreaming = !naoStreamingSubstituiria;
+        // All streaming attempts exhausted — try non-streaming, SÓ quando o declarado já é o Ollama: é o mesmo recurso
+        // e o mesmo modelo por outro transporte. Com outro provedor declarado, a refação no Ollama seria um provedor e um
+        // modelo que o usuário não escolheu — não é tentada (ADR-018; antes, este bloco era o segundo caminho de
+        // substituição, com a política da RFC-005 aplicada a ele também).
+        const podeTentarNaoStreaming = declarado === 'ollama';
         if (prazoEsgotado) {
             log.info(`[${requestId}] Prazo de quem chamou esgotado — sem refação sem streaming (mesmo modelo, mesmo prazo)`);
         }
@@ -717,18 +677,7 @@ export class ProviderFactory {
             const ollamaProvider = requestedForOllama instanceof OllamaProvider ? requestedForOllama : sharedOllama;
             if (ollamaProvider instanceof OllamaProvider) {
                 log.info(`[${requestId}] All streaming attempts failed — trying non-streaming fallback (model=${ollamaProvider.getModel()})`);
-                // Mesmo tratamento do laço acima: este bloco também substitui o recurso declarado, e
-                // anunciar num caminho e calar no outro seria o defeito que a Sprint 021 encontrou
-                // aqui (gate aplicado a uma das duas substituições).
-                const ehSubstituicaoNaoStreaming = !!preferredProvider && preferredProvider !== 'ollama';
-                const anunciarNaoStreaming = podeAnunciar && ehSubstituicaoNaoStreaming
-                    && this.substituicaoAtravessaFronteira(preferredProvider as string, 'ollama');
-                if (ehSubstituicaoNaoStreaming) {
-                    substituicao = { declared: preferredProvider as string, used: 'ollama', announced: anunciarNaoStreaming };
-                }
-                const mensagensNaoStreaming = anunciarNaoStreaming
-                    ? this.mensagensComFatoDaSubstituicao(messages, preferredProvider as string, 'ollama')
-                    : messages;
+                const mensagensNaoStreaming = messages;
                 try {
                     // Issue 047: mesmo raciocínio do timer de tentativa acima — fallbackNonStreaming()
                     // nem recebe reasoningIntensive (não precisa: é uma chamada única, sem teto de
@@ -755,7 +704,6 @@ export class ProviderFactory {
                             interrupted: result.interrupted,
                             fallbackReason: 'streaming_failed',
                             attempts: attemptLog,
-                            substitution: substituicao
                         };
                     }
                 } catch (fallbackErr) {
@@ -769,24 +717,8 @@ export class ProviderFactory {
         const isTimeoutError = lastError?.includes('Timeout') || lastError?.includes('abort');
         log.error(`[${requestId}] EXHAUSTED attempts=${attemptLog.length}`);
 
-        // Política `estrita`: a indisponibilidade É o resultado, e o motivo precisa ser distinguível
-        // de um erro comum — senão quem lê não tem como saber que existia substituto e ele foi
-        // recusado de propósito.
-        //
-        // `fallbackMessage` fixa em português mantém o débito de i18n do Core já declarado em
-        // `ARCHITECTURE.md` ("Gaps conhecidos"). O caminho de transformar isto em fato para o LLM
-        // verbalizar é a Sprint 022; aqui seria adiantar metade dela sem o mecanismo.
-        if (semSubstituicao) {
-            log.warn(`[${requestId}] POLITICA-ESTRITA: '${preferredProvider}' indisponível e nenhum substituto foi tentado.`);
-            return {
-                status: 'error',
-                content: '',
-                toolCalls: undefined,
-                fallbackReason: 'policy_strict',
-                fallbackMessage: `O recurso configurado ("${preferredProvider}") não respondeu. A política de substituição declarada para ele é "estrita", então nenhum outro provedor foi usado em seu lugar.`,
-                attempts: attemptLog
-            };
-        }
+        // `fallbackMessage` fixa em português mantém o débito de i18n do Core já declarado em `ARCHITECTURE.md`
+        // ("Gaps conhecidos"). Sem reserva (ADR-018), a indisponibilidade do escolhido É o resultado.
 
         return {
             status: isTimeoutError ? 'timeout' : 'error',
@@ -880,36 +812,6 @@ export class ProviderFactory {
     }
 
     /**
-     * A troca de `declarado` por `usado` atravessa fronteira de localidade/custódia?
-     * (`SOBERANIA_DA_CONFIGURACAO.md` §1.2)
-     *
-     * Hoje a checagem é uma só: o recurso declarado é local e o substituto não é — o processamento
-     * sai da máquina do usuário, e passa a ser tratado por alguém que ele não escolheu. As duas
-     * fronteiras coincidem nesse caso.
-     *
-     * Dois provedores de nuvem se cobrindo mutuamente NÃO atravessam fronteira: é a resiliência
-     * ordinária que o §1.2 autoriza a ser silenciosa. Reaproveita `loopbackPortOf` em vez de
-     * introduzir um segundo conceito de "isto é local".
-     */
-    private substituicaoAtravessaFronteira(declarado: string, usado: string): boolean {
-        return this.rodaNaMaquinaDoUsuario(declarado) && !this.rodaNaMaquinaDoUsuario(usado);
-    }
-
-    /**
-     * Este provider roda na máquina do usuário?
-     *
-     * Pergunta **diferente** da que `loopbackPortOf` responde, e por isso um método separado.
-     * `loopbackPortOf` responde "é um runtime local gerenciado pelo NewClaw?" e alimenta o
-     * diagnóstico de ciclo de vida (Sprint 020) — deliberadamente restrito a `customConfigs`, para
-     * que um registro corrompido não possa afetar a contabilidade de falhas de mais ninguém
-     * (`S205-4`).
-     *
-     * Aqui a pergunta é de **localidade**, e o Ollama nativo entra: ele não tem entrada em
-     * `customConfigs`, mas o endereço dele é conhecido e quase sempre é a própria máquina. Sem isto,
-     * um llamafile local caindo para um Ollama local seria anunciado como "saiu da sua máquina" —
-     * um aviso falso, que é pior que aviso nenhum.
-     */
-    /**
      * Issue 071: esta tentativa (provider + modelo que ele usaria) fica na máquina do usuário? O endereço não basta —
      * o Ollama local com um modelo `:cloud` processa na nuvem.
      */
@@ -935,6 +837,10 @@ export class ProviderFactory {
         return (p as { model?: string } | undefined)?.model;
     }
 
+    /**
+     * Este provider roda na máquina do usuário? Pergunta de LOCALIDADE, diferente da de `loopbackPortOf` ("é um runtime
+     * local gerenciado pelo NewClaw?", restrita a `customConfigs` — S205-4): aqui o Ollama nativo entra, pelo endereço.
+     */
     private rodaNaMaquinaDoUsuario(providerName: string): boolean {
         const baseUrl = providerName === 'ollama'
             ? this.creds.ollamaUrl
@@ -944,51 +850,6 @@ export class ProviderFactory {
             const { hostname } = new URL(String(baseUrl));
             return hostname === '127.0.0.1' || hostname === 'localhost' || hostname === '::1';
         } catch { return false; }
-    }
-
-    /**
-     * As mesmas mensagens, mais o **fato** de que esta resposta não vem do recurso declarado.
-     *
-     * É fato + pedido de verbalização, nunca texto pronto: quem redige é o LLM, que já recebeu
-     * `buildLanguageDirective` no system prompt e portanto responde no idioma da conversa. O Core
-     * escrevendo a frase sairia sempre em português (`ARCHITECTURE.md`, "Gaps conhecidos") — é
-     * exatamente o que a `RFC-004` decidiu parar de fazer, aplicado aqui.
-     *
-     * O array original nunca é mutado: quem o passou pode reusá-lo, e a próxima tentativa não pode
-     * herdar o aviso da anterior.
-     */
-    private mensagensComFatoDaSubstituicao(messages: LLMMessage[], declarado: string, usado: string): LLMMessage[] {
-        return [...messages, {
-            role: 'system',
-            content: `[FATO DO SISTEMA] O usuário configurou "${declarado}" para esta conversa, e esse recurso não respondeu. `
-                + `Esta resposta está sendo gerada por "${usado}", um recurso diferente e fora da máquina do usuário.\n`
-                + `Antes de responder ao pedido, avise isso em UMA frase curta, no mesmo idioma da conversa. `
-                + `Não invente motivos técnicos nem detalhes que não estejam aqui. Depois responda normalmente.`,
-        }];
-    }
-
-    /**
-     * Política de substituição do recurso que o usuário declarou para esta chamada.
-     *
-     * Ordem: o que o próprio provider declara vence; senão, o padrão global (`SUBSTITUTION_POLICY`
-     * no ambiente); senão, `anunciada` (`RFC-005` §1.3).
-     *
-     * **Sem provider preferido não há soberania a proteger** — ninguém declarou nada para esta
-     * chamada, então a política é `livre` e o comportamento é o de sempre. É a mesma fronteira que
-     * `SOBERANIA_DA_CONFIGURACAO.md` §1.1 estabelece: ausência de configuração não é declaração.
-     */
-    private resolveSubstitutionPolicy(preferredProvider?: string): SubstitutionPolicy {
-        if (!preferredProvider) return 'livre';
-
-        const doProvider = this.customConfigs.get(preferredProvider)?.substitutionPolicy;
-        if (doProvider) return doProvider;
-
-        const global = (process.env.SUBSTITUTION_POLICY || '').trim();
-        if (!global) return DEFAULT_SUBSTITUTION_POLICY;
-        if (isSubstitutionPolicy(global)) return global;
-
-        log.warn(`SUBSTITUTION_POLICY inválida ("${global}") — usando "${DEFAULT_SUBSTITUTION_POLICY}". Valores aceitos: estrita, anunciada, livre.`);
-        return DEFAULT_SUBSTITUTION_POLICY;
     }
 
     /**

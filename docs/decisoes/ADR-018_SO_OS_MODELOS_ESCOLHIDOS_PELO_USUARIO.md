@@ -61,9 +61,11 @@ permitida e visível); issue 068 (o Ollama já não tinha modelo embutido: vazio
 - Instaladores (`install.sh`, `install.ps1`) e CLI: sem padrão — perguntam (mostrando o que o Ollama já tem) e vazio =
   escolher no painel. Removido `scripts/setup.ts` (código morto desde o commit inicial, gravava variáveis que ninguém lê).
 
-**Riscos que ficam.** O mecanismo de anúncio de substituição (RFC-005 §1.4: `mensagensComFatoDaSubstituicao`,
-`substituicaoAtravessaFronteira`, `anunciarSubstituicao`) ficou sem caminho que o acione — remoção agendada para a sprint
-de código morto, com a revisão da RFC-005 e do documento de Soberania.
+**Código que ficou sem uso — removido na Sprint 4.** O anúncio de substituição (RFC-005 §1.4:
+`mensagensComFatoDaSubstituicao`, `substituicaoAtravessaFronteira`, `anunciarSubstituicao`, `LLMResult.substitution`) e a
+política de substituição (`estrita`/`anunciada`/`livre`, `SUBSTITUTION_POLICY`, `CustomProviderConfig.substitutionPolicy`,
+`policy_strict`) ficaram sem caminho que os acionasse e saíram do código; RFC-005 marcada como revogada, a seção 6 da
+Soberania anotada. S207 (a política) foi removido; S208 trava a remoção.
 
 ## Fase 5 — Validação
 

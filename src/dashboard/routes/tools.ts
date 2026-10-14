@@ -5,18 +5,11 @@ export function createToolsRouter(): Router {
     const router = Router();
 
     router.get('/', (_req: Request, res: Response) => {
+        // Do registro real — antes, uma lista fixa de 8 ferramentas que envelheceu (citava crypto_report, que nunca foi
+        // registrada) enquanto o registro tinha dezenas. Uma fonte só (Sprint 4, código morto, 14/10/2026).
         res.json({
             success: true,
-            tools: [
-                { name: 'exec_command', description: 'Execute shell commands' },
-                { name: 'web_search', description: 'Search the web' },
-                { name: 'write', description: 'Create or overwrite files' },
-                { name: 'edit', description: 'Edit existing files (replace/patch/append)' },
-                { name: 'read', description: 'Read files or list directories' },
-                { name: 'crypto_report', description: 'Cryptocurrency price reports (quick lookup)' },
-                { name: 'crypto_analysis', description: 'Deep crypto analysis: bleeding coins, gainers, losers, opportunities' },
-                { name: 'send_audio', description: 'Generate and send TTS audio via Telegram' },
-            ]
+            tools: ToolRegistry.getEnabled().map(t => ({ name: t.name, description: t.description })),
         });
     });
 

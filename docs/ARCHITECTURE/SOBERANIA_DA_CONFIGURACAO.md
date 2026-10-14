@@ -76,6 +76,10 @@ se classifica por ela sozinha, e o sistema não tem sinal confiável de quais pr
 
 ## 6. Políticas declaráveis
 
+> **Para modelos e provedores de LLM, esta seção foi superada pela ADR-018 (14/10/2026):** não há substituição —
+> só o recurso escolhido responde, e a falha dele é o resultado. As políticas abaixo e `SUBSTITUTION_POLICY` saíram do
+> código. O texto fica como registro e como referência para os outros subsistemas (busca, voz, transcrição).
+
 Cada recurso declarado carrega uma política, que responde "o que fazer quando ele não estiver
 disponível":
 

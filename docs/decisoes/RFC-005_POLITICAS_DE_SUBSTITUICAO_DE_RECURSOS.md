@@ -1,5 +1,9 @@
 # RFC-005 — Políticas de Substituição de Recursos
 
+> **Revogada em 14/10/2026 pela ADR-018** ("só os modelos escolhidos pelo usuário"): o NewClaw não substitui mais
+> o provedor nem o modelo escolhido, então as políticas `estrita`/`anunciada`/`livre`, `SUBSTITUTION_POLICY` e o anúncio
+> da troca foram removidos do código (Sprint 4 da campanha de 14/10). Este documento fica como registro histórico.
+
 **Status:** **concluída** (07/08/2026) — Sprints 018-024 entregues. Relatório de encerramento e
 evidências da validação em execução real: `docs/sprints/RFC-005_CLOSING_REPORT.md`.
 

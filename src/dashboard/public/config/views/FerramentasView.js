@@ -8,11 +8,11 @@ const TOOL_CAT = {
   exec_command:'sistema', ssh_exec:'sistema', write:'sistema', read:'sistema', edit:'sistema', list_dir:'sistema',
   memory_search:'memoria', memory_write:'memoria', memory_admin:'memoria',
   send_audio:'comunicacao', send_document:'comunicacao', send_image:'comunicacao',
-  crypto_report:'dados', crypto_analysis:'dados', weather:'dados', schedule:'dados', get_news:'dados',
+  crypto_analysis:'dados', weather:'dados', schedule:'dados', get_news:'dados',
 };
 const CAT_LABEL = { web:'WEB', sistema:'SYS', memoria:'MEM', comunicacao:'COM', dados:'DATA', outros:'ETC' };
 const TOOL_ICONS = {
-  exec_command:'💻', web_search:'🔍', web_navigate:'🌐', file_ops:'📁', crypto_report:'📊',
+  exec_command:'💻', web_search:'🔍', web_navigate:'🌐', file_ops:'📁',
   crypto_analysis:'📉', send_audio:'🔊', send_document:'📄', memory_search:'🔎',
   memory_write:'✍️', memory_admin:'⚙️', ssh_exec:'🖥️', write:'📝', read:'📖', edit:'✏️',
   list_dir:'📂', weather:'🌤️', schedule:'📅', send_image:'🖼️', get_news:'📰',

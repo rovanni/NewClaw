@@ -121,7 +121,7 @@ const STANDARD_TOOLS = new Set([
     'write', 'edit', 'read', 'exec_command', 'web_search', 'web_navigate',
     'send_document', 'send_audio', 'memory_search', 'memory_write', 'memory_admin',
     'list_workspace', 'refresh_workspace', 'read_document', 'ssh_exec',
-    'schedule', 'weather', 'crypto_analysis', 'api_request', 'cmi_inspect',
+    'schedule', 'weather', 'crypto_analysis', 'api_request',
 ]);
 
 function buildToolDescriptions(toolNames: string[]): string {

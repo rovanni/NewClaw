@@ -2,7 +2,7 @@ import { skillsStore, toolsStore } from '../state.js';
 import { guideBox } from '../app.js';
 
 const TOOL_ICONS = {
-  exec_command:'💻', web_search:'🔍', web_navigate:'🌐', crypto_report:'📊',
+  exec_command:'💻', web_search:'🔍', web_navigate:'🌐',
   crypto_analysis:'📉', send_audio:'🔊', send_document:'📄', memory_search:'🔎',
   memory_write:'✍️', memory_admin:'⚙️', ssh_exec:'🖥️', write:'📝', read:'📖',
   edit:'✏️', list_dir:'📂', weather:'🌤️', schedule:'📅', file_ops:'📁',

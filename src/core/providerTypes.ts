@@ -104,8 +104,6 @@ export interface ToolDefinition {
 }
 
 export type FallbackReason = 'timeout' | 'error' | 'empty_response' | 'streaming_failed' | 'cancelled'
-    /** O recurso declarado falhou e a política `estrita` proibiu substituí-lo (`RFC-005` §1.3). */
-    | 'policy_strict'
     /** Nenhum provider aceitou a tentativa: circuito aberto após falhas de conexão consecutivas. */
     | 'unavailable';
 
@@ -128,14 +126,8 @@ export interface LLMResult {
     attempts: AttemptInfo[];
     /** Issue 060 — ver `LLMResponse.interrupted`; o ProviderFactory soma o próprio abort da tentativa. */
     interrupted?: boolean;
-    /**
-     * Preenchido quando a resposta veio de um recurso diferente do que o usuário declarou.
-     *
-     * `anunciada: true` significa que o fato foi entregue ao LLM que gerou a resposta, para que ele
-     * o verbalize no idioma da conversa (`RFC-005` §1.4) — não que o Core tenha escrito algo.
-     * `false` significa que a troca ocorreu sem atravessar fronteira, ou sob política `livre`.
-     */
-    substitution?: { declared: string; used: string; announced: boolean };
+    // (Até 14/10/2026 havia `substitution` — a resposta vinda de um recurso diferente do declarado, RFC-005. Sem reserva,
+    // ADR-018, a resposta sempre vem do recurso declarado.)
 }
 
 export interface MetricsSummary {
@@ -174,48 +166,6 @@ export interface ModelInfo {
  *  único .gguf) ignoram o campo `model` do payload e sempre respondem com o que já está carregado;
  *  fica disponível pra quando o endpoint hospeda múltiplos modelos (ex.: LM Studio, vLLM). */
 /**
- * O que fazer quando o recurso que o usuário declarou não estiver disponível.
- *
- * Vocabulário normativo da `RFC-005` e de `docs/ARCHITECTURE/SOBERANIA_DA_CONFIGURACAO.md` §1.3 —
- * os valores são os mesmos do documento e do `.env` de propósito: RFC, configuração e código dizem
- * a mesma palavra, sem camada de tradução onde um desalinhamento possa se esconder.
- *
- * - `estrita`   — nunca substituir; a indisponibilidade é o resultado.
- * - `anunciada` — pode substituir, mas a substituição aparece na resposta, não só no log.
- * - `livre`     — pode substituir em silêncio. Só válida quando a troca não atravessa fronteira
- *                 de localidade nem de custódia (§1.2).
- *
- * ESTADO DE IMPLEMENTAÇÃO (Sprint 021): `estrita` está implementada por inteiro. `anunciada` existe
- * como valor de domínio e **ainda se comporta como `livre`** — o mecanismo de anúncio é a Sprint
- * 022. A limitação é temporária, deliberada e coberta por teste (`S207`), para que a Sprint 022
- * seja puramente aditiva: acrescenta o comportamento deste estado sem mexer em contrato,
- * configuração ou teste estrutural.
- */
-export type SubstitutionPolicy = 'estrita' | 'anunciada' | 'livre';
-
-/** Padrão para recurso declarado que não diz a sua própria política (`RFC-005` §1.3). */
-export const DEFAULT_SUBSTITUTION_POLICY: SubstitutionPolicy = 'anunciada';
-
-export const SUBSTITUTION_POLICIES: readonly SubstitutionPolicy[] = ['estrita', 'anunciada', 'livre'];
-
-export function isSubstitutionPolicy(valor: unknown): valor is SubstitutionPolicy {
-    return typeof valor === 'string' && (SUBSTITUTION_POLICIES as readonly string[]).includes(valor);
-}
-
-/**
- * Opções por chamada de `chatWithFallback`.
- *
- * `anunciarSubstituicao` é **opt-in explícito** e existe porque `chatWithFallback` serve tanto o
- * turno de conversa quanto classificador, extrator de goal e validador. Injetar "avise o usuário"
- * numa chamada que produz JSON a corromperia.
- *
- * Hoje, dos sete pontos de chamada, só o turno conversacional do `AgentLoop` declara um provider
- * preferido — os outros seis passam `undefined`. Ou seja: a fronteira da declaração já separaria os
- * casos sozinha. O opt-in existe mesmo assim, para que essa separação não dependa de uma
- * coincidência que a próxima chamada nova pode desfazer em silêncio — a `ADR-005` §5.1 registra o
- * que acontece quando se conta caminhos à mão (contou dois; eram cinco).
- */
-/**
  * Rótulo de DIAGNÓSTICO de uma chamada ao LLM (Campanha B2, 24/09/2026). Só alimenta a linha
  * `[LLM-CALL]` de `ProviderFactory.chatWithFallback`; nenhum campo aqui altera o comportamento da
  * chamada. Existe porque o log não dizia QUEM chamava: modelo e papel estavam misturados
@@ -237,8 +187,6 @@ export interface LlmCallDiag {
 export interface ChatFallbackOptions {
     /** Só observabilidade: ver `LlmCallDiag`. Ignorado por qualquer decisão do ProviderFactory. */
     diag?: LlmCallDiag;
-    /** O resultado desta chamada é entregue ao usuário, então uma substituição precisa ser dita. */
-    anunciarSubstituicao?: boolean;
     /**
      * Issue 038 (campanha "sistema não utilizável", 22/09/2026): o guard-rail de "thinking"
      * travado (`OllamaProvider.MAX_THINKING_BUDGET_CHARS`/`MAX_THINKING_DURATION_MS`, nascido do
@@ -374,8 +322,6 @@ export interface CustomProviderConfig {
     baseUrl: string;
     apiKey?: string;
     model?: string;
-    /** Política de substituição deste provider. Ausente = o padrão global (`SUBSTITUTION_POLICY`). */
-    substitutionPolicy?: SubstitutionPolicy;
     /**
      * Issue 054 (D3) — raciocínio ("thinking") do modelo servido por este endpoint. `'off'` pede ao
      * servidor para não gerar raciocínio (`chat_template_kwargs.enable_thinking=false`, o parâmetro dos

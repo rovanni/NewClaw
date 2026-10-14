@@ -52,13 +52,14 @@ const TRANSLATIONS = loadTranslations();
 const LANGS = ['pt-BR', 'en-US', 'es-ES'];
 
 // Lista de tools registradas (src/tools/*.ts, `name = '...'`) no momento desta sprint —
-// verificada por asserção estrutural em S235-3, não hardcoded sem checagem.
+// verificada por asserção estrutural em S235-3, não hardcoded sem checagem. (Sprint 4, 14/10/2026: crypto_report,
+// manage_memory e cmi_inspect saíram — nunca foram registradas.)
 const REGISTERED_TOOLS = [
-    'web_search', 'web_navigate', 'weather', 'crypto_analysis', 'crypto_report',
-    'memory_search', 'memory_write', 'memory_admin', 'manage_memory',
+    'web_search', 'web_navigate', 'weather', 'crypto_analysis',
+    'memory_search', 'memory_write', 'memory_admin',
     'write', 'edit', 'read', 'read_document',
     'list_workspace', 'refresh_workspace', 'organize_workspace', 'analyze_workspace_groups',
-    'exec_command', 'ssh_exec', 'api_request', 'cmi_inspect',
+    'exec_command', 'ssh_exec', 'api_request',
     'send_document', 'send_audio', 'powerpoint_control', 'schedule',
 ];
 
