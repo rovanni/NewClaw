@@ -127,6 +127,11 @@ export class GoalOrchestrator {
     }
 
     /** Propaga mudanças de modelo interno do dashboard sem precisar reiniciar. */
+    /** ADR-017: aprendizado de skills com o que funcionou + aviso ao usuário no canal da conversa. */
+    setAprendizadoDeSkills(aprendizado: Parameters<GoalExecutionLoop['setAprendizadoDeSkills']>[0]): void {
+        this.executionLoop.setAprendizadoDeSkills(aprendizado);
+    }
+
     updateInternalModels(plannerModel?: string, riskModel?: string, classifierModel?: string): void {
         this.executionLoop.updateInternalModels(plannerModel, riskModel);
         if (classifierModel) this.extractor.setClassifierModel(classifierModel);

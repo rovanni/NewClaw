@@ -764,6 +764,9 @@ const PLANNER_MODEL_DEFAULT = process.env.PLANNER_MODEL || '';
 
 export class GoalPlanner {
     private model: string = PLANNER_MODEL_DEFAULT;
+
+    /** O modelo do planejador escolhido pelo usuário ('' = o padrão do provedor escolhido). Usado também pelo aprendizado de skills (ADR-017). */
+    getModel(): string { return this.model; }
     private skillContext: string | undefined;
     private readonly skillLoader = new SkillLoader();
     private skillsSummaryCache: { summary: string; loadedAt: number } | null = null;

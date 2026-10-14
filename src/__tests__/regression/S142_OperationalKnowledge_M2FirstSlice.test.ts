@@ -259,8 +259,12 @@ async function main() {
     // 10. Wiring estrutural — GoalExecutionLoop captura no mesmo gate de elegibilidade do CaseMemory
     {
         const loopSrc = readSource('loop/GoalExecutionLoop.ts');
-        const captureSites = (loopSrc.match(/this\.operationalKnowledge\?\.captureFromGoal\(/g) ?? []).length;
-        assert(captureSites === 2, `GoalExecutionLoop chama captureFromGoal nos 2 mesmos pontos onde CaseMemory.captureIfEligible já é chamado (encontrados: ${captureSites})`, captureSites);
+        // ADR-017: as capturas (Caso, conhecimento operacional, skill) moram juntas em registrarAprendizados(), chamado nos 2 pontos em
+        // que o goal é validado como concluído — o mesmo gate de antes, sem espelhar chamadas à mão em cada ponto.
+        const corpo = loopSrc.slice(loopSrc.indexOf('private registrarAprendizados('), loopSrc.indexOf('private aprenderSkill('));
+        const captureSites = (loopSrc.match(/this\.registrarAprendizados\(/g) ?? []).length;
+        assert(captureSites === 2 && /this\.operationalKnowledge\?\.captureFromGoal\(/.test(corpo) && /this\.caseMemory\.captureIfEligible\(/.test(corpo),
+            `GoalExecutionLoop chama captureFromGoal nos 2 mesmos pontos onde CaseMemory.captureIfEligible já é chamado (registrarAprendizados em ${captureSites} pontos)`, captureSites);
     }
 
     // 11. getTacticalCommand — abaixo do limiar (1 sucesso) não é elegível

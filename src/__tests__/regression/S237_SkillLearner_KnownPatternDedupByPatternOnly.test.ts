@@ -37,6 +37,10 @@ import * as path from 'path';
 import Database from 'better-sqlite3';
 import { SkillLearner } from '../../loop/SkillLearner';
 
+// ADR-017: o mecanismo protegido aqui (propostas por contagem, inclusive o molde para padrões fora do catálogo) é o do modo
+// "proposta". No modo automático (padrão) o molde genérico é substituído pela skill escrita a partir da trajetória — coberto pelo S393.
+process.env.APRENDIZADO_DE_SKILLS = 'proposta';
+
 let passed = 0;
 let failed = 0;
 function assert(condition: boolean, message: string, detail?: unknown): void {

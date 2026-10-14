@@ -34,7 +34,27 @@ import Database from 'better-sqlite3';
 import { createLogger } from '../shared/AppLogger';
 import { errorMessage } from '../shared/errors';
 import { KNOWN_SKILL_TOPICS, VALID_SKILL_TOPIC_SLUG } from '../shared/domainTypes';
+import {
+    AcaoDaTrajetoria, MIN_ACOES_BEM_SUCEDIDAS, interpretarResposta, modoDeAprendizado, montarCorpoDaSkill,
+    montarPedidoDeAprendizado, motivoParaRecusar, textoDoAviso,
+} from './aprendizadoDeSkills';
 const log = createLogger('Skilllearner');
+
+/** Entrada de `aprenderComTrajetoria` (ADR-017). */
+export interface TrajetoriaConcluida {
+    goalId: string;
+    pedido: string;
+    objetivo: string;
+    plataforma: string;
+    diretivaDeIdioma?: string;
+    trajetoria: AcaoDaTrajetoria[];
+    /** Valores sensíveis que a tarefa usou — nunca vão ao LLM nem à skill (ver coletarSegredos). */
+    segredos: string[];
+}
+
+export type ResultadoDoAprendizado =
+    | { aprendida: true; nome: string; aviso: string }
+    | { aprendida: false; motivo: string };
 
 /** Row da tabela skill_patterns */
 interface PatternRow {
@@ -672,6 +692,8 @@ export class SkillLearner {
      */
     private tryCreateSkillProposal(): void {
         if (process.env.SKILL_LEARNER_PROPOSALS === 'false') return;
+        const modo = modoDeAprendizado();
+        if (modo === 'desligado') return;
         const patterns = this.db.prepare(
             `SELECT pattern, tool_name, success_count, fail_count, avg_latency_ms
              FROM skill_patterns
@@ -693,6 +715,10 @@ export class SkillLearner {
             // (pattern, tool): ali a tool MUDA o prompt/toolSeq gerado, então são propostas
             // legitimamente distintas.
             const isKnownPattern = SkillLearner.isKnownTopic(item.pattern);
+            // ADR-017: com o aprendizado automático ligado, o molde genérico ("use <ferramenta> para processar a solicitação") deixa
+            // de ser gerado — substituído pela skill escrita a partir da trajetória (aprenderComTrajetoria). Os padrões do catálogo
+            // (SKILL_DEFS, conteúdo curado) seguem como antes.
+            if (modo === 'automatico' && !isKnownPattern) continue;
             const alreadyExists = isKnownPattern
                 ? this.db.prepare(
                     'SELECT id FROM auto_skills WHERE source_pattern = ? LIMIT 1'
@@ -762,6 +788,103 @@ export class SkillLearner {
 
             log.info(`Proposal created: ${skill.name} (${item.pattern} -> ${item.tool_name})`);
         }
+    }
+
+    /**
+     * ADR-017 — aprende uma skill com uma trajetória concluída e VALIDADA (estilo Hermes). O LLM decide se vale aprender e
+     * escreve o procedimento; aqui se aplica o portão estrutural, se valida a resposta e a skill entra no mesmo ciclo de vida
+     * das demais (linha `auto_skills` ativa + SKILL.md exportado), já ativa. Nunca lança: aprender é acessório.
+     */
+    async aprenderComTrajetoria(entrada: TrajetoriaConcluida, chamarLLM: (pedido: string) => Promise<string | null>): Promise<ResultadoDoAprendizado> {
+        try {
+            if (modoDeAprendizado() !== 'automatico') return { aprendida: false, motivo: 'aprendizado automático desligado' };
+            const certas = entrada.trajetoria.filter(a => a.ok).length;
+            if (certas < MIN_ACOES_BEM_SUCEDIDAS) return { aprendida: false, motivo: `trajetória curta (${certas} ação(ões) bem-sucedida(s))` };
+
+            const existentes = this.skillsExistentes();
+            const bruta = await chamarLLM(montarPedidoDeAprendizado({ ...entrada, skillsExistentes: existentes }));
+            if (!bruta) {
+                log.info(`[SKILL-APRENDIZADO] goal=${entrada.goalId} sem resposta do modelo — nada aprendido`);
+                return { aprendida: false, motivo: 'modelo sem resposta' };
+            }
+            const r = interpretarResposta(bruta);
+            if (r.tipo === 'invalida') {
+                log.warn(`[SKILL-APRENDIZADO] goal=${entrada.goalId} resposta inválida (${r.erro}) — nada aprendido`);
+                return { aprendida: false, motivo: `resposta inválida: ${r.erro}` };
+            }
+            if (r.tipo === 'nao_aprender') {
+                log.info(`[SKILL-APRENDIZADO] goal=${entrada.goalId} nada a aprender: ${r.motivo.slice(0, 200)}`);
+                return { aprendida: false, motivo: r.motivo };
+            }
+            const p = r.proposta;
+            const recusa = motivoParaRecusar(p, { nomesExistentes: existentes.map(s => s.nome), segredos: entrada.segredos });
+            if (recusa) {
+                log.warn(`[SKILL-APRENDIZADO] goal=${entrada.goalId} proposta "${p.nome}" recusada: ${recusa}`);
+                return { aprendida: false, motivo: recusa };
+            }
+
+            const agora = new Date().toISOString();
+            const skill: Skill = {
+                id: `skill_aprendida_${p.nome.replace(/-/g, '_')}_${Date.now()}`,
+                name: p.nome,
+                trigger: p.gatilhos.join(' '),
+                description: p.descricao,
+                prompt: montarCorpoDaSkill(p, { pedido: entrada.pedido, plataforma: entrada.plataforma, data: agora.slice(0, 10), segredos: entrada.segredos }),
+                tool_sequence: JSON.stringify(p.ferramentas),
+                priority: 7,
+                hits: 0,
+                status: 'active',
+                // A pasta do SKILL.md sai de source_pattern (sanitizeSkillFolderName): um por skill, com a origem visível no disco.
+                source_pattern: `aprendida_${p.nome.replace(/-/g, '_')}`,
+                source_tool: 'trajetoria',
+                reviewed_at: null,
+                created_at: agora,
+                updated_at: agora,
+            };
+            this.db.prepare(
+                `INSERT INTO auto_skills
+                 (id, name, trigger, description, prompt, tool_sequence, priority, hits, status, source_pattern, source_tool, created_at, updated_at, file_exported)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`
+            ).run(skill.id, skill.name, skill.trigger, skill.description, skill.prompt, skill.tool_sequence, skill.priority, skill.hits,
+                skill.status, skill.source_pattern, skill.source_tool, skill.created_at, skill.updated_at);
+            this.exportSkillFile(skill);
+            log.info(`[SKILL-APRENDIZADO] goal=${entrada.goalId} skill aprendida e ativada: "${p.nome}" (${p.ferramentas.join(',')})`);
+            return { aprendida: true, nome: p.nome, aviso: textoDoAviso(p) };
+        } catch (error) {
+            log.error(`[SKILL-APRENDIZADO] goal=${entrada.goalId} erro: ${errorMessage(error)}`);
+            return { aprendida: false, motivo: `erro: ${errorMessage(error)}` };
+        }
+    }
+
+    /** Desativa por NOME (o comando do aviso) ou pelo final do id. Devolve o nome desativado, ou null. */
+    deactivateSkillByName(nomeOuId: string): string | null {
+        const alvo = nomeOuId.trim();
+        if (!alvo) return null;
+        const skill = this.db.prepare(
+            `SELECT id, name FROM auto_skills WHERE status = 'active' AND (lower(name) = lower(?) OR id LIKE ?) ORDER BY created_at DESC LIMIT 1`
+        ).get(alvo, `%${alvo}`) as { id: string; name: string } | undefined;
+        if (!skill) return null;
+        return this.deactivateSkill(skill.id) ? skill.name : null;
+    }
+
+    /** Skills que já existem — pastas de skills (curadas ou aprendidas) e linhas ativas/propostas — para o LLM não repetir. */
+    private skillsExistentes(): Array<{ nome: string; descricao: string }> {
+        const porNome = new Map<string, string>();
+        try {
+            for (const d of fs.readdirSync(this.skillsDir, { withFileTypes: true })) {
+                if (!d.isDirectory()) continue;
+                const arquivo = path.join(this.skillsDir, d.name, 'SKILL.md');
+                if (!fs.existsSync(arquivo)) continue;
+                const texto = fs.readFileSync(arquivo, 'utf-8').replace(/^﻿/, '');
+                const nome = (texto.match(/^name:\s*(.+)$/m)?.[1] ?? d.name).trim();
+                const descricao = (texto.match(/^description:\s*(.+)$/m)?.[1] ?? '').trim();
+                porNome.set(nome, descricao);
+                if (nome !== d.name) porNome.set(d.name, descricao);
+            }
+        } catch { /* sem pasta de skills ainda */ }
+        const linhas = this.db.prepare(`SELECT name, description FROM auto_skills WHERE status IN ('active', 'proposed')`).all() as Array<{ name: string; description: string }>;
+        for (const l of linhas) if (!porNome.has(l.name)) porNome.set(l.name, l.description ?? '');
+        return [...porNome].map(([nome, descricao]) => ({ nome, descricao: descricao.slice(0, 200) }));
     }
 
     /**

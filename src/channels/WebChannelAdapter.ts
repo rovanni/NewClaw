@@ -263,6 +263,14 @@ export class WebChannelAdapter implements ChannelAdapter {
     }
 
     /** Acumula uma entrega (texto e/ou anexos) sem HTTP pendente, respeitando os caps de memória. */
+    /**
+     * Mensagem iniciada pelo sistema, sem requisição HTTP viva (ex.: o aviso "aprendi algo novo" — ADR-017). O canal web não tem
+     * push: vira uma entrega órfã da sessão e chega mesclada na próxima resposta, o mesmo caminho das respostas atrasadas.
+     */
+    async sendToChat(chatId: string, response: NormalizedResponse): Promise<void> {
+        this.queueOrphaned(chatId, response);
+    }
+
     private queueOrphaned(chatId: string, response: NormalizedResponse): void {
         let list = this.orphanedDeliveries.get(chatId);
         if (!list) {

@@ -107,6 +107,11 @@ class ExecutionTraceManager extends EventEmitter {
         return this.traces.get(id);
     }
 
+    /** Um rastro por id, em andamento ou entre os recentes já concluídos (ADR-017: trajetória dos sub-turnos de um goal). */
+    getTrace(id: string): ExecutionTrace | undefined {
+        return this.traces.get(id) ?? this.recentTraces.find(t => t.id === id);
+    }
+
     getStats(): { totalTraces: number; avgDurationMs: number; byStatus: Record<string, number>; byProvider: Record<string, number> } {
         const all = this.recentTraces;
         const byStatus: Record<string, number> = {};

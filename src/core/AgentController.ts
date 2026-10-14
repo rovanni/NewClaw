@@ -39,7 +39,7 @@ import { SshExecTool } from '../tools/ssh_exec';
 import { WeatherTool } from '../tools/weather';
 import { ToolRegistry } from './ToolRegistry';
 import { SessionManager } from '../session/SessionManager';
-import { composeSessionKey } from '../session/SessionKeyFactory';
+import { composeSessionKey, parseSessionKey } from '../session/SessionKeyFactory';
 import { SessionContext } from '../session/SessionContext';
 import { ClassificationMemory } from '../memory/ClassificationMemory';
 import { DecisionMemory } from '../memory/DecisionMemory';
@@ -318,6 +318,16 @@ export class AgentController {
         this.goalOrchestrator = new GoalOrchestrator(this.agentLoop, this.providerFactory, this.goalStore, this.memory);
         this.goalOrchestrator.setSessionManager(this.sessionManager);
         this.goalOrchestrator.setWorkflowEngine(this.workflowEngine);
+        // ADR-017: skill aprendida com um goal concluído → aviso na mesma conversa (canal e chat saem da chave da sessão do goal).
+        this.goalOrchestrator.setAprendizadoDeSkills({
+            skillLearner: this.skillLearner,
+            diretivaDeIdioma: buildLanguageDirective(config.language),
+            avisar: async (sessionKey, texto) => {
+                const { channel, userId } = parseSessionKey(sessionKey);
+                if (!channel || !userId) return;
+                await this.messageBus.sendToChat(channel as import('../channels/ChannelAdapter').ChannelType, userId, { text: texto, format: 'markdown' });
+            },
+        });
         this.messageBus.setGoalOrchestrator(this.goalOrchestrator);
         this.agentLoop.setGoalOrchestrator(this.goalOrchestrator);
 
@@ -331,7 +341,7 @@ export class AgentController {
             maxFindingsPerCategory: 20,
         }, this.db);
 
-        registerCommands(this.messageBus, this.memory, this.memoryFacade, this.sessionManager, this.auditor, this.config, this.agentLoop, this.goalOrchestrator);
+        registerCommands(this.messageBus, this.memory, this.memoryFacade, this.sessionManager, this.auditor, this.config, this.agentLoop, this.goalOrchestrator, this.skillLearner);
 
         eventBus.on('circuit:open', (data) => {
             log.warn(`[CircuitBreaker] ${data.name} OPEN — ${data.failures}/${data.threshold} failures`);

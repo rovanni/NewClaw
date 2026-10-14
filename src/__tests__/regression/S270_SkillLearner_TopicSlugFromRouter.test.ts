@@ -40,6 +40,10 @@ import { SkillLearner } from '../../loop/SkillLearner';
 import { UnifiedIntentRouter, buildClassificationMessages } from '../../loop/UnifiedIntentRouter';
 import { KNOWN_SKILL_TOPICS } from '../../shared/domainTypes';
 
+// ADR-017: as propostas por contagem (inclusive para topicSlug novo) são o mecanismo do modo "proposta". No modo automático
+// (padrão) o molde genérico é substituído pela skill escrita a partir da trajetória — coberto pelo S393.
+process.env.APRENDIZADO_DE_SKILLS = 'proposta';
+
 let passed = 0;
 let failed = 0;
 function assert(condition: boolean, message: string, detail?: unknown): void {

@@ -220,9 +220,12 @@ async function main() {
     console.log('\n=== S20.10 — Captura ocorre exatamente nos 2 pontos de setStatus(id, \'completed\') ===');
     {
         const setStatusCompletedCount = (gelSrc.match(/setStatus\([^)]*'completed'\)/g) ?? []).length;
-        const captureCallCount = (gelSrc.match(/this\.caseMemory\.captureIfEligible\(/g) ?? []).length;
+        // ADR-017: a captura mora em registrarAprendizados() (junto com conhecimento operacional e skill), chamado uma vez por call site.
+        const corpo = gelSrc.slice(gelSrc.indexOf('private registrarAprendizados('), gelSrc.indexOf('private aprenderSkill('));
+        const captureCallCount = (gelSrc.match(/this\.registrarAprendizados\(/g) ?? []).length;
         assert(setStatusCompletedCount === 2, `existem exatamente 2 call sites de setStatus(...,'completed') (obtido: ${setStatusCompletedCount})`);
-        assert(captureCallCount === 2, `captureIfEligible é chamado exatamente 2 vezes, uma por call site (obtido: ${captureCallCount})`);
+        assert(captureCallCount === 2 && /this\.caseMemory\.captureIfEligible\(/.test(corpo),
+            `captureIfEligible é chamado exatamente 2 vezes, uma por call site (via registrarAprendizados, obtido: ${captureCallCount})`);
     }
 
     // ══════════ Teste comportamental central ══════════

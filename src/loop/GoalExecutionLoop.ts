@@ -37,7 +37,9 @@ import { ProactiveRecovery, ToolExecutorLike } from './ProactiveRecovery';
 import { ToolRegistry, producesUserReadableText } from '../core/ToolRegistry';
 import { ReflectionMemory } from '../memory/ReflectionMemory';
 import { CaseMemory } from '../memory/CaseMemory';
-import { OperationalKnowledge } from '../memory/OperationalKnowledge';
+import { OperationalKnowledge, currentPlatform } from '../memory/OperationalKnowledge';
+import type { SkillLearner } from './SkillLearner';
+import { MIN_ACOES_BEM_SUCEDIDAS, coletarSegredos, modoDeAprendizado, montarTrajetoria } from './aprendizadoDeSkills';
 import { permissionRegistry } from '../core/PermissionRegistry';
 import { WorkflowEngine } from './WorkflowEngine';
 import { AuthorizationManager } from './AuthorizationManager';
@@ -59,6 +61,7 @@ import { ChannelContext, ContextAwareTool, GroundingBlock, ProviderFailure } fro
 import type { EvidenceItem } from './ObserverValidator';
 import type { SessionManager } from '../session/SessionManager';
 import { parseSessionKey } from '../session/SessionKeyFactory';
+import { errorMessage } from '../shared/errors';
 
 const log = createLogger('GoalExecutionLoop');
 
@@ -247,6 +250,70 @@ export class GoalExecutionLoop {
         this.evaluator = new GoalEvaluator(operationalKnowledge);
         this.riskAnalyzer = new RiskAnalyzer(providerFactory, toolRegistry, reflectionMemory);
         this.semanticValidator = new StepSemanticValidator(providerFactory);
+    }
+
+    /**
+     * ADR-017 — aprendizado de skills com o que funcionou. Opcional (fail-open, como operationalKnowledge): sem ele, nada é aprendido.
+     * `avisar` entrega o aviso "aprendi algo novo" no mesmo canal/conversa do pedido.
+     */
+    private aprendizado?: { skillLearner: SkillLearner; avisar: (sessionKey: string, texto: string) => Promise<void>; diretivaDeIdioma?: string };
+
+    setAprendizadoDeSkills(aprendizado: { skillLearner: SkillLearner; avisar: (sessionKey: string, texto: string) => Promise<void>; diretivaDeIdioma?: string }): void {
+        this.aprendizado = aprendizado;
+    }
+
+    /**
+     * Tudo o que se aprende com um goal VALIDADO como concluído — mesmo portão nos dois pontos de conclusão (antes eram chamadas
+     * espelhadas à mão em cada um). Captura de Caso e de conhecimento operacional só gravam; o aprendizado de skill roda depois,
+     * em segundo plano, fora do caminho da resposta. Nada aqui influencia o resultado deste goal.
+     */
+    private registrarAprendizados(goalId: string): void {
+        const goal = this.goalStore.getById(goalId);
+        if (!goal) return;
+        // S5 (modo sombra): captura Caso só se houver evidência de nível de goal (successCriteria met OU sentArtifacts real).
+        this.caseMemory.captureIfEligible(goal);
+        // M2 (RFC-001): `ADR-008` — usa `commandExists` de propósito, e não `probeCommand`. Aqui o colapso de "não consegui
+        // verificar" para `false` é o lado SEGURO — o sistema deixa de aprender, que é o que a `ADR-003` já escolhia diante de dúvida.
+        this.operationalKnowledge?.captureFromGoal(goal, commandExists);
+        this.aprenderSkill(goal);
+    }
+
+    private aprenderSkill(goal: Goal): void {
+        const a = this.aprendizado;
+        if (!a || modoDeAprendizado() !== 'automatico') return;
+        const trajetoria = montarTrajetoria(goal.attempts, (id) => traceManager.getTrace(id)?.steps);
+        if (trajetoria.filter(x => x.ok).length < MIN_ACOES_BEM_SUCEDIDAS) return;
+        const segredos = coletarSegredos({ textos: [goal.userIntent, goal.objective], argumentos: goal.attempts.map(x => x.args), env: process.env });
+        // Argumentos das ações de dentro dos sub-turnos (rastro) também podem carregar segredo.
+        for (const t of goal.attempts) {
+            const passos = t.traceId ? traceManager.getTrace(t.traceId)?.steps : undefined;
+            if (passos) segredos.push(...coletarSegredos({ textos: [], argumentos: passos.filter(p => p.type === 'tool_call').map(p => p.data?.input) }));
+        }
+        void (async () => {
+            const r = await a.skillLearner.aprenderComTrajetoria({
+                goalId: goal.id,
+                pedido: goal.userIntent,
+                objetivo: goal.objective,
+                plataforma: currentPlatform(),
+                diretivaDeIdioma: a.diretivaDeIdioma,
+                trajetoria,
+                segredos: [...new Set(segredos)],
+            }, (pedido) => this.chamarLLMDeAprendizado(pedido, goal.id));
+            if (r.aprendida) {
+                try { await a.avisar(goal.sessionKey, r.aviso); }
+                catch (e) { log.warn(`[SKILL-APRENDIZADO] goal=${goal.id} aviso não entregue: ${errorMessage(e)}`); }
+            }
+        })().catch(e => log.warn(`[SKILL-APRENDIZADO] goal=${goal.id} falhou: ${errorMessage(e)}`));
+    }
+
+    /** A chamada do aprendizado (ADR-017): modelo do planejador escolhido pelo usuário, prazo proporcional ao tamanho, rótulo próprio. */
+    private async chamarLLMDeAprendizado(pedido: string, goalId: string): Promise<string | null> {
+        const { timeoutMs } = this.providerFactory.getBudgetAuxiliar('validacao', pedido.length);
+        const r = await this.providerFactory.chatWithFallback(
+            [{ role: 'user', content: pedido }], undefined, undefined, timeoutMs, undefined, this.planner.getModel() || undefined,
+            { reasoningIntensive: true, diag: { component: 'SkillLearner', role: 'skill_writer', phase: 'aprender_com_trajetoria', goalId } },
+        );
+        return r.status === 'success' && r.content ? r.content : null;
     }
 
     /** Forwards skill context to the planner before planning begins. */
@@ -1579,18 +1646,8 @@ export class GoalExecutionLoop {
         // FIX E: encerra imediatamente — sem replan, sem novos ciclos
         this.goalStore.setStatus(goal.id, 'completed');
         log.info(`[GoalLoop] goal=${goal.id} validated as complete`);
-        // S5 (modo sombra): captura Caso só se houver evidência de nível de goal
-        // (successCriteria met OU sentArtifacts real) — nunca influencia o resultado.
-        this.caseMemory.captureIfEligible(this.goalStore.getById(goal.id)!);
-        // M2 (RFC-001): mesmo gate de elegibilidade (goal já validado como concluído de
-        // verdade) — captura só grava, nunca influencia o resultado deste goal.
-        //
-        // `ADR-008`: usa `commandExists` de propósito, e não `probeCommand`. Aqui o colapso de
-        // "não consegui verificar" para `false` é o lado SEGURO — o sistema deixa de aprender, que é
-        // o que a `ADR-003` já escolhia diante de dúvida ("silêncio em vez de chute"). O que mudou
-        // na Sprint 034 não foi o comportamento deste ponto, foi o motivo: o resultado seguro deixou
-        // de sair por acidente de um `catch` cego e passa a sair por escolha declarada.
-        this.operationalKnowledge?.captureFromGoal(this.goalStore.getById(goal.id)!, commandExists);
+        // Caso (S5), conhecimento operacional (M2) e skill (ADR-017) — goal já validado como concluído de verdade.
+        this.registrarAprendizados(goal.id);
         return { action: 'earlyReturn', result: this.buildResult(goal, true, totalCycles, totalReplans, validation.summary) };
     }
 
@@ -2226,10 +2283,8 @@ export class GoalExecutionLoop {
                 const isLastMilestone = !currentGoal.isConstruction || !currentGoal.roadmap || (currentGoal.currentMilestoneIndex ?? 0) === currentGoal.roadmap.length - 1;
                 if (isLastMilestone) {
                     this.goalStore.setStatus(currentGoal.id, 'completed');
-                    // S5 (modo sombra): mesma captura condicionada a evidência do outro call site.
-                    this.caseMemory.captureIfEligible(this.goalStore.getById(currentGoal.id)!);
-                    // M2 (RFC-001): mesmo gate, mesmo call site espelhado do CaseMemory acima.
-                    this.operationalKnowledge?.captureFromGoal(this.goalStore.getById(currentGoal.id)!, commandExists);
+                    // Mesmo registro do outro ponto de conclusão (Caso, conhecimento operacional, skill).
+                    this.registrarAprendizados(currentGoal.id);
                     return this.buildResult(currentGoal, true, totalCycles, totalReplans, validation.summary);
                 } else {
                     log.warn(`[GoalLoop] goal=${currentGoal.id} completed step but ran out of cycles before final milestone`);

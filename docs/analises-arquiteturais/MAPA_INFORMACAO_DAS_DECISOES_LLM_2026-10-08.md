@@ -45,6 +45,7 @@
 | 14 | `AgentLoop` (evidence-check) | qual o valor exato de um parâmetro faltante? | nome/tipo/descrição do parâmetro + contexto do usuário + evidência da memória | — | ✅ |
 | 15 | `AgentLoop` (turno) | o que fazer agora? | conversa, ferramentas, memória, resultados | — | ✅ |
 | 16 | `ValidationEngine` (motor único, ADR-014) | a pergunta do tipo registrado (descritor) | o que o descritor declara, por papel — objeto, fonte de verdade e pedido inteiros; contexto da execução com corte declarado; entrada obrigatória ausente ou acima de `DECISION_PROMPT_MAX_CHARS` → não avaliável sem chamar o modelo | — (garantido pela estrutura; `S363`) | ✅ |
+| 17 | `SkillLearner.aprenderComTrajetoria` (chamada em `GoalExecutionLoop.chamarLLMDeAprendizado`, ADR-017) | a trajetória deste goal concluído ensinou um procedimento reutilizável? qual? | **pedido íntegro** + objetivo + plataforma + idioma + **todas as ações na ordem, com argumentos** (inclusive as de dentro dos sub-turnos, pelo rastro) e se deram certo/erro + skills existentes (nome e descrição); valores sensíveis trocados por `<SEGREDO>`. **Sem as saídas das ferramentas, de propósito** (impede que texto de terceiros vire skill) | — (a skill descreve COMO fazer, não o que foi encontrado) | ✅ |
 
 ## 2. Achados
 

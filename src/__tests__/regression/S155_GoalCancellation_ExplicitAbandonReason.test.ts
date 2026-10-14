@@ -187,7 +187,8 @@ async function main() {
     console.log('\n=== S155 — inspeção de source: AgentController injeta this.goalOrchestrator em registerCommands() ===');
     {
         const src = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'AgentController.ts'), 'utf-8');
-        assert(/registerCommands\([^)]*this\.goalOrchestrator\)/.test(src), 'call site atualizado para passar this.goalOrchestrator');
+        // `[,)]`: o orquestrador continua sendo passado; argumentos acrescentados depois dele (ex.: skillLearner, ADR-017) não mudam isso.
+        assert(/registerCommands\([^)]*this\.goalOrchestrator[,)]/.test(src), 'call site atualizado para passar this.goalOrchestrator');
     }
 
     console.log(`\n${'─'.repeat(60)}`);

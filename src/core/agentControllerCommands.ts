@@ -8,6 +8,7 @@ import { registerAuditCommand } from '../services/auditor/auditCommand';
 import type { NewClawConfig } from './agentControllerTypes';
 import type { AgentLoop } from '../loop/AgentLoop';
 import type { GoalOrchestrator } from '../loop/GoalOrchestrator';
+import type { SkillLearner } from '../loop/SkillLearner';
 
 export function registerCommands(
     messageBus: MessageBus,
@@ -17,7 +18,8 @@ export function registerCommands(
     auditor: AuditorService,
     config: NewClawConfig,
     agentLoop: AgentLoop,
-    goalOrchestrator: GoalOrchestrator
+    goalOrchestrator: GoalOrchestrator,
+    skillLearner?: SkillLearner,
 ): void {
     for (const cmd of ['/cancelar', '/cancel', '/stop', '/pare']) {
         messageBus.registerPriorityCommand(cmd, async (msg) => {
@@ -67,6 +69,19 @@ export function registerCommands(
             if (!match) return `Skill com ID curto "${rawId}" não encontrada.`;
             memoryFacade.setAutoSkillStatus(match, 'active');
             return `✅ Skill aprovada: ${match}`;
+        } catch (e) {
+            return `⚠️ Erro: ${errorMessage(e)}`;
+        }
+    });
+
+    // ADR-017: o aviso "aprendi algo novo" traz este comando — desativa (remove o SKILL.md; reversível no painel de Skills).
+    messageBus.registerCommand('/skill_desativar', async (msg) => {
+        const alvo = msg.text.trim().split(/\s+/).slice(1).join(' ');
+        if (!alvo) return 'Use /skill_desativar <nome>. Veja as skills com /skills';
+        if (!skillLearner) return '⚠️ Aprendizado de skills indisponível.';
+        try {
+            const nome = skillLearner.deactivateSkillByName(alvo);
+            return nome ? `↩️ Skill desativada: ${nome}` : `Nenhuma skill ativa chamada "${alvo}".`;
         } catch (e) {
             return `⚠️ Erro: ${errorMessage(e)}`;
         }
