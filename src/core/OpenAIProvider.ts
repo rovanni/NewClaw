@@ -173,7 +173,7 @@ export class OpenAIProvider implements ILLMProvider {
     /** Issue 054 (D3): só provedores customizados recebem isto (ver CustomProviderConfig.thinking). */
     private readonly thinking?: 'on' | 'off';
 
-    constructor(apiKey: string, model: string = 'gpt-4o', baseUrl: string = 'https://api.openai.com/v1', label?: string, opts?: { thinking?: 'on' | 'off' }) {
+    constructor(apiKey: string, model: string, baseUrl: string, label?: string, opts?: { thinking?: 'on' | 'off' }) {   // sem modelo nem endereço padrão: vêm do cadastro do provedor
         this.apiKey = apiKey;
         this.model = model;
         this.baseUrl = baseUrl;
@@ -313,7 +313,7 @@ export class OpenAIProvider implements ILLMProvider {
 }
 
 export class OpenRouterProvider extends OpenAIProvider {
-    constructor(apiKey: string, model: string = 'anthropic/claude-3.5-sonnet') {
+    constructor(apiKey: string, model: string) {   // modelo escolhido pelo usuário (OPENROUTER_MODEL); vazio = não escolhido
         super(apiKey, model, 'https://openrouter.ai/api/v1', 'openrouter');
         this.name = 'openrouter';
     }

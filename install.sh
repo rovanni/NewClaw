@@ -34,7 +34,8 @@ NEWCLAW_DIR="${NEWCLAW_HOME:-$HOME/newclaw}"
 ENV_FILE=""
 BOT_TOKEN="${NEWCLAW_TOKEN:-}"
 USER_ID="${NEWCLAW_USER_ID:-}"
-OLLAMA_MODEL="${NEWCLAW_MODEL:-glm-5:cloud}"
+# Sem modelo no instalador: vazio = o usuário escolhe (aqui, ou depois no painel). Nunca um padrão embutido.
+OLLAMA_MODEL="${NEWCLAW_MODEL:-}"
 DASHBOARD_PORT="${NEWCLAW_DASHBOARD_PORT:-3090}"
 INSTALL_DIR=""
 
@@ -227,7 +228,7 @@ USO:
 OPÇÕES:
   --token TOKEN         Token do bot do Telegram
   --user-id ID          Seu ID de usuário do Telegram
-  --model MODEL         Modelo Ollama (padrão: glm-5:cloud)
+  --model MODEL         Modelo Ollama (sem padrão: vazio = escolher no painel)
   --dir PATH            Diretório de instalação (padrão: ~/NewClaw)
   --port PORT           Porta do dashboard (padrão: 3090)
 
@@ -243,7 +244,7 @@ OPÇÕES:
 VARIÁVEIS DE AMBIENTE:
   NEWCLAW_TOKEN         Token do bot Telegram
   NEWCLAW_USER_ID       ID do usuário Telegram
-  NEWCLAW_MODEL         Modelo Ollama (padrão: glm-5:cloud)
+  NEWCLAW_MODEL         Modelo Ollama (sem padrão: vazio = escolher no painel)
   NEWCLAW_HOME          Diretório de instalação (padrão: ~/NewClaw)
   NEWCLAW_DASHBOARD_PORT  Porta do dashboard (padrão: 3090)
 
@@ -258,7 +259,7 @@ EXEMPLOS:
   ./install.sh --dry-run --verbose
 
   # Modelo específico
-  ./install.sh --model llama3.1:8b
+  ./install.sh --model <nome:tag>
 EOF
   exit 0
 }
@@ -452,25 +453,21 @@ download_model() {
     return
   fi
 
-  if [ "$NO_PROMPT" -eq 0 ]; then
-    echo -e "  ${BOLD}Escolha o modelo:${NC}"
-    echo -e "  ${CYAN}1)${NC} glm-5:cloud     — Recomendado (inferência remota; PAGO, exige conta e OLLAMA_API_KEY)"
-    echo -e "  ${CYAN}2)${NC} llama3.1:8b    — Rápido, uso geral (5GB local)"
-    echo -e "  ${CYAN}3)${NC} mistral:7b     — Rápido, conversação (4GB local)"
-    echo -e "  ${CYAN}4)${NC} qwen2.5:3b    — Leve, servidores fracos (2GB local)"
-    echo -e "  ${CYAN}5)${NC} Outro (digitar nome)"
-    echo ""
+  # O modelo é escolha do usuário: o instalador não sugere nem baixa nenhum por conta própria.
+  if [ "$NO_PROMPT" -eq 0 ] && [ -z "$OLLAMA_MODEL" ]; then
+    local instalados
+    instalados="$(ollama list 2>/dev/null | awk 'NR>1 {print $1}')"
+    if [ -n "$instalados" ]; then
+      echo -e "  ${BOLD}Modelos já instalados no seu Ollama:${NC}"
+      echo "$instalados" | sed 's/^/    - /'
+    fi
+    echo -e "  Digite o nome exato do modelo (ex.: o que aparece em ollama.com/library), ou deixe vazio para escolher depois no painel."
+    ask "Modelo" OLLAMA_MODEL ""
+  fi
 
-    local model_choice
-    ask "Qual modelo? (1-5)" model_choice "1"
-
-    case "$model_choice" in
-      2) OLLAMA_MODEL="llama3.1:8b" ;;
-      3) OLLAMA_MODEL="mistral:7b" ;;
-      4) OLLAMA_MODEL="qwen2.5:3b" ;;
-      5) ask "Nome do modelo" OLLAMA_MODEL "glm-5:cloud" ;;
-      *) OLLAMA_MODEL="glm-5:cloud" ;;
-    esac
+  if [ -z "$OLLAMA_MODEL" ]; then
+    info "Nenhum modelo escolhido — escolha no painel (Config → Modelos) depois da instalação."
+    return
   fi
 
   run_with_spinner "Baixando modelo ${OLLAMA_MODEL} (pode demorar na 1ª vez)" ollama pull "$OLLAMA_MODEL"
@@ -993,7 +990,7 @@ show_summary() {
   echo -e "${BOLD}${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
   echo ""
   echo -e "  ${CYAN}Pasta:${NC}       ${NEWCLAW_DIR}"
-  echo -e "  ${CYAN}Modelo:${NC}      ${OLLAMA_MODEL}"
+  echo -e "  ${CYAN}Modelo:${NC}      ${OLLAMA_MODEL:-(escolher no painel)}"
   echo -e "  ${CYAN}Dashboard:${NC}   http://localhost:${DASHBOARD_PORT}"
   echo -e "  ${CYAN}Config URL:${NC}  http://localhost:${DASHBOARD_PORT}/config"
   echo -e "  ${CYAN}Logs:${NC}        ${NEWCLAW_DIR}/logs/newclaw.log"

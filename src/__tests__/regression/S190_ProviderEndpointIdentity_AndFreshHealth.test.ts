@@ -52,80 +52,48 @@ function fallbackOrder(f: ProviderFactory): string[] {
 async function main() {
     console.log('\n=== S190 — identidade de endpoint no fallback + saúde fresca após carregar modelo ===');
 
-    console.log('\n--- S190.1 — o caso do operador: dois rótulos, um servidor ---');
+    // 14/10/2026 (ADR-018, diretiva da mantenedora: nenhum fallback): a cadeia passou a ter só o provedor declarado, e o
+    // problema do item 2 (dois rótulos no mesmo servidor gastando duas tentativas) deixou de existir pela raiz — não há
+    // segunda tentativa. Saíram `dedupeByEndpoint`/`endpointKey`; S190.1–.4 provam agora a cadeia única, e o painel
+    // continua avisando da colisão (checkDuplicateEndpoints), que ainda confunde quem configura.
+    console.log('\n--- S190.1 — o caso do operador: dois rótulos, um servidor — só o declarado é chamado ---');
     {
         const f = makeFactory([
             { label: 'Modelo local', baseUrl: 'http://127.0.0.1:8080/v1' },
             { label: 'llamafile',    baseUrl: 'http://127.0.0.1:8080/v1' },
         ], 'Modelo local');
         const order = fallbackOrder(f);
-
-        assert(order.includes('Modelo local'), 'o provedor padrão declarado pelo usuário permanece', order);
-        assert(!order.includes('llamafile'),
-            'o segundo rótulo do MESMO endpoint sai da cadeia — não oferece resiliência nenhuma', order);
-        assert(order.includes('ollama'),
-            'provedor de endpoint diferente continua na cadeia (o fallback real não é afetado)', order);
+        assert(order.length === 1 && order[0] === 'Modelo local', 'a cadeia é só o provedor declarado — nem o rótulo duplicado nem o Ollama', order);
     }
 
-    console.log('\n--- S190.2 — equivalências garantidas (e só elas) ---');
+    console.log('\n--- S190.2 — vale para qualquer combinação de endereços e credenciais ---');
     {
-        const casos: Array<[string, string, boolean, string]> = [
-            ['http://localhost:8080/v1', 'http://127.0.0.1:8080/v1', true,  'localhost e 127.0.0.1 são o mesmo host'],
-            ['http://127.0.0.1:8080/v1/', 'http://127.0.0.1:8080/v1', true,  'barra final não muda o destino'],
-            ['HTTP://127.0.0.1:8080/V1', 'http://127.0.0.1:8080/v1', true,  'caixa não muda o destino'],
-            ['https://127.0.0.1:8080/v1', 'http://127.0.0.1:8080/v1', true,  'esquema não distingue o alvo aqui'],
-            ['http://127.0.0.1:8080/v1', 'http://127.0.0.1:8081/v1', false, 'portas diferentes são servidores diferentes'],
-            ['http://meu-servidor:8080/v1', 'http://127.0.0.1:8080/v1', false, 'nome de máquina não é assumido como equivalente sem DNS'],
+        const casos: Array<[string, string, string | undefined, string | undefined]> = [
+            ['http://localhost:8080/v1', 'http://127.0.0.1:8080/v1', undefined, undefined],
+            ['http://127.0.0.1:8080/v1', 'http://127.0.0.1:8081/v1', undefined, undefined],
+            ['https://gateway.exemplo/v1', 'https://gateway.exemplo/v1', 'chave-a', 'chave-b'],
         ];
-        for (const [a, b, mesmo, porque] of casos) {
-            const f = makeFactory([{ label: 'A', baseUrl: a }, { label: 'B', baseUrl: b }], 'A');
-            const order = fallbackOrder(f);
-            const colapsou = !order.includes('B');
-            assert(colapsou === mesmo, `${porque} → ${mesmo ? 'colapsa' : 'mantém os dois'}`, order);
+        for (const [a, b, ka, kb] of casos) {
+            const order = fallbackOrder(makeFactory([{ label: 'A', baseUrl: a, apiKey: ka }, { label: 'B', baseUrl: b, apiKey: kb }], 'A'));
+            assert(order.length === 1 && order[0] === 'A', `${a} × ${b}: só o declarado`, order);
         }
     }
 
-    console.log('\n--- S190.3 — credencial faz parte da identidade ---');
+    console.log('\n--- S190.3 — provedor declarado sem configuração: lista vazia, nenhum outro no lugar ---');
     {
-        // Dois rótulos no mesmo gateway com chaves diferentes são CONTAS diferentes e podem se
-        // cobrir mutuamente — colapsá-los removeria um fallback legítimo.
-        const f = makeFactory([
-            { label: 'conta-a', baseUrl: 'https://gateway.exemplo/v1', apiKey: 'chave-a' },
-            { label: 'conta-b', baseUrl: 'https://gateway.exemplo/v1', apiKey: 'chave-b' },
-        ], 'conta-a');
-        const order = fallbackOrder(f);
-        assert(order.includes('conta-a') && order.includes('conta-b'),
-            'mesmo endpoint com credenciais diferentes mantém os dois na cadeia', order);
-
-        const f2 = makeFactory([
-            { label: 'igual-1', baseUrl: 'https://gateway.exemplo/v1', apiKey: 'mesma' },
-            { label: 'igual-2', baseUrl: 'https://gateway.exemplo/v1', apiKey: 'mesma' },
-        ], 'igual-1');
-        assert(!fallbackOrder(f2).includes('igual-2'),
-            'mesmo endpoint E mesma credencial colapsa — é comprovadamente o mesmo caminho', fallbackOrder(f2));
+        const order = (makeFactory([{ label: 'A', baseUrl: 'http://127.0.0.1:8080/v1' }], 'A') as any).getFallbackOrder('nao-configurado');
+        assert(Array.isArray(order) && order.length === 0, 'pedir um provedor que não existe não cai no padrão nem no primeiro disponível', order);
     }
 
-    console.log('\n--- S190.4 — painel e motor enxergam a colisão pela MESMA regra ---');
+    console.log('\n--- S190.4 — a deduplicação saiu do motor; o aviso de endereço duplicado continua no painel ---');
     {
-        // A tela avisa (checkDuplicateEndpoints) e o motor decide (dedupeByEndpoint). Se as duas
-        // normalizações divergirem, um diz uma coisa e o outro faz outra — o pior dos dois mundos.
         const fs = require('fs');
         const path = require('path');
+        const pfSrc: string = fs.readFileSync(path.join(__dirname, '../../core/ProviderFactory.ts'), 'utf-8');
         const uiSrc: string = fs.readFileSync(path.join(__dirname, '../../dashboard/public/config/views/ModelosView.js'), 'utf-8');
-        const m = uiSrc.match(/const chave = url =>([\s\S]*?);\n/);
-        assert(!!m, 'a regra de normalização do painel foi localizada no fonte');
-        if (m) {
-            // eslint-disable-next-line no-new-func
-            const chaveUI = new Function('url', `return (${m[1].trim()})`) as (u: string) => string;
-            const coreKey = (u: string) => (ProviderFactory as any).endpointKey(u, '').replace(/\|$/, '');
-            for (const u of [
-                'http://localhost:8080/v1', 'http://127.0.0.1:8080/v1/', 'HTTPS://Localhost:8080/V1',
-                'http://meu-servidor:8080/v1', 'http://127.0.0.1:8081',
-            ]) {
-                assert(chaveUI(u) === coreKey(u),
-                    `painel e motor normalizam "${u}" para a mesma chave`, { ui: chaveUI(u), core: coreKey(u) });
-            }
-        }
+        const semComentarios = pfSrc.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+        assert(!/dedupeByEndpoint|endpointKey/.test(semComentarios), 'sem cadeia de reserva, não há o que deduplicar no motor');
+        assert(/checkDuplicateEndpoints/.test(uiSrc), 'o painel ainda avisa de dois rótulos no mesmo endereço');
     }
 
     console.log('\n--- S190.5 — a rota realmente força a redescoberta quando pedem ---');

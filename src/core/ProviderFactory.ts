@@ -8,7 +8,7 @@ import { createLogger } from '../shared/AppLogger';
 import { errorMessage } from '../shared/errors';
 import { circuitRegistry } from './CircuitBreaker';
 import { getLocalRuntimeLifecycle } from './localRuntimeState';
-import { LLMMessage, LLMResponse, ToolDefinition, LLMResult, AttemptInfo, FallbackReason, ToolCall, ILLMProvider, ChatOptions, CustomProviderConfig, SubstitutionPolicy, DEFAULT_SUBSTITUTION_POLICY, isSubstitutionPolicy, ChatFallbackOptions, LlmCallDiag, REASONING_INTENSIVE_TIMEOUT_FLOOR_MS, AttemptTelemetry, ehModeloDaNuvemDoOllama } from './providerTypes';
+import { LLMMessage, LLMResponse, ToolDefinition, LLMResult, AttemptInfo, FallbackReason, ToolCall, ILLMProvider, ChatOptions, CustomProviderConfig, SubstitutionPolicy, DEFAULT_SUBSTITUTION_POLICY, isSubstitutionPolicy, ChatFallbackOptions, LlmCallDiag, REASONING_INTENSIVE_TIMEOUT_FLOOR_MS, AttemptTelemetry, ehModeloDaNuvemDoOllama, mensagemSemModeloEscolhido } from './providerTypes';
 import { GeminiProvider } from './GeminiProvider';
 import { DeepSeekProvider } from './DeepSeekProvider';
 import { GroqProvider } from './GroqProvider';
@@ -27,6 +27,20 @@ import { AnthropicProvider } from './AnthropicProvider';
 // de modelo local) antes de invalidar um par (modelo, provider) impossível — evita uma 3ª cópia
 // do mesmo conjunto de 6 nomes (a 2ª já existe em getFallbackOrder(), por necessidade de ordem).
 export const RESERVED_PROVIDER_NAMES = new Set(['gemini', 'deepseek', 'groq', 'openrouter', 'anthropic', 'ollama']);
+
+/** Modelo escolhido pelo usuário para cada provedor nativo — vem de <PROVEDOR>_MODEL (painel ou configuração inicial). */
+export interface ModelosNativos { gemini?: string; deepseek?: string; groq?: string; openrouter?: string; anthropic?: string }
+
+/** As variáveis de ambiente onde a escolha mora — uma por provedor nativo, no mesmo padrão do OLLAMA_MODEL. */
+export const VARIAVEL_DO_MODELO_NATIVO: Record<keyof ModelosNativos, string> = {
+    gemini: 'GEMINI_MODEL', deepseek: 'DEEPSEEK_MODEL', groq: 'GROQ_MODEL', openrouter: 'OPENROUTER_MODEL', anthropic: 'ANTHROPIC_MODEL',
+};
+
+export function modelosNativosDoAmbiente(env: NodeJS.ProcessEnv = process.env): ModelosNativos {
+    const r: ModelosNativos = {};
+    for (const [p, v] of Object.entries(VARIAVEL_DO_MODELO_NATIVO)) { const m = (env[v] ?? '').trim(); if (m) r[p as keyof ModelosNativos] = m; }
+    return r;
+}
 
 // Re-export everything so all existing imports continue to work unchanged
 export type { LLMMessage, LLMResponse, ToolCall, ToolDefinition, FallbackReason, AttemptInfo, LLMResult, MetricsSummary, ILLMProvider, ChatOptions, StreamChunk, SubstitutionPolicy } from './providerTypes';
@@ -110,6 +124,8 @@ export class ProviderFactory {
         ollamaUrl: string;
         ollamaModel?: string;
         ollamaApiKey: string;
+        /** Modelo escolhido pelo usuário para cada provedor nativo (<PROVEDOR>_MODEL). Vazio = não escolhido — nunca um padrão. */
+        modelosNativos: ModelosNativos;
     };
 
     constructor(config: {
@@ -123,8 +139,11 @@ export class ProviderFactory {
         ollamaApiKey?: string;
         defaultProvider: string;
         customProviders?: CustomProviderConfig[];
+        modelosNativos?: ModelosNativos;
     }) {
-        this.defaultProvider = config.defaultProvider || 'gemini';
+        // Diretiva da mantenedora (14/10/2026): só o provedor e os modelos que o usuário escolheu — nenhum padrão no código.
+        // Sem DEFAULT_PROVIDER, nada é escolhido por ele (antes: 'gemini').
+        this.defaultProvider = config.defaultProvider || '';
         this.circuitBreakers = circuitRegistry;
         this.creds = {
             geminiKey:      config.geminiKey,
@@ -137,13 +156,17 @@ export class ProviderFactory {
             // Guardado para responder "qual modelo?" quando quem chama não especifica — ver
             // getProviderWithModel(). Antes só a instância compartilhada do Map sabia disso.
             ollamaModel:    config.ollamaModel    || '',
+            modelosNativos: { ...(config.modelosNativos ?? {}) },
         };
 
-        if (config.geminiKey)      this.providers.set('gemini',      new GeminiProvider(config.geminiKey));
-        if (config.deepseekKey)    this.providers.set('deepseek',    new DeepSeekProvider(config.deepseekKey));
-        if (config.groqKey)        this.providers.set('groq',        new GroqProvider(config.groqKey));
-        if (config.openrouterKey)  this.providers.set('openrouter',  new OpenRouterProvider(config.openrouterKey));
-        if (config.anthropicKey)   this.providers.set('anthropic',   new AnthropicProvider(config.anthropicKey));
+        // Cada nativo nasce com o modelo ESCOLHIDO (vazio quando não houve escolha — a chamada então avisa, ver
+        // `modeloEscolhidoDe`). Antes os construtores traziam 'gemini-2.0-flash', 'gpt-4o'… embutidos.
+        const m = this.creds.modelosNativos;
+        if (config.geminiKey)      this.providers.set('gemini',      new GeminiProvider(config.geminiKey, m.gemini ?? ''));
+        if (config.deepseekKey)    this.providers.set('deepseek',    new DeepSeekProvider(config.deepseekKey, m.deepseek ?? ''));
+        if (config.groqKey)        this.providers.set('groq',        new GroqProvider(config.groqKey, m.groq ?? ''));
+        if (config.openrouterKey)  this.providers.set('openrouter',  new OpenRouterProvider(config.openrouterKey, m.openrouter ?? ''));
+        if (config.anthropicKey)   this.providers.set('anthropic',   new AnthropicProvider(config.anthropicKey, m.anthropic ?? ''));
 
         this.providers.set('ollama', new OllamaProvider(
             config.ollamaUrl || 'http://localhost:11434',
@@ -169,7 +192,7 @@ export class ProviderFactory {
             log.warn(`Custom provider "${custom.label}" ignorado — nome reservado por um provider nativo`);
             return false;
         }
-        this.providers.set(custom.label, new OpenAIProvider(custom.apiKey || '', custom.model || 'default', custom.baseUrl, custom.label, { thinking: custom.thinking }));
+        this.providers.set(custom.label, new OpenAIProvider(custom.apiKey || '', custom.model || '', custom.baseUrl, custom.label, { thinking: custom.thinking }));
         this.customConfigs.set(custom.label, { ...custom });
         return true;
     }
@@ -177,12 +200,22 @@ export class ProviderFactory {
     getProvider(name?: string): ILLMProvider {
         const providerName = name || this.defaultProvider;
         const provider = this.providers.get(providerName);
-        if (!provider) {
-            const first = this.providers.values().next().value;
-            if (first) return first;
-            throw new Error('Nenhum provider disponível. Configure ao menos uma API key.');
-        }
+        // Sem "o primeiro que houver": só o provedor escolhido responde (diretiva de 14/10/2026).
+        if (!provider) throw new Error(ProviderFactory.mensagemSemProvedor(providerName));
         return provider;
+    }
+
+    /** Texto ao usuário quando o provedor pedido não está configurado — nunca outro no lugar dele. */
+    static mensagemSemProvedor(nome: string): string {
+        return nome
+            ? `O provedor "${nome}" não está configurado (falta a chave ou o cadastro). Configure-o no painel em Modelos.`
+            : 'Nenhum provedor de IA foi escolhido. Escolha o provedor e o modelo no painel em Modelos.';
+    }
+
+    /** Texto ao usuário quando o provedor existe mas nenhum modelo foi escolhido para ele. */
+    static mensagemSemModelo(nome: string): string {
+        const variavel = nome === 'ollama' ? 'OLLAMA_MODEL' : VARIAVEL_DO_MODELO_NATIVO[nome as keyof ModelosNativos];
+        return mensagemSemModeloEscolhido(nome, variavel);
     }
 
     /**
@@ -207,27 +240,19 @@ export class ProviderFactory {
      */
     getProviderWithModel(model?: string, providerName?: string): ILLMProvider {
         const target = providerName ?? this.defaultProvider;
+        // Nativos: o modelo pedido, senão o ESCOLHIDO para o provedor (<PROVEDOR>_MODEL) — nunca um padrão embutido. Sem chave,
+        // erro com o nome do provedor: antes caía no Ollama em silêncio (outro provedor, que o usuário não escolheu para isto).
+        const mn = this.creds.modelosNativos;
+        const nativo = (chave: string | undefined, criar: (k: string) => ILLMProvider): ILLMProvider => {
+            if (!chave) throw new Error(ProviderFactory.mensagemSemProvedor(target));
+            return criar(chave);
+        };
         switch (target) {
-            case 'openrouter':
-                if (this.creds.openrouterKey)
-                    return new OpenRouterProvider(this.creds.openrouterKey, model);
-                break;
-            case 'gemini':
-                if (this.creds.geminiKey)
-                    return new GeminiProvider(this.creds.geminiKey, model);
-                break;
-            case 'groq':
-                if (this.creds.groqKey)
-                    return new GroqProvider(this.creds.groqKey, model);
-                break;
-            case 'deepseek':
-                if (this.creds.deepseekKey)
-                    return new DeepSeekProvider(this.creds.deepseekKey, model);
-                break;
-            case 'anthropic':
-                if (this.creds.anthropicKey)
-                    return new AnthropicProvider(this.creds.anthropicKey, model);
-                break;
+            case 'openrouter': return nativo(this.creds.openrouterKey, k => new OpenRouterProvider(k, model || mn.openrouter || ''));
+            case 'gemini':     return nativo(this.creds.geminiKey, k => new GeminiProvider(k, model || mn.gemini || ''));
+            case 'groq':       return nativo(this.creds.groqKey, k => new GroqProvider(k, model || mn.groq || ''));
+            case 'deepseek':   return nativo(this.creds.deepseekKey, k => new DeepSeekProvider(k, model || mn.deepseek || ''));
+            case 'anthropic':  return nativo(this.creds.anthropicKey, k => new AnthropicProvider(k, model || mn.anthropic || ''));
         }
 
         // Provider custom (qualquer endpoint OpenAI-Compatible: LM Studio, vLLM, llamafile,
@@ -240,15 +265,13 @@ export class ProviderFactory {
         // inalcançável na prática, mesmo estando corretamente registrado no Map.
         const custom = this.customConfigs.get(target);
         if (custom) {
-            // `model` (a escolha por categoria do Model Router) vence a config fixa do provider,
-            // mesma precedência dos nativos acima. `custom.model` é o default de quem hospeda um
-            // modelo só e nunca escolheu nada por categoria; 'default' é o placeholder aceito por
-            // servidores de modelo único (llamafile serve o .gguf carregado e ignora o campo).
-            return new OpenAIProvider(custom.apiKey || '', model || custom.model || 'default', custom.baseUrl, custom.label, { thinking: custom.thinking });
+            // `model` (a escolha por categoria do Model Router) vence a config fixa do provider, mesma precedência dos nativos.
+            // Sem nenhuma das duas, o modelo fica vazio (a chamada avisa) — o antigo 'default' era um modelo escolhido pelo código.
+            return new OpenAIProvider(custom.apiKey || '', model || custom.model || '', custom.baseUrl, custom.label, { thinking: custom.thinking });
         }
 
-        // Ollama (padrão) ou fallback quando a key do provider alvo não está configurada.
-        // Sem modelo pedido, usa o configurado pelo operador (OLLAMA_MODEL).
+        // Ollama: só quando é ELE o provedor pedido. Qualquer outro nome desconhecido é erro, não Ollama no lugar.
+        if (target !== 'ollama') throw new Error(ProviderFactory.mensagemSemProvedor(target));
         return new OllamaProvider(this.creds.ollamaUrl, model || this.creds.ollamaModel || undefined, this.creds.ollamaApiKey);
     }
 
@@ -316,26 +339,13 @@ export class ProviderFactory {
             && !!preferredProvider
             && this.providers.has(preferredProvider);
 
-        const ordemCompleta = semSubstituicao
+        // Diretiva de 14/10/2026: a cadeia tem só o provedor declarado — nunca há reserva em outro provedor ou modelo.
+        // (Antes, a issue 071 filtrava aqui a reserva que sairia da máquina, com a opção PERMITIR_NUVEM_COMO_RESERVA;
+        // sem reserva, o filtro e a opção perderam o objeto.)
+        const providerOrder = semSubstituicao
             ? [preferredProvider as string]
             : this.getFallbackOrder(preferredProvider);
-
-        // Issue 071 (Soberania da Configuração): quem declarou um recurso que fica na própria máquina — explicitamente
-        // nesta chamada ou como provedor padrão (antes: "sem provider preferido" virava `livre` e a chamada caía na
-        // nuvem em silêncio) — não tem a reserva levada para fora da máquina sem autorização explícita
-        // (PERMITIR_NUVEM_COMO_RESERVA=true, opção do painel). "Fica na máquina" olha o provider E o modelo: o Ollama
-        // local com um modelo `:cloud` é nuvem. Produção, 08/10/2026: com tudo configurado local, roteador, domínio,
-        // agente e juiz em sombra chamaram glm-5.2/glm-5.3/gemma4 :cloud.
         const declarado = preferredProvider || this.defaultProvider;
-        const modeloDe = (nome: string): string | undefined => (modelOverride && nome === declarado) ? modelOverride : this.modeloPadraoDe(nome);
-        const bloquearNuvem = process.env.PERMITIR_NUVEM_COMO_RESERVA !== 'true'
-            && this.providers.has(declarado) && this.tentativaFicaNaMaquina(declarado, modeloDe(declarado));
-        const providerOrder = bloquearNuvem
-            ? ordemCompleta.filter(nome => nome === declarado || this.tentativaFicaNaMaquina(nome, modeloDe(nome)))
-            : ordemCompleta;
-        if (providerOrder.length < ordemCompleta.length) {
-            log.info(`[SOBERANIA] '${declarado}' fica na máquina do usuário — reserva fora da máquina retirada: [${ordemCompleta.filter(n => !providerOrder.includes(n)).join(',')}] (PERMITIR_NUVEM_COMO_RESERVA não está ligado)`);
-        }
 
         // `anunciada` só produz aviso quando quem chamou disse que este resultado vai ao usuário.
         // Ver ChatFallbackOptions para por que o opt-in é explícito em vez de inferido.
@@ -366,6 +376,12 @@ export class ProviderFactory {
         let activeAbortController: AbortController | null = null;
 
         log.info(`[${requestId}] chatWithFallback START providers=[${providerOrder.join(',')}] timeout=${timeoutMs || 'none'}ms`);
+
+        // Nenhum provedor escolhido/configurado para esta chamada: diz qual, em vez de "todos indisponíveis".
+        if (providerOrder.length === 0) {
+            const semProvedor = ProviderFactory.mensagemSemProvedor(declarado);
+            return { status: 'error' as const, content: semProvedor, fallbackReason: 'unavailable' as FallbackReason, fallbackMessage: semProvedor, attempts: attemptLog };
+        }
 
         const activeProviders = providerOrder.filter(name => {
             const breaker = this.circuitBreakers.getOrCreate({ name });
@@ -457,7 +473,16 @@ export class ProviderFactory {
                     const provider = (modelOverride && providerName === modelOverrideOwner)
                         ? this.getProviderWithModel(modelOverride, providerName)
                         : sharedProvider;
-                    const modelUsed = (provider instanceof OllamaProvider) ? provider.getModel() : (provider as { model?: string }).model || provider.name;
+                    const modeloEscolhido = (provider instanceof OllamaProvider) ? provider.getModel() : (provider as { model?: string }).model;
+                    // Sem modelo escolhido para este provedor (nem na chamada, nem na configuração): avisa — nunca um modelo do código.
+                    if (!modeloEscolhido) {
+                        activeAbortController = null;
+                        if (onExternalAbort) externalSignal!.removeEventListener('abort', onExternalAbort);
+                        const semModelo = ProviderFactory.mensagemSemModelo(providerName);
+                        log.warn(`[${attemptId}] ${semModelo}`);
+                        return { status: 'error', content: semModelo, fallbackReason: 'unavailable', fallbackMessage: semModelo, attempts: attemptLog };
+                    }
+                    const modelUsed = modeloEscolhido;
                     attemptModel = modelUsed;
 
                     if (attempt > 0) {
@@ -666,8 +691,10 @@ export class ProviderFactory {
         //
         // Quando o próprio preferido JÁ é o Ollama, isto não é substituição: é o mesmo recurso por
         // outro transporte, e `estrita` não tem o que proibir.
-        const naoStreamingSubstituiria = preferredProvider !== 'ollama';
-        const podeTentarNaoStreaming = !semSubstituicao || !naoStreamingSubstituiria;
+        // Diretiva de 14/10/2026: só nesse caso. Com outro provedor declarado, a refação no Ollama seria um provedor
+        // e um modelo que o usuário não escolheu — não é tentada.
+        const naoStreamingSubstituiria = declarado !== 'ollama';
+        const podeTentarNaoStreaming = !naoStreamingSubstituiria;
         if (prazoEsgotado) {
             log.info(`[${requestId}] Prazo de quem chamou esgotado — sem refação sem streaming (mesmo modelo, mesmo prazo)`);
         }
@@ -684,13 +711,7 @@ export class ProviderFactory {
                 ? this.getProviderWithModel(modelOverride, 'ollama')
                 : undefined;
             const ollamaProvider = requestedForOllama instanceof OllamaProvider ? requestedForOllama : sharedOllama;
-            // Issue 071: a refação sem streaming também não leva a chamada para fora da máquina sem autorização.
-            const refacaoSairiaDaMaquina = bloquearNuvem && ollamaProvider instanceof OllamaProvider
-                && declarado !== 'ollama' && !this.tentativaFicaNaMaquina('ollama', ollamaProvider.getModel());
-            if (refacaoSairiaDaMaquina) {
-                log.info(`[SOBERANIA] refação sem streaming no Ollama (${(ollamaProvider as OllamaProvider).getModel()}) sairia da máquina — não tentada`);
-            }
-            if (ollamaProvider instanceof OllamaProvider && !refacaoSairiaDaMaquina) {
+            if (ollamaProvider instanceof OllamaProvider) {
                 log.info(`[${requestId}] All streaming attempts failed — trying non-streaming fallback (model=${ollamaProvider.getModel()})`);
                 // Mesmo tratamento do laço acima: este bloco também substitui o recurso declarado, e
                 // anunciar num caminho e calar no outro seria o defeito que a Sprint 021 encontrou
@@ -895,11 +916,10 @@ export class ProviderFactory {
 
     /**
      * Issue 071: usar este modelo respeita a escolha do usuário de onde rodar? Falso quando o provedor padrão fica na
-     * máquina do usuário, a reserva na nuvem não foi autorizada (PERMITIR_NUVEM_COMO_RESERVA) e o modelo é de nuvem.
-     * Para quem escolhe um modelo por fora da cadeia normal — ex.: um modelo escolhido para uma experiência pontual.
+     * máquina do usuário e o modelo é de nuvem. Para sugestões por fora da cadeia normal — ex.: a lista de candidatos a
+     * juiz: quem roda só local não recebe sugestão de nuvem. A escolha explícita do usuário (MODEL_*) não passa por aqui.
      */
     modeloPermitidoPelaSoberania(modelo: string): boolean {
-        if (process.env.PERMITIR_NUVEM_COMO_RESERVA === 'true') return true;
         if (!this.providers.has(this.defaultProvider) || !this.tentativaFicaNaMaquina(this.defaultProvider, this.modeloPadraoDe(this.defaultProvider))) return true;
         return !ehModeloDaNuvemDoOllama(modelo);
     }
@@ -1022,79 +1042,20 @@ export class ProviderFactory {
         breaker.recordFailure(mensagemErro);
     }
 
-    /**
-     * Chave de identidade de um endpoint — dois rótulos com a MESMA chave são o mesmo servidor.
-     *
-     * Normaliza só equivalência garantida: `localhost` e `127.0.0.1` são o mesmo host, barra final
-     * não muda o destino, e o esquema não distingue o alvo. Nada além disso — nomes de máquina
-     * diferentes PODEM resolver para o mesmo IP, mas afirmar isso sem consultar DNS seria
-     * adivinhação (`docs/ARCHITECTURE/NUNCA_ADIVINHAR.md`).
-     *
-     * MESMA REGRA da tela de Modelos (`checkDuplicateEndpoints`, ModelosView.js) — o painel avisa
-     * sobre a colisão e o motor precisa enxergá-la igual, senão um diz uma coisa e o outro faz
-     * outra. A paridade entre as duas implementações é travada por teste (S190).
-     */
-    private static endpointKey(baseUrl: string, apiKey?: string): string {
-        const url = String(baseUrl || '')
-            .trim().toLowerCase()
-            .replace(/\/+$/, '')
-            .replace(/^https?:\/\//, '')
-            .replace(/^localhost([:/]|$)/, '127.0.0.1$1');
-        return `${url}|${apiKey || ''}`;
-    }
+    // (endpointKey/dedupeByEndpoint removidos em 14/10/2026: colapsavam rótulos duplicados na CADEIA DE RESERVA, que deixou de
+    //  existir — só o provedor declarado atende. O aviso de endereço duplicado continua no painel, checkDuplicateEndpoints.)
 
     /**
-     * Remove da cadeia de fallback rótulos que apontam para o MESMO endpoint com a MESMA
-     * credencial — eles não oferecem resiliência nenhuma: se o primeiro falhou porque o servidor
-     * caiu, o segundo falha pelo mesmo motivo, gastando outro timeout de conexão inteiro.
-     *
-     * Evidência real (log do operador, 04/08/2026): `providers=[Modelo local,ollama,llamafile]`,
-     * com `Modelo local` e `llamafile` ambos em 127.0.0.1:8080 — três nomes, dois endereços. Com
-     * o servidor local fora do ar, duas das três tentativas eram a mesma tentativa.
-     *
-     * Credencial entra na chave de propósito: dois rótulos no mesmo gateway com chaves de API
-     * diferentes são contas diferentes e PODEM se cobrir mutuamente — esses continuam ambos.
-     * Só colapsa o que é comprovadamente o mesmo caminho.
+     * Quem atende a chamada: SÓ o provedor declarado (o do papel/perfil, ou o principal). Diretiva da mantenedora (14/10/2026):
+     * nenhum modelo nem provedor que o usuário não escolheu responde por ele — nem como reserva. Antes, todos os provedores com
+     * chave entravam atrás numa ordem fixa ('ollama', 'openrouter', 'anthropic', 'gemini', 'deepseek', 'groq'), cada um com o
+     * modelo embutido no próprio construtor. Provedor declarado e não configurado → lista vazia (a chamada avisa).
      */
-    private dedupeByEndpoint(order: string[]): string[] {
-        const seen = new Map<string, string>();
-        const kept: string[] = [];
-        for (const label of order) {
-            const cfg = this.customConfigs.get(label);
-            if (!cfg?.baseUrl) { kept.push(label); continue; }   // nativos: endpoint próprio
-            const key = ProviderFactory.endpointKey(cfg.baseUrl, cfg.apiKey);
-            const winner = seen.get(key);
-            if (winner) {
-                log.info(`[FALLBACK] "${label}" ignorado na cadeia — mesmo endpoint e credencial de "${winner}" (quem atende é "${winner}")`);
-                continue;
-            }
-            seen.set(key, label);
-            kept.push(label);
-        }
-        return kept;
-    }
-
     private getFallbackOrder(preferred?: string): string[] {
-        const all = Array.from(this.providers.keys());
-        if (preferred && this.providers.has(preferred)) {
-            return this.dedupeByEndpoint([preferred, ...all.filter(p => p !== preferred)]);
-        }
-        if (preferred) {
-            log.warn(`Provider "${preferred}" requested but not available (missing credential?). Using default fallback order.`);
-        }
-        // defaultProvider (DEFAULT_PROVIDER / "Provider padrão" no dashboard) é a preferência
-        // declarada pelo usuário — antes ela era ignorada aqui e a ordem começava sempre em
-        // 'ollama', então escolher outro provider padrão (inclusive um custom) não tinha efeito
-        // nenhum sobre qual provider era realmente tentado primeiro. Continua sendo só a ORDEM:
-        // todos os demais seguem atrás, na mesma sequência de sempre, como fallback.
-        const order = ['ollama', 'openrouter', 'anthropic', 'gemini', 'deepseek', 'groq'];
-        const sorted = order.filter(p => this.providers.has(p));
-        const remaining = all.filter(p => !sorted.includes(p));
-        const byPriority = [...sorted, ...remaining];
-        if (this.providers.has(this.defaultProvider)) {
-            return this.dedupeByEndpoint([this.defaultProvider, ...byPriority.filter(p => p !== this.defaultProvider)]);
-        }
-        return this.dedupeByEndpoint(byPriority);
+        const declarado = preferred || this.defaultProvider;
+        if (declarado && this.providers.has(declarado)) return [declarado];
+        log.warn(`[ESCOLHA] provedor "${declarado || '(nenhum escolhido)'}" não está configurado — nenhum outro é usado no lugar dele`);
+        return [];
     }
 
     /**
@@ -1103,14 +1064,22 @@ export class ProviderFactory {
      */
     updateCredential(key: 'geminiKey' | 'deepseekKey' | 'groqKey' | 'openrouterKey' | 'anthropicKey', value: string): void {
         this.creds[key] = value;
+        const m = this.creds.modelosNativos;
         switch (key) {
-            case 'geminiKey':     this.providers.set('gemini',     new GeminiProvider(value));        break;
-            case 'deepseekKey':   this.providers.set('deepseek',   new DeepSeekProvider(value));      break;
-            case 'groqKey':       this.providers.set('groq',       new GroqProvider(value));          break;
-            case 'openrouterKey': this.providers.set('openrouter', new OpenRouterProvider(value));    break;
-            case 'anthropicKey':  this.providers.set('anthropic',  new AnthropicProvider(value));     break;
+            case 'geminiKey':     this.providers.set('gemini',     new GeminiProvider(value, m.gemini ?? ''));          break;
+            case 'deepseekKey':   this.providers.set('deepseek',   new DeepSeekProvider(value, m.deepseek ?? ''));      break;
+            case 'groqKey':       this.providers.set('groq',       new GroqProvider(value, m.groq ?? ''));              break;
+            case 'openrouterKey': this.providers.set('openrouter', new OpenRouterProvider(value, m.openrouter ?? ''));  break;
+            case 'anthropicKey':  this.providers.set('anthropic',  new AnthropicProvider(value, m.anthropic ?? ''));    break;
         }
         log.info(`Credential updated and provider recreated: ${key.replace('Key', '')}`);
+    }
+
+    /** O usuário escolheu (no painel) o modelo de um provedor nativo: vale na hora, para a instância compartilhada também. */
+    setModeloNativo(provedor: keyof ModelosNativos, modelo: string): void {
+        this.creds.modelosNativos[provedor] = modelo;
+        const chave = this.creds[`${provedor}Key` as 'geminiKey'];
+        if (chave) this.updateCredential(`${provedor}Key` as 'geminiKey', chave);
     }
 
     removeCredential(key: 'geminiKey' | 'deepseekKey' | 'groqKey' | 'openrouterKey' | 'anthropicKey'): void {

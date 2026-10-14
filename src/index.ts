@@ -18,6 +18,7 @@ import path from 'path';
 dotenv.config();
 
 import { AgentController } from './core/AgentController';
+import { modelosNativosDoAmbiente } from './core/ProviderFactory';
 import { autoRecoverDatabase, replaceDatabaseFile } from './core/dbRecovery';
 import { applyUncaughtExceptionDecision } from './core/UncaughtExceptionPolicy';
 import { DashboardServer } from './dashboard/DashboardServer';
@@ -68,7 +69,9 @@ const config = {
     // Issue 032: sem valor padrão de propósito — ver docstring em agentControllerTypes.ts.
     signalCliConfigDir: process.env.SIGNAL_CLI_CONFIG_DIR || '',
     language: process.env.APP_LANG || 'pt-BR',
-    defaultProvider: process.env.DEFAULT_PROVIDER || 'gemini',
+    // Diretiva de 14/10/2026: só o que o usuário escolheu — sem DEFAULT_PROVIDER, nenhum provedor é escolhido pelo código (antes: 'gemini').
+    defaultProvider: process.env.DEFAULT_PROVIDER || '',
+    modelosNativos: modelosNativosDoAmbiente(),
     geminiApiKey: process.env.GEMINI_API_KEY,
     deepseekApiKey: process.env.DEEPSEEK_API_KEY,
     groqApiKey: process.env.GROQ_API_KEY,
@@ -93,7 +96,7 @@ const config = {
     customModels: (process.env.CUSTOM_MODELS || '').split(',').map(m => m.trim()).filter(m => m.length > 0),
     customProviders: parseCustomProviders(process.env.CUSTOM_PROVIDERS),
     localModelsDir: process.env.LOCAL_MODELS_DIR || '',
-    allowCloudFallback: process.env.PERMITIR_NUVEM_COMO_RESERVA === 'true',   // issue 071
+    embedModel: (process.env.EMBED_MODEL || '').trim(),
     localModelOptions: parseLocalModelOptions(process.env.LOCAL_MODEL_OPTIONS),
     // Política (NEWCLAW_NATIVE_DIRECTORY_PICKER) é lida direto de process.env dentro de
     // DirectoryPickerService — nunca guardada aqui, propositalmente (ver docstring do módulo).

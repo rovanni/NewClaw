@@ -42,16 +42,8 @@ export function createProvidersRouter(ctx: DashboardContext): Router {
             log.warn(`Could not fetch Ollama models for dashboard: ${errorMessage(err)}`);
         }
 
-        const knownCloudModels = [
-            'glm-5.2:cloud', 'glm-5.1:cloud', 'glm-5:cloud', 'glm-4:cloud',
-            'kimi-k2:cloud', 'kimi-k2.6:cloud',
-            'deepseek-r1:cloud', 'deepseek-v3:cloud',
-            'qwen3:cloud', 'qwen3-235b:cloud',
-            'gemma4:cloud', 'gemma4:e4b',
-            'llama4:cloud', 'llama4-maverick:cloud',
-            'phi-4:cloud',
-        ];
-
+        // Diretiva de 14/10/2026: nenhum modelo no código — a lista vem só da descoberta real e das escolhas do usuário
+        // (antes, 15 nomes "conhecidos" da nuvem entravam aqui, alguns que nem existiam no Ollama).
         const userModels: string[] = [];
         if (ctx.config.modelRouter) {
             const mr = ctx.config.modelRouter;
@@ -67,7 +59,6 @@ export function createProvidersRouter(ctx: DashboardContext): Router {
 
         const allModels = [...new Set([
             ...ollamaModels,
-            ...knownCloudModels,
             ...userModels,
             ...customModels
         ])].sort();
@@ -124,7 +115,7 @@ export function createProvidersRouter(ctx: DashboardContext): Router {
             return res.status(400).json({ success: false, error: 'baseUrl deve começar com http:// ou https://' });
         }
         try {
-            const probe = new OpenAIProvider(apiKey ? String(apiKey) : '', undefined, url, 'test');
+            const probe = new OpenAIProvider(apiKey ? String(apiKey) : '', '', url, 'test');   // só descoberta: lista modelos, não conversa
             // discoverModels() não expõe AbortSignal — o teto de tempo fica aqui para que um
             // host que aceita a conexão e nunca responde não pendure a requisição do dashboard.
             const models = await Promise.race([

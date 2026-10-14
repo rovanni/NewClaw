@@ -14,7 +14,8 @@
 param(
     [string]$Token       = $env:NEWCLAW_TOKEN,
     [string]$UserId      = $env:NEWCLAW_USER_ID,
-    [string]$Model       = $(if ($env:NEWCLAW_MODEL) { $env:NEWCLAW_MODEL } else { "glm-5.2:cloud" }),
+    # Sem modelo no instalador: vazio = o usuário escolhe (aqui, ou depois no painel). Nunca um padrão embutido.
+    [string]$Model       = $(if ($env:NEWCLAW_MODEL) { $env:NEWCLAW_MODEL } else { "" }),
     [string]$Dir         = $(if ($env:NEWCLAW_HOME)  { $env:NEWCLAW_HOME  } else { "$env:USERPROFILE\NewClaw" }),
     [int]$Port           = $(if ($env:NEWCLAW_DASHBOARD_PORT) { [int]$env:NEWCLAW_DASHBOARD_PORT } else { 3090 }),
     [switch]$NoPrompt,
@@ -181,7 +182,7 @@ USO:
 OPÇÕES:
   -Token TOKEN       Token do bot do Telegram
   -UserId ID         Seu ID de usuário do Telegram
-  -Model MODEL       Modelo Ollama (padrão: glm-5.2:cloud)
+  -Model MODEL       Modelo Ollama (sem padrão: vazio = escolher no painel)
   -Dir PATH          Diretório de instalação (padrão: %USERPROFILE%\NewClaw)
   -Port PORT         Porta do dashboard (padrão: 3090)
 
@@ -423,23 +424,21 @@ function Step-DownloadModel {
 
     if ($DryRun) { Write-Dry "baixar modelo $Model"; return }
 
-    if (-not $NoPrompt) {
-        Write-Host "    Escolha o modelo:" -ForegroundColor White
-        Write-Host "    1) glm-5.2:cloud     — Recomendado (inferência remota; PAGO, exige conta e OLLAMA_API_KEY)" -ForegroundColor Cyan
-        Write-Host "    2) llama3.1:8b    — Rápido, uso geral (5GB local)" -ForegroundColor Cyan
-        Write-Host "    3) mistral:7b     — Rápido, conversação (4GB local)" -ForegroundColor Cyan
-        Write-Host "    4) qwen2.5:3b    — Leve, máquinas modestas (2GB local)" -ForegroundColor Cyan
-        Write-Host "    5) Outro (digitar nome)" -ForegroundColor Cyan
-        Write-Host ""
-
-        $choice = Read-Answer "Qual modelo? (1-5)" "1"
-        switch ($choice) {
-            "2" { $script:Model = "llama3.1:8b" }
-            "3" { $script:Model = "mistral:7b" }
-            "4" { $script:Model = "qwen2.5:3b" }
-            "5" { $script:Model = Read-Answer "Nome do modelo" "glm-5.2:cloud" }
-            default { $script:Model = "glm-5.2:cloud" }
+    # O modelo é escolha do usuário: o instalador não sugere nem baixa nenhum por conta própria.
+    if (-not $NoPrompt -and [string]::IsNullOrWhiteSpace($script:Model)) {
+        $instalados = @()
+        try { $instalados = @(ollama list 2>$null | Select-Object -Skip 1 | ForEach-Object { ($_ -split '\s+')[0] } | Where-Object { $_ }) } catch {}
+        if ($instalados.Count -gt 0) {
+            Write-Host "    Modelos já instalados no seu Ollama:" -ForegroundColor White
+            $instalados | ForEach-Object { Write-Host "      - $_" -ForegroundColor Cyan }
         }
+        Write-Host "    Digite o nome exato do modelo (ex.: o que aparece em ollama.com/library), ou deixe vazio para escolher depois no painel."
+        $script:Model = (Read-Answer "Modelo" "").Trim()
+    }
+
+    if ([string]::IsNullOrWhiteSpace($script:Model)) {
+        Write-Info "Nenhum modelo escolhido — escolha no painel (Config → Modelos) depois da instalação."
+        return
     }
 
     if ($DryRun) { Write-Dry "ollama pull $Model"; return }
@@ -1107,7 +1106,7 @@ function Show-Summary {
     Write-Host "  ================================================" -ForegroundColor Green
     Write-Host ""
     Write-Host "    Pasta:      $Dir" -ForegroundColor Cyan
-    Write-Host "    Modelo:     $Model" -ForegroundColor Cyan
+    Write-Host "    Modelo:     $(if ([string]::IsNullOrWhiteSpace($script:Model)) { '(escolher no painel)' } else { $script:Model })" -ForegroundColor Cyan
     Write-Host "    Dashboard:  http://localhost:$Port" -ForegroundColor Cyan
     Write-Host "    Config URL: http://localhost:$Port/config" -ForegroundColor Cyan
     Write-Host "    Logs:       $Dir\logs\newclaw.log" -ForegroundColor Cyan

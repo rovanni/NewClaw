@@ -70,6 +70,10 @@ async function main() {
 
 const originalFetch = global.fetch;
 let embeddingCalls = 0;
+// ADR-018 (14/10/2026): o modelo de embedding é escolha do usuário (EMBED_MODEL) — sem ela, os embeddings ficam
+// desligados (S243). Este teste é sobre QUANDO o embedding é gerado, então declara uma escolha.
+const embedModelOriginal = process.env.EMBED_MODEL;
+process.env.EMBED_MODEL = 'modelo-de-embedding-do-teste';
 
 // Mock do endpoint /api/embeddings do Ollama — devolve um vetor determinístico, sem depender
 // de um servidor real rodando (mesmo espírito do S24: fail-open real, sucesso controlável).
@@ -193,6 +197,7 @@ console.log('\n=== S240-6 — MemoryManager.keywordSearch() trata lifecycle_stat
 
 } finally {
     (global as unknown as { fetch: typeof fetch }).fetch = originalFetch;
+    if (embedModelOriginal === undefined) delete process.env.EMBED_MODEL; else process.env.EMBED_MODEL = embedModelOriginal;
 }
 
 console.log(`\n${'─'.repeat(60)}`);

@@ -16,7 +16,7 @@ import { BufferState, ChunkCutTrigger, ChunkMessage, ConversationChunk } from '.
 import { createDomainClassifierLLM, type DomainClassifierLLM } from '../DomainRegistry';
 import { createLogger } from '../../shared/AppLogger';
 import { extractText } from '../../shared/extractText';
-import { DEFAULT_EMBED_MODEL } from '../EmbeddingService';
+import { modeloDeEmbedding } from '../EmbeddingService';
 
 const log = createLogger('CMIIngestionPipeline');
 
@@ -255,11 +255,12 @@ export class CMIIngestionPipeline {
      * Retorna null se Ollama não disponível (não bloqueia o pipeline).
      */
     private async embedText(text: string): Promise<Buffer | null> {
+        if (!modeloDeEmbedding()) return null;   // nenhum modelo de embedding escolhido (EMBED_MODEL)
         try {
             const res = await fetch(`${this.ollamaUrl}/api/embeddings`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ model: DEFAULT_EMBED_MODEL, prompt: text }),
+                body: JSON.stringify({ model: modeloDeEmbedding(), prompt: text }),
                 signal: AbortSignal.timeout(EMBED_TIMEOUT_MS)
             });
             if (!res.ok) return null;

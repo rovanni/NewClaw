@@ -355,6 +355,16 @@ export const DECISION_PROMPT_MAX_CHARS = 60_000;
  * interpretação. Issue 071: o Ollama no endereço local com um modelo `:cloud` NÃO fica na máquina do usuário — antes o
  * NewClaw o tratava como local só pelo endereço. (O painel tem a mesma regra em `ModelosView.js`, que não importa TS.)
  */
+/**
+ * A frase única de "nenhum modelo escolhido" (issue 068 + ADR-018). Antes havia duas — uma do Ollama, outra do
+ * ProviderFactory — para o mesmo fato. `variavel` é onde a escolha mora no .env (OLLAMA_MODEL, GEMINI_MODEL, …);
+ * provedor personalizado não tem uma, e a frase só aponta o painel.
+ */
+export function mensagemSemModeloEscolhido(provedor: string, variavel?: string): string {
+    const onde = variavel ? `no painel (Config → Modelos) ou defina ${variavel} no .env` : 'no painel (Config → Modelos)';
+    return `Nenhum modelo foi escolhido para "${provedor}". Escolha o modelo ${onde}.`;
+}
+
 export function ehModeloDaNuvemDoOllama(modelo?: string): boolean {
     return !!modelo && /(:|-)cloud$/i.test(modelo.trim());
 }

@@ -292,13 +292,8 @@ export function render(container) {
         <details class="cfg-details">
           <summary>${t('download_models_label')}</summary>
           <div class="cfg-details-body">
-            <div class="chips" style="margin-bottom:8px;">
-              <div class="chip" data-pull="qwen2.5:7b">qwen2.5:7b</div>
-              <div class="chip" data-pull="llama3.1:8b">llama3.1:8b</div>
-              <div class="chip" data-pull="gemma4:31b-cloud">gemma4:31b-cloud</div>
-              <div class="chip" data-pull="mistral:7b">mistral:7b</div>
-              <div class="chip" data-pull="deepseek-coder-v2:16b">deepseek-coder-v2:16b</div>
-            </div>
+            <!-- Diretiva de 14/10/2026: nenhum modelo no código — saíram os 5 atalhos fixos; o nome vem do usuário
+                 (campo abaixo) ou do catálogo do Registry. -->
             <div style="display:flex;gap:8px;">
               <input type="text" id="ml-customPull" placeholder="modelo:tag" class="form-input"
                 style="flex:1;max-width:180px;padding:7px 10px;font-size:.77rem;">
@@ -484,13 +479,6 @@ export function render(container) {
                 <option value="anthropic">🧠 Anthropic (Claude)</option>
               </select>
             </div>
-            <!-- Issue 071: quem escolheu offline continua offline — a reserva na nuvem só com esta opção marcada. -->
-            <div class="form-group">
-              <label class="form-label" style="display:flex;gap:8px;align-items:center;cursor:pointer;">
-                <input type="checkbox" id="ml-allowCloudFallback"> ${t('ml_allow_cloud_fallback_label')}
-              </label>
-              <div class="form-hint">${t('ml_allow_cloud_fallback_hint')}</div>
-            </div>
             <div class="form-group">
               <label class="form-label">${t('classifier_server_label')}</label>
               <input type="text" class="form-input" id="ml-classifierServer" placeholder="http://localhost:11434" style="max-width:320px;">
@@ -590,7 +578,6 @@ export function render(container) {
   // customProvider salvo como defaultProvider (ex.: llamafile local) não existiria ainda como
   // <option> e o browser ignoraria silenciosamente a atribuição, voltando pro primeiro item.
   el('ml-defaultProvider').value  = s.defaultProvider || 'ollama';
-  if (el('ml-allowCloudFallback')) el('ml-allowCloudFallback').checked = !!s.allowCloudFallback;
   el('mr-localDir')  && (el('mr-localDir').value = s.localModelsDir || '');
   el('ml-classifierServer').value = r.classifierServer || '';
   el('ml-visionServer').value     = r.visionServer     || '';
@@ -602,8 +589,6 @@ export function render(container) {
   updateProviderHints(s.defaultProvider);
   updateModelStatus(providersStore.get('models') || [], r);
   checkInternalModels();
-
-  el('ml-allowCloudFallback')?.addEventListener('change', e => { cs.set('allowCloudFallback', !!e.target.checked); });
 
   // Provider select
   el('ml-defaultProvider').addEventListener('change', e => {
@@ -643,11 +628,8 @@ export function render(container) {
   // Os componentes internos não têm mais listener de digitação: são escolhidos pelo seletor de
   // categorias (wireCategoryPicker), que já grava em modelRouter e persiste no Aplicar.
 
-  // Pull chips — mesmo comportamento do "Instalar" do Registry (pullIntoRegistry): baixa e
+  // Download pelo nome digitado — mesmo comportamento do "Instalar" do Registry (pullIntoRegistry): baixa e
   // ressincroniza o catálogo, sem sobrescrever silenciosamente o "Modelo Ollama Principal".
-  container.querySelectorAll('.chip[data-pull]').forEach(chip => {
-    chip.addEventListener('click', () => pullIntoRegistry(chip.dataset.pull));
-  });
   el('ml-pullBtn').addEventListener('click', () => {
     const name = el('ml-customPull').value.trim();
     if (name) pullIntoRegistry(name);

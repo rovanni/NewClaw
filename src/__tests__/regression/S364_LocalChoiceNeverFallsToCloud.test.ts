@@ -8,7 +8,10 @@
  * (GROUNDING_SHADOW_MODEL=gemma4:cloud). Decisão do operador: quem escolheu offline continua offline; a escolha do
  * assistente vale para tudo.
  *
- * REGRESSÃO SE: uma chamada com o provedor padrão local sair da máquina sem PERMITIR_NUVEM_COMO_RESERVA; o Ollama
+ * Diretiva de 14/10/2026 ("só os modelos escolhidos pelo usuário, nenhum modelo em código nem de fallback"): não há mais
+ * reserva nenhuma — nem na nuvem, nem local — e a opção PERMITIR_NUVEM_COMO_RESERVA saiu (S364-3 e S364-4 invertidos).
+ *
+ * REGRESSÃO SE: uma chamada com o provedor padrão local cair em QUALQUER outro provedor; o Ollama
  * local com modelo `:cloud` voltar a contar como local; o juiz em sombra rodar na nuvem nessa situação; o classificador
  * de domínio voltar a guardar o modelo do boot; o assistente deixar de aplicar a escolha a todos os perfis; ou o painel
  * voltar a gravar um modelo embutido.
@@ -67,22 +70,22 @@ async function main(): Promise<void> {
     assert(modelos.length === 0, `nenhuma requisição ao Ollama com modelo de nuvem (antes: glm-5.2:cloud) — obtido ${JSON.stringify(modelos)}`);
     assert(r?.status !== 'success', `a falha do local é devolvida como falha (${r?.status}), não mascarada pela nuvem`);
 
-    console.log('\n=== S364-3 — com PERMITIR_NUVEM_COMO_RESERVA=true, a reserva na nuvem volta a valer ===');
+    console.log('\n=== S364-3 — a antiga opção PERMITIR_NUVEM_COMO_RESERVA não tem mais efeito: mesmo ligada, nada sai da máquina ===');
     process.env.PERMITIR_NUVEM_COMO_RESERVA = 'true';
     const urls2: string[] = [], modelos2: string[] = [];
     global.fetch = fetchLocalFalha(urls2, modelos2);
     let r2: any;
     try { r2 = await quiet(() => fabrica('glm-5.2:cloud').chatWithFallback([{ role: 'user', content: 'classifique' }], undefined, undefined, 3000)); }
     finally { global.fetch = original; delete process.env.PERMITIR_NUVEM_COMO_RESERVA; }
-    assert(modelos2.includes('glm-5.2:cloud') && r2?.status === 'success', 'autorizado no painel → usa a nuvem como reserva');
+    assert(modelos2.length === 0 && r2?.status !== 'success', `nenhuma reserva na nuvem, nem com a variável antiga ligada (${JSON.stringify(modelos2)}, ${r2?.status})`);
 
-    console.log('\n=== S364-4 — Ollama local com modelo BAIXADO continua sendo reserva válida (fica na máquina) ===');
+    console.log('\n=== S364-4 — nem reserva local: o Ollama com modelo BAIXADO também não substitui o provedor escolhido ===');
     const urls3: string[] = [], modelos3: string[] = [];
     global.fetch = fetchLocalFalha(urls3, modelos3);
     let r3: any;
     try { r3 = await quiet(() => fabrica('gemma3:12b').chatWithFallback([{ role: 'user', content: 'x' }], undefined, undefined, 3000)); }
     finally { global.fetch = original; }
-    assert(modelos3.includes('gemma3:12b') && r3?.status === 'success', 'reserva local → local é permitida sem opção nenhuma');
+    assert(modelos3.length === 0 && r3?.status !== 'success', `só o provedor escolhido é chamado; a falha dele é o resultado (${JSON.stringify(modelos3)}, ${r3?.status})`);
 
     console.log('\n=== S364-5 — a pergunta única de soberania, e o juiz de grounding usa só o modelo local escolhido ===');
     // AUDITORIA DA SUÍTE (10/10/2026): este trecho também cobria o juiz em SOMBRA (GROUNDING_SHADOW_MODEL, S307), removido do produto
@@ -124,7 +127,9 @@ async function main(): Promise<void> {
     assert(/\['classifierModel', 'plannerModel', 'riskModel', 'observerModel'\]/.test(fn) && /provider_\$\{cat\}`\] = ''/.test(fn), 'aplicarModeloATudo cobre os 4 componentes internos e limpa os provedores por perfil');
     assert(!/\|\|\s*'[^']*(:|-)cloud'/.test(pub('config', 'app.js')), 'app.js não usa mais um modelo de nuvem como valor padrão (gravava glm-5.2:cloud quando vazio)');
     const cfg = fs.readFileSync(path.join(process.cwd(), 'src', 'dashboard', 'routes', 'config.ts'), 'utf-8');
-    assert(/'PERMITIR_NUVEM_COMO_RESERVA': ctx\.config\.allowCloudFallback/.test(cfg) && /process\.env\.PERMITIR_NUVEM_COMO_RESERVA = allowCloudFallback/.test(cfg), 'a opção do painel é gravada e vale na hora');
+    const pfSrc = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'ProviderFactory.ts'), 'utf-8');
+    assert(!/PERMITIR_NUVEM_COMO_RESERVA|allowCloudFallback/.test(cfg) && !/process\.env\.PERMITIR_NUVEM_COMO_RESERVA/.test(pfSrc) && !/allowCloudFallback/.test(mv),
+        'a opção de reserva na nuvem saiu do painel, da rota e do ProviderFactory');
 
     if (permitirOrig === undefined) delete process.env.PERMITIR_NUVEM_COMO_RESERVA; else process.env.PERMITIR_NUVEM_COMO_RESERVA = permitirOrig;
     console.log(`\n${'─'.repeat(60)}`);

@@ -13,7 +13,7 @@
 import { ToolExecutor, ToolResult } from '../loop/agentLoopTypes';
 import { MemoryManager, MemoryNode } from '../memory/MemoryManager';
 import type { MemoryFacade } from '../memory/MemoryFacade';
-import { DEFAULT_EMBED_MODEL } from '../memory/EmbeddingService';
+import { modeloDeEmbedding } from '../memory/EmbeddingService';
 import { isProtectedNode } from '../memory/MemoryFacade';
 import { errorMessage } from '../shared/errors';
 import type { ExecutionOutcome } from '../memory/ProceduralMemoryService';
@@ -522,19 +522,20 @@ export class MemoryWriteTool implements ToolExecutor {
     // ── Helpers ──────────────────────────────────────────────
 
     private async regenerateEmbedding(nodeId: string, node: MemoryNode): Promise<void> {
+        if (!modeloDeEmbedding()) return;   // nenhum modelo de embedding escolhido (EMBED_MODEL)
         try {
             const text = `${node.name}: ${(node.content || '').slice(0, 200)}`;
             const resp = await fetch(`${this.memoryManager.getOllamaUrl()}/api/embeddings`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ model: DEFAULT_EMBED_MODEL, prompt: text }),
+                body: JSON.stringify({ model: modeloDeEmbedding(), prompt: text }),
                 signal: AbortSignal.timeout(15000)
             });
             if (resp.ok) {
                 const data = await resp.json() as { embedding?: number[] };
                 if (data.embedding) {
                     const buf = Buffer.from(new Float64Array(data.embedding).buffer);
-                    this.facade.upsertEmbedding(nodeId, buf, DEFAULT_EMBED_MODEL);
+                    this.facade.upsertEmbedding(nodeId, buf, modeloDeEmbedding());
                 }
             }
         } catch { /* embedding optional */ }

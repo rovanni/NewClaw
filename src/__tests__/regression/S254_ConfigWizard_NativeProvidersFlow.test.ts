@@ -31,6 +31,11 @@
  *    (Fase B) — "nenhum dos 5 nativos obrigado a selecionar modelo" já era a decisão registrada,
  *    não uma escolha nova desta sprint. `FAMILY_STEPS.native` também já existia
  *    (`['choose', 'credential', 'validating', 'conclusion']`, sem etapa de seleção de modelo).
+ *    REVOGADO em 14/10/2026 (diretiva da mantenedora: "só os modelos escolhidos pelo usuário, nenhum
+ *    modelo em código nem de fallback"): os construtores dos nativos perderam o modelo embutido, então a
+ *    escolha passou a ser obrigatória — etapa `nativeModelSelect` depois da validação da chave, gravada
+ *    em `<PROVEDOR>_MODEL` (S254-6 e S254-7). Antes, a validação chamava `aplicarModeloATudo('')` e o
+ *    provedor seguia com o modelo do construtor.
  *
  * Verifica:
  * 1. `confirmNativeCredential()` chama `doSave()` ANTES de `loadProviders(true)` (a key precisa
@@ -101,7 +106,7 @@ console.log('\n=== S254-3 — currentModel atualizado com a mesma disciplina de 
     const fn = CW.slice(CW.indexOf('async function confirmNativeCredential()'), CW.indexOf('function renderStub('));
     assert(
         /const fresh = await getConfig\(\);[\s\S]{0,200}configStore\.set\('currentModel', fresh\.currentModel\);/.test(fn),
-        'confirmNativeCredential() busca getConfig() e atualiza só currentModel — nunca configStore.patch() do objeto inteiro',
+        'a confirmação do modelo nativo busca getConfig() e atualiza só currentModel — nunca configStore.patch() do objeto inteiro',
         fn,
     );
 }
@@ -137,22 +142,24 @@ type Session = {
     provider: string | null;
     family: string | null;
     currentStep: string;
+    draft: { nativeModelId?: string };
 };
 
 const FAMILY_STEPS: Record<string, string[]> = {
-    native: ['choose', 'credential', 'validating', 'conclusion'],
+    native: ['choose', 'credential', 'validating', 'nativeModelSelect', 'conclusion'],
 };
 
 function canAdvance(s: Session): boolean {
     switch (s.currentStep) {
         case 'choose': return !!s.provider;
+        case 'nativeModelSelect': return !!(s.draft.nativeModelId ?? '').trim();
         default: return false; // credential/validating avançam por ação própria, não Próximo
     }
 }
 
-console.log('\n=== S254-6 — fluxo completo nativo, passo a passo (choose → credential → validating → conclusion) ===');
+console.log('\n=== S254-6 — fluxo completo nativo (choose → credential → validating → nativeModelSelect → conclusion) ===');
 {
-    let s: Session = { provider: null, family: null, currentStep: 'choose' };
+    let s: Session = { provider: null, family: null, currentStep: 'choose', draft: {} };
     assert(canAdvance(s) === false, 'sessão nova não avança');
     s = { ...s, provider: 'gemini', family: 'native' };
     assert(canAdvance(s) === true, 'escolher um provider nativo libera o avanço pra credential');
@@ -160,13 +167,28 @@ console.log('\n=== S254-6 — fluxo completo nativo, passo a passo (choose → c
     assert(canAdvance(s) === false, 'credential não avança por "Próximo" genérico — só pelo botão dedicado de salvar+verificar');
     // Simula confirmNativeCredential(): atribuição direta, nunca next()
     s = { ...s, currentStep: 'validating' };
-    assert(s.currentStep === 'validating', 'botão dedicado move direto pra validating, sem etapa de seleção de modelo');
-    s = { ...s, currentStep: 'conclusion' };
-    assert(s.currentStep === 'conclusion', 'ao confirmar entry.online, avança pra conclusion (a etapa genérica, reaproveitada)');
-    assert(
-        !FAMILY_STEPS.native.includes('modelSelect') && !FAMILY_STEPS.native.some(step => /model/i.test(step)),
-        'FAMILY_STEPS.native não tem nenhuma etapa de seleção de modelo — decisão já registrada na Fase B (PROVIDER_CAPABILITIES.modelSelection=false pros 5 nativos), não uma escolha nova de C5',
-    );
+    s = { ...s, currentStep: 'nativeModelSelect' };
+    assert(canAdvance(s) === false, 'sem modelo escolhido, a etapa não avança — o provedor não tem modelo no código');
+    s = { ...s, draft: { nativeModelId: '   ' } };
+    assert(canAdvance(s) === false, 'espaços não contam como escolha');
+    s = { ...s, draft: { nativeModelId: 'modelo-escolhido' } };
+    assert(canAdvance(s) === true, 'com o modelo escolhido (da lista ou digitado), avança');
+    const fsCW = CW.match(/const FAMILY_STEPS = \{[\s\S]*?\n\};/)?.[0] || '';
+    assert(/native:\s*\['choose', 'credential', 'validating', 'nativeModelSelect', 'conclusion'\]/.test(fsCW), 'FAMILY_STEPS.native real tem a etapa de escolha do modelo, antes da conclusão');
+    assert(/case 'nativeModelSelect': return !!\(session\.draft\.nativeModelId \?\? ''\)\.trim\(\);/.test(CW), 'canAdvance real exige o modelo escolhido');
+}
+
+console.log('\n=== S254-7 — a escolha é gravada em <PROVEDOR>_MODEL e vale para tudo; nada limpa o modelo em silêncio ===');
+{
+    const fn = CW.slice(CW.indexOf('async function confirmNativeModel()'), CW.indexOf('function renderStub('));
+    assert(/configStore\.set\('modelosNativos', \{ \.\.\.\(configStore\.get\('modelosNativos'\) \|\| \{\}\), \[session\.provider\]: modelo \}\)/.test(fn), 'confirmNativeModel() grava o modelo do provedor em modelosNativos');
+    assert(/aplicarModeloATudo\(modelo\)/.test(fn) && fn.indexOf('aplicarModeloATudo(modelo)') < fn.indexOf('await doSave();'), 'aplica o modelo escolhido a todos os perfis antes de salvar');
+    const codigo = CW.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');   // comentários citam o código antigo
+    assert(!/aplicarModeloATudo\(''\)/.test(codigo), "nenhum caminho do assistente chama aplicarModeloATudo('') (apagava os modelos e deixava o do construtor)");
+    assert(!/modelSelection: false|hasDefaultModel/.test(codigo), 'nenhum provedor dispensa a seleção (modelSelection: false saiu com hasDefaultModel)');
+    assert(/for \(const \[provedor, variavel\] of Object\.entries\(VARIAVEL_DO_MODELO_NATIVO\)\)/.test(CONFIG_ROUTE), 'persistConfigToEnv grava GEMINI_MODEL/DEEPSEEK_MODEL/... a partir do mesmo mapa do boot');
+    assert(/ctx\.providerFactory\?\.setModeloNativo\(provedor, valor\.trim\(\)\)/.test(CONFIG_ROUTE), 'POST /api/config aplica o modelo na hora (setModeloNativo)');
+    assert(/modelosNativos: modelosNativosDoAmbiente\(\)/.test(fs.readFileSync(path.join(process.cwd(), 'src', 'index.ts'), 'utf-8')), 'o boot lê o mesmo mapa (paridade painel ↔ boot)');
 }
 
 console.log(`\n${'─'.repeat(60)}`);

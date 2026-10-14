@@ -80,10 +80,11 @@ console.log('\n=== S170 — defeito 1: precedência de modelo (override > config
     const semOverride = pf.getProviderWithModel('', 'com-modelo') as unknown as { model: string };
     assert(semOverride.model === 'modelo-da-config', `sem override usa o model da config (obtido: ${semOverride.model})`);
 
-    // Nem override nem config: placeholder aceito por servidores de modelo único (llamafile).
+    // Nem override nem config: nenhum modelo (ADR-018 — antes, o placeholder 'default' embutido). A chamada é recusada
+    // com "nenhum modelo escolhido" pelo chatWithFallback, em vez de ir ao servidor com um id inventado.
     pf.addCustomProvider({ label: 'sem-modelo', baseUrl: CUSTOM_URL });
     const semNada = pf.getProviderWithModel('', 'sem-modelo') as unknown as { model: string };
-    assert(semNada.model === 'default', `sem nada usa o placeholder 'default' (obtido: ${semNada.model})`);
+    assert(!semNada.model, `sem nada, nenhum modelo inventado (obtido: "${semNada.model}")`);
 }
 
 console.log('\n=== S170 — defeito 1: apiKey opcional (servidor local sem autenticação) ===');
@@ -102,10 +103,14 @@ console.log('\n=== S170 — defeito 1: remover o provider limpa também a config
         customProviders: [{ label: 'temporario', baseUrl: CUSTOM_URL }],
     });
     pf.removeCustomProvider('temporario');
-    const p = pf.getProviderWithModel('m', 'temporario');
+    // ADR-018: antes, o provedor removido "voltava ao fallback padrão" (o Ollama). Agora não há outro no lugar — a chamada
+    // diz que o provedor não está configurado (e isso só é possível se customConfigs não guardou o provedor morto).
+    let erro = '';
+    try { pf.getProviderWithModel('m', 'temporario'); } catch (e) { erro = (e as Error).message; }
     assert(
-        p instanceof OllamaProvider,
-        'depois de removido volta ao fallback padrão (customConfigs não guarda provider morto)'
+        /"temporario" não está configurado/.test(erro),
+        'depois de removido, nenhum outro provedor é usado no lugar — e customConfigs não guarda o provider morto',
+        erro
     );
 }
 
@@ -119,7 +124,8 @@ console.log('\n=== S170 — defeito 2: defaultProvider define quem é tentado pr
     // getFallbackOrder é privado — exercitado pelo comportamento observável equivalente.
     const order = (pf as unknown as { getFallbackOrder(p?: string): string[] }).getFallbackOrder();
     assert(order[0] === 'meu-endpoint', `provider padrão vem primeiro (obtido: [${order.join(',')}])`);
-    assert(order.includes('ollama'), 'os demais continuam na ordem, como fallback — nada é descartado');
+    // ADR-018 (14/10/2026): sem reserva — antes, "os demais continuam na ordem, como fallback".
+    assert(order.length === 1, `só o provider padrão — nenhum outro como reserva (obtido: [${order.join(',')}])`);
     assert(new Set(order).size === order.length, 'nenhum provider duplicado na ordem');
 }
 

@@ -22,6 +22,8 @@ export interface NewClawConfig {
     groqApiKey?: string;
     openrouterApiKey?: string;
     anthropicApiKey?: string;
+    /** Modelo escolhido para cada provedor nativo (<PROVEDOR>_MODEL). Ausente = não escolhido — o provedor não responde sem ele. */
+    modelosNativos?: import('./ProviderFactory').ModelosNativos;
     ollamaUrl?: string;
     ollamaModel?: string;
     ollamaApiKey?: string;
@@ -40,9 +42,8 @@ export interface NewClawConfig {
      *  configurada por quem instala — um caminho embutido no código só funcionaria na máquina de
      *  quem o escreveu, e este projeto é distribuído para Windows, Linux e macOS. */
     localModelsDir?: string;
-    /** Issue 071: com o provedor padrão na máquina do usuário, permitir que a reserva vá para a nuvem. Desligado por
-     *  padrão — quem escolheu offline continua offline (PERMITIR_NUVEM_COMO_RESERVA). */
-    allowCloudFallback?: boolean;
+    /** Modelo de embedding escolhido pelo usuário (EMBED_MODEL). Vazio = embeddings desligados; a busca segue por palavras. */
+    embedModel?: string;
     /** Opções extras de carregamento por arquivo de modelo: `{ "modelo.gguf": "-fit off --n-gpu-layers 12" }`.
      *  Nunca vem preenchido de fábrica — o valor certo depende da GPU e da RAM de CADA máquina
      *  (`--n-gpu-layers 12` é a divisão ideal numa placa de 16GB e errada em outra), então é

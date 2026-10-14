@@ -135,7 +135,7 @@ export class ModelRegistryService {
         }
 
         for (const custom of this.getCustomProviders()) {
-            const provider = new OpenAIProvider(custom.apiKey || '', undefined, custom.baseUrl, custom.label);
+            const provider = new OpenAIProvider(custom.apiKey || '', '', custom.baseUrl, custom.label);   // só descoberta: lista modelos, não conversa
             try {
                 const models = await provider.discoverModels();
                 results.push(...models);

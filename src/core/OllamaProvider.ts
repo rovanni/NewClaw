@@ -1,6 +1,6 @@
 import { createLogger } from '../shared/AppLogger';
 import { errorMessage } from '../shared/errors';
-import { ILLMProvider, LLMMessage, LLMResponse, ToolDefinition, ChatOptions, StreamChunk, OpenAIChatResponse, RawApiChunk, RawToolCall, ModelInfo, REASONING_INTENSIVE_TIMEOUT_FLOOR_MS, AttemptTelemetry, TELEMETRY_SAMPLE_MS } from './providerTypes';
+import { ILLMProvider, LLMMessage, LLMResponse, ToolDefinition, ChatOptions, StreamChunk, OpenAIChatResponse, RawApiChunk, RawToolCall, ModelInfo, REASONING_INTENSIVE_TIMEOUT_FLOOR_MS, AttemptTelemetry, TELEMETRY_SAMPLE_MS, mensagemSemModeloEscolhido } from './providerTypes';
 import { guessCapabilities, mapOllamaCapabilities } from './modelCapabilityHeuristics';
 import { taskQueue, TaskPriority } from './providerQueue';
 import { assertNotSsrfTarget } from './ssrfGuard';
@@ -85,8 +85,7 @@ export type AbortReason = typeof AbortReason[keyof typeof AbortReason];
  * a chamada não sai — um pedido sem modelo ao Ollama falharia com um erro técnico, e preencher um nome "plausível" seria
  * escolher pelo operador. A mesma frase volta ao usuário (ProviderFactory) e não é retentada (não é falha transitória).
  */
-export const NO_MODEL_CONFIGURED_MESSAGE =
-    'Nenhum modelo foi escolhido. Escolha o "Modelo padrão" no painel (Config → Modelos) ou defina OLLAMA_MODEL no .env.';
+export const NO_MODEL_CONFIGURED_MESSAGE = mensagemSemModeloEscolhido('ollama', 'OLLAMA_MODEL');
 
 export class OllamaProvider implements ILLMProvider {
     name = 'ollama';

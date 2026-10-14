@@ -122,16 +122,16 @@ console.log('\n=== S251-4 — API key nunca aparece em log/toast ===');
     );
 }
 
-console.log('\n=== S251-5 — caveat honesto quando nenhum modelo foi escolhido (Custom ≠ nativo) ===');
+// 14/10/2026 (diretiva da mantenedora: nenhum modelo no código nem de fallback): o Custom sem modelo caía num id 'default'
+// embutido no ProviderFactory, e a conclusão mostrava um aviso ("só funciona em servidores de modelo único"). O 'default'
+// saiu, então a escolha passou a ser obrigatória e o aviso perdeu o caso — S251-5 agora protege a obrigatoriedade.
+console.log('\n=== S251-5 — Custom exige o modelo escolhido; o aviso de "sem modelo" saiu junto com o id embutido ===');
 {
     assert(
-        /const customNoModelCaveat = session\.family === 'custom' && !model/.test(CW),
-        'existe um caveat específico pra Custom sem modelo, distinto do texto de nativos',
+        /case 'customModelSelect': return !!\(session\.draft\.customModelId \?\? ''\)\.trim\(\);/.test(CW),
+        'canAdvance real exige o Model ID (da lista ou digitado)',
     );
-    assert(
-        /ml_cw_custom_no_model_caveat/.test(CW),
-        'o caveat usa uma chave i18n própria (não reaproveita um texto que afirmaria sucesso)',
-    );
+    assert(!/customNoModelCaveat|ml_cw_custom_no_model_caveat/.test(CW), 'o aviso de Custom sem modelo não existe mais (não há mais esse caminho)');
 }
 
 console.log('\n=== S251-6b — achado durante a investigação do C4: troca de provider usa applyDefaultProviderChange(), não configStore.set() direto ===');
@@ -155,6 +155,7 @@ type Session = {
     evidence: Record<string, unknown>;
     selectedModel?: { id: string; provider: string };
     currentStep: string;
+    draft?: { customModelId?: string };
 };
 
 const FAMILY_STEPS: Record<string, string[]> = {
@@ -169,7 +170,7 @@ function canAdvance(s: Session): boolean {
     switch (s.currentStep) {
         case 'choose': return !!s.provider;
         case 'customEndpoint': return s.evidence.configOk === true;
-        case 'customModelSelect': return true;
+        case 'customModelSelect': return !!(s.draft?.customModelId ?? '').trim();
         default: return false;
     }
 }
@@ -193,7 +194,9 @@ console.log('\n=== S251-6 — fluxo completo Custom, passo a passo ===');
     s = { ...s, customLabel: 'LM Studio', evidence: { configOk: true, baseUrl: 'http://localhost:1234/v1', models: ['llama-3.1-8b-instruct'] } };
     s = next(s);
     assert(s.currentStep === 'customModelSelect', 'customEndpoint → customModelSelect', s.currentStep);
-    assert(canAdvance(s) === true, 'customModelSelect avança mesmo sem seleção (recomendada, não obrigatória)');
+    assert(canAdvance(s) === false, 'customModelSelect sem modelo escolhido não avança (obrigatório desde 14/10/2026)');
+    s = { ...s, draft: { customModelId: 'llama-3.1-8b-instruct' } };
+    assert(canAdvance(s) === true, 'com o Model ID escolhido, avança');
     s = next(s);
     assert(s.currentStep === 'conclusion', 'customModelSelect → conclusion', s.currentStep);
 }
@@ -203,7 +206,8 @@ console.log('\n=== S251-7 — catálogo vazio não trava o fluxo (servidor respo
     let s: Session = { provider: 'custom', family: 'custom', customLabel: 'meu-servidor', evidence: { configOk: true, baseUrl: 'http://localhost:9000/v1', models: [] }, currentStep: 'customEndpoint' };
     s = next(s);
     assert(s.currentStep === 'customModelSelect', 'avança normalmente com evidence.configOk mesmo com models: []', s);
-    assert(canAdvance(s) === true, 'ainda pode avançar sem nenhum modelo na lista (não é erro, é estado válido)');
+    s = { ...s, draft: { customModelId: 'modelo-digitado' } };
+    assert(canAdvance(s) === true, 'lista vazia não trava: o Model ID digitado basta para avançar');
 }
 
 console.log(`\n${'─'.repeat(60)}`);

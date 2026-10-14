@@ -20,7 +20,7 @@ import { ToolExecutor, ToolResult } from '../loop/agentLoopTypes';
 import { MemoryManager } from '../memory/MemoryManager';
 import type { MemoryGraphRepository } from '../memory/MemoryGraphRepository';
 import { errorMessage } from '../shared/errors';
-import { DEFAULT_EMBED_MODEL } from '../memory/EmbeddingService';
+import { modeloDeEmbedding } from '../memory/EmbeddingService';
 
 export class MemoryAdminTool implements ToolExecutor {
     name = 'memory_admin';
@@ -186,6 +186,10 @@ export class MemoryAdminTool implements ToolExecutor {
     // ── REINDEX ───────────────────────────────────────────────────────────────
 
     private async reindex(id?: string): Promise<ToolResult> {
+        // Sem modelo de embedding escolhido (EMBED_MODEL), não há o que reindexar — dito, não adivinhado.
+        if (!modeloDeEmbedding()) {
+            return { success: false, output: 'Nenhum modelo de embedding foi escolhido (EMBED_MODEL). A busca segue por palavras; para busca semântica, configure o modelo.' };
+        }
         const nodes = this.repo.getNodesForReindex(id || undefined);
         let updated = 0;
         let failed = 0;
@@ -196,14 +200,14 @@ export class MemoryAdminTool implements ToolExecutor {
                 const resp = await fetch(`${this.memoryManager.getOllamaUrl()}/api/embeddings`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ model: DEFAULT_EMBED_MODEL, prompt: text }),
+                    body: JSON.stringify({ model: modeloDeEmbedding(), prompt: text }),
                     signal: AbortSignal.timeout(15000)
                 });
                 if (resp.ok) {
                     const data = await resp.json() as { embedding?: number[] };
                     if (data.embedding) {
                         const buf = Buffer.from(new Float64Array(data.embedding).buffer);
-                        this.repo.upsertEmbedding(node.id, buf, DEFAULT_EMBED_MODEL);
+                        this.repo.upsertEmbedding(node.id, buf, modeloDeEmbedding());
                         updated++;
                     } else { failed++; }
                 } else { failed++; }

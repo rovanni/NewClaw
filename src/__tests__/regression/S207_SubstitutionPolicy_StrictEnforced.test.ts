@@ -14,6 +14,11 @@
  * anúncio; nenhuma asserção deste arquivo precisa ser removida, porque `anunciada` continua
  * substituindo — o que muda é a resposta passar a dizer isso.
  *
+ * 14/10/2026 (ADR-018, diretiva da mantenedora: nenhum modelo no código nem de fallback): a cadeia passou a ter só o
+ * provedor declarado, em QUALQUER política — S207-4 e S207-5 foram invertidos (nenhum outro provedor é tentado). Os
+ * provedores dos cenários ganharam um modelo: sem ele o ProviderFactory responde "nenhum modelo escolhido" antes de
+ * tentar, e o teste provaria a guarda de modelo, não a política.
+ *
  * REGRESSÃO SE: `estrita` deixar de valer em qualquer um dos caminhos de substituição do
  * `chatWithFallback` (são dois — a ordem de fallback e o fallback não-streaming para o Ollama);
  * a ausência de provider preferido passar a invocar política (não há soberania sobre o que ninguém
@@ -100,7 +105,7 @@ async function main(): Promise<void> {
             const pf = new ProviderFactory({
                 defaultProvider: 'Modelo local',
                 ollamaUrl: ENDPOINT_MORTO,
-                customProviders: [{ label: 'Modelo local', baseUrl: ENDPOINT_MORTO, substitutionPolicy: 'estrita' }],
+                customProviders: [{ label: 'Modelo local', baseUrl: ENDPOINT_MORTO, model: 'm-local', substitutionPolicy: 'estrita' }],
             });
 
             const r = await pf.chatWithFallback(
@@ -126,12 +131,13 @@ async function main(): Promise<void> {
             );
         }
 
-        console.log('\n=== S207-4 — `anunciada` ainda substitui (limitação temporária da Sprint 021) ===');
+        console.log('\n=== S207-4 — `anunciada` também não substitui (ADR-018: não há reserva) ===');
         {
             const pf = new ProviderFactory({
                 defaultProvider: 'Modelo local',
                 ollamaUrl: ENDPOINT_MORTO,
-                customProviders: [{ label: 'Modelo local', baseUrl: ENDPOINT_MORTO, substitutionPolicy: 'anunciada' }],
+                ollamaModel: 'm-ollama',
+                customProviders: [{ label: 'Modelo local', baseUrl: ENDPOINT_MORTO, model: 'm-local', substitutionPolicy: 'anunciada' }],
             });
 
             const r = await pf.chatWithFallback(
@@ -140,8 +146,8 @@ async function main(): Promise<void> {
 
             const outros = (r.attempts ?? []).filter(a => a.provider !== 'Modelo local');
             assert(
-                outros.length > 0,
-                'substituição acontece — `anunciada` permite a troca (o que falta é anunciá-la, Sprint 022)',
+                (r.attempts ?? []).length > 0 && outros.length === 0,
+                'só o escolhido é tentado — nem a cadeia nem a refação no Ollama',
                 r.attempts,
             );
             assert(
@@ -151,19 +157,20 @@ async function main(): Promise<void> {
             );
         }
 
-        console.log('\n=== S207-5 — sem política declarada, comportamento inalterado ===');
+        console.log('\n=== S207-5 — sem política declarada: também só o escolhido ===');
         {
             const pf = new ProviderFactory({
                 defaultProvider: 'Modelo local',
                 ollamaUrl: ENDPOINT_MORTO,
-                customProviders: [{ label: 'Modelo local', baseUrl: ENDPOINT_MORTO }],
+                ollamaModel: 'm-ollama',
+                customProviders: [{ label: 'Modelo local', baseUrl: ENDPOINT_MORTO, model: 'm-local' }],
             });
 
             const r = await pf.chatWithFallback(
                 [{ role: 'user', content: 'ping' }], undefined, 'Modelo local', 2000,
             );
             const outros = (r.attempts ?? []).filter(a => a.provider !== 'Modelo local');
-            assert(outros.length > 0, 'cadeia de fallback percorrida como sempre foi', r.attempts);
+            assert((r.attempts ?? []).length > 0 && outros.length === 0, 'nenhum outro provedor é tentado (antes: a cadeia inteira)', r.attempts);
             assert(r.fallbackReason !== 'policy_strict', 'nenhuma recusa por política', r.fallbackReason);
         }
 
@@ -173,8 +180,8 @@ async function main(): Promise<void> {
         console.log(`  Resolução: provider > global > padrão; inválido cai no padrão: testado`);
         console.log(`  Sem preferido, não há política a aplicar: testado`);
         console.log(`  estrita bloqueia os DOIS caminhos de substituição: testado`);
-        console.log(`  anunciada ainda substitui — limitação temporária declarada: testado`);
-        console.log(`  Ausência de política preserva o comportamento histórico: testado`);
+        console.log(`  anunciada e sem política: só o escolhido (ADR-018): testado`);
+      
     } finally {
         if (envOriginal === undefined) delete process.env.SUBSTITUTION_POLICY;
         else process.env.SUBSTITUTION_POLICY = envOriginal;

@@ -50,16 +50,16 @@ const CW = fs.readFileSync(
     'utf-8',
 );
 
-console.log('\n=== S250-1 — hasDefaultModel() deriva de capabilities, não é flag independente ===');
+// 14/10/2026 (diretiva da mantenedora: nenhum modelo no código): `hasDefaultModel()` derivava de `modelSelection: false`,
+// que só os 5 nativos tinham por trazerem modelo embutido no construtor. Os construtores perderam o modelo, todos os
+// provedores passaram a exigir a escolha e a função saiu — o que S250-1 protege agora é que ela não volte.
+console.log('\n=== S250-1 — nenhum provedor tem "modelo padrão": todos exigem escolha (modelSelection: true) ===');
 {
-    assert(
-        /function hasDefaultModel\(providerId\) \{\s*\n\s*return !PROVIDER_CAPABILITIES\[providerId\]\.capabilities\.modelSelection;/.test(CW),
-        'hasDefaultModel() lê capabilities.modelSelection, não um campo hasDefaultModel próprio',
-    );
-    assert(
-        !/hasDefaultModel:\s*(true|false)/.test(CW),
-        'PROVIDER_CAPABILITIES não guarda hasDefaultModel como campo — só capabilities',
-    );
+    const codigo = CW.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+    assert(!/hasDefaultModel/.test(codigo), 'hasDefaultModel() não existe mais');
+    const caps = codigo.match(/const PROVIDER_CAPABILITIES = \{[\s\S]*?\n\};/)?.[0] || '';
+    assert(caps.length > 0 && !/modelSelection: false/.test(caps) && (caps.match(/modelSelection: true/g) || []).length === 8,
+        'os 8 provedores de PROVIDER_CAPABILITIES têm modelSelection: true', caps);
 }
 
 console.log('\n=== S250-2 — FAMILY_STEPS.ollama não tem etapa de discovery separada ===');

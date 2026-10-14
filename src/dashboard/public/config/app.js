@@ -129,8 +129,10 @@ export async function doSave() {
     // Sempre enviado (mesmo vazio): '' significa "não uso pasta local", uma escolha que precisa
     // chegar ao servidor para apagar um valor anterior — ver o !== undefined na rota.
     localModelsDir:         c.localModelsDir || '',
-    allowCloudFallback:         !!c.allowCloudFallback,   // issue 071
     localModelOptions:      c.localModelOptions || {},
+    // Modelos escolhidos pelo usuário para os provedores nativos e para embeddings (diretiva de 14/10/2026).
+    modelosNativos:         c.modelosNativos || {},
+    embedModel:             c.embedModel || '',
   };
 
   // Include API keys only if user typed something
@@ -299,8 +301,9 @@ async function loadConfig() {
       modelRouter:            c.modelRouter   || {},
       customProviders:        c.customProviders || [],
       localModelsDir:         c.localModelsDir || '',
-      allowCloudFallback:         !!c.allowCloudFallback,   // issue 071
       localModelOptions:      c.localModelOptions || {},
+      modelosNativos:         c.modelosNativos || {},
+      embedModel:             c.embedModel || '',
       directoryPicker:        c.directoryPicker || { policyAllowed: false, preference: 'native' },
     });
   } catch {}

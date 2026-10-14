@@ -99,19 +99,25 @@ console.log('\n=== S263-4 [funcional] — GroqProvider: imagem chega no formato 
     assert(!!img, 'GroqProvider: existe uma parte image_url na mensagem enviada', content);
 }
 
-console.log('\n=== S263-5 [funcional] — endpoint e modelo default preservados após a migração para herança ===');
+// 14/10/2026 (ADR-018, diretiva da mantenedora): os construtores perderam o modelo embutido ('deepseek-chat',
+// 'llama-3.3-70b-versatile'). O endpoint oficial continua; o modelo é o que o usuário escolheu, e sem escolha não há um.
+console.log('\n=== S263-5 [funcional] — endpoint preservado após a migração para herança; o modelo é só o escolhido ===');
 {
     const capDs = captureBody();
-    const deepseek = new DeepSeekProvider('fake-key');
+    const deepseek = new DeepSeekProvider('fake-key', 'modelo-escolhido-ds');
     await deepseek.chat([{ role: 'user', content: 'oi' }]);
     assert(capDs.url() === 'https://api.deepseek.com/v1/chat/completions', 'DeepSeekProvider ainda bate no endpoint oficial (baseUrl preservado via super())', capDs.url());
-    assert(capDs.get()?.model === 'deepseek-chat', 'DeepSeekProvider: modelo default preservado (deepseek-chat)', capDs.get());
+    assert(capDs.get()?.model === 'modelo-escolhido-ds', 'DeepSeekProvider: envia o modelo escolhido', capDs.get());
 
     const capGroq = captureBody();
-    const groq = new GroqProvider('fake-key');
+    const groq = new GroqProvider('fake-key', 'modelo-escolhido-groq');
     await groq.chat([{ role: 'user', content: 'oi' }]);
     assert(capGroq.url() === 'https://api.groq.com/openai/v1/chat/completions', 'GroqProvider ainda bate no endpoint oficial', capGroq.url());
-    assert(capGroq.get()?.model === 'llama-3.3-70b-versatile', 'GroqProvider: modelo default preservado', capGroq.get());
+    assert(capGroq.get()?.model === 'modelo-escolhido-groq', 'GroqProvider: envia o modelo escolhido', capGroq.get());
+
+    const capSem = captureBody();
+    await new GroqProvider('fake-key').chat([{ role: 'user', content: 'oi' }]);
+    assert(!capSem.get()?.model, 'sem escolha, nenhum modelo inventado pelo construtor', capSem.get());
 }
 
 console.log('\n=== S263-6 [funcional] — name/label identificam corretamente cada provider (não herdam "openai") ===');

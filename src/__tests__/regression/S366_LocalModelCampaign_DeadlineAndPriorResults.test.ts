@@ -101,7 +101,8 @@ async function main(): Promise<void> {
             { label: 'Reserva', baseUrl: reserva2.url, model: 'm' },
         ] } as any);
         const r2 = await pf2.chatWithFallback([{ role: 'user', content: 'oi' }], undefined, 'Fora', 5000);
-        assert(r2.status === 'success' && reserva2.pedidos() >= 1, `primeiro fora do ar (falha cedo): a reserva continua valendo (status ${r2.status})`);
+        // ADR-018 (14/10/2026): não há reserva — antes, "primeiro fora do ar: a reserva continua valendo".
+        assert(r2.status !== 'success' && reserva2.pedidos() === 0, `primeiro fora do ar: a falha é o resultado, nenhum outro provedor responde (status ${r2.status}, pedidos à reserva: ${reserva2.pedidos()})`);
         await reserva2.fechar();
     }
 

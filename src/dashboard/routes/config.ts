@@ -7,6 +7,7 @@ import { DashboardContext, ExtendedConfig } from './types';
 import { MAX_UPLOAD_FILES } from './chat';
 import { isNativePickerPolicyAllowed } from '../../core/DirectoryPickerService';
 import { applyEnvUpdates } from '../../shared/envSerializer';
+import { VARIAVEL_DO_MODELO_NATIVO, type ModelosNativos } from '../../core/ProviderFactory';
 
 const log = createLogger('Dashboardserver');
 
@@ -47,7 +48,7 @@ export function persistConfigToEnv(ctx: DashboardContext): string[] | null {
             'CLASSIFIER_SERVER': ctx.config.modelRouter?.classifierServer || '',
             'CUSTOM_MODELS':      (ctx.config.customModels || []).join(','),
             'LOCAL_MODELS_DIR':   ctx.config.localModelsDir || '',
-            'PERMITIR_NUVEM_COMO_RESERVA': ctx.config.allowCloudFallback ? 'true' : 'false',   // issue 071
+            'EMBED_MODEL':        ctx.config.embedModel || '',
             'DIRECTORY_PICKER_PREFERENCE': ctx.config.directoryPickerPreference || 'native',
             'LOCAL_MODEL_OPTIONS': JSON.stringify(ctx.config.localModelOptions || {}),
             'CUSTOM_PROVIDERS':   JSON.stringify(ctx.config.customProviders || []),
@@ -69,6 +70,10 @@ export function persistConfigToEnv(ctx: DashboardContext): string[] | null {
         updates['OPENROUTER_API_KEY'] = ctx.config.openrouterApiKey || '';
         updates['ANTHROPIC_API_KEY'] = ctx.config.anthropicApiKey || '';
         updates['SYSTEM_PROMPT']      = ctx.config.systemPrompt     || '';
+        // O modelo escolhido para cada provedor nativo (diretiva de 14/10/2026: nenhum modelo no código).
+        for (const [provedor, variavel] of Object.entries(VARIAVEL_DO_MODELO_NATIVO)) {
+            updates[variavel] = ctx.config.modelosNativos?.[provedor as keyof ModelosNativos] || '';
+        }
 
         try {
             const mm = ctx.controller ? (ctx.controller as unknown as { memory?: { db?: import('better-sqlite3').Database } }).memory : null;
@@ -140,7 +145,8 @@ export function createConfigRouter(ctx: DashboardContext): Router {
                 hasOllamaApiKey: !!ctx.config.ollamaApiKey,
                 modelRouter: ctx.config.modelRouter || {},
                 localModelsDir: ctx.config.localModelsDir || '',
-                allowCloudFallback: !!ctx.config.allowCloudFallback,
+                modelosNativos: ctx.config.modelosNativos || {},
+                embedModel: ctx.config.embedModel || '',
                 localModelOptions: ctx.config.localModelOptions || {},
                 customProviders: (ctx.config.customProviders || []).map(p => ({ label: p.label, baseUrl: p.baseUrl, hasKey: !!p.apiKey, model: p.model, thinking: p.thinking })),
                 // Política (ENV, nunca guardada em config — lida ao vivo) + preferência (persistida).
@@ -157,7 +163,7 @@ export function createConfigRouter(ctx: DashboardContext): Router {
 
     router.post('/', (req: Request, res: Response) => {
         const { language, defaultProvider, maxIterations, memoryWindowSize, systemPrompt, ollamaModel, ollamaApiKey, ollamaUrl, telegramAllowedUserIds, modelRouter,
-                localModelsDir, localModelOptions, geminiKey, deepseekKey, groqKey, openrouterKey, anthropicKey, directoryPickerPreference, allowCloudFallback } = req.body;
+                localModelsDir, localModelOptions, geminiKey, deepseekKey, groqKey, openrouterKey, anthropicKey, directoryPickerPreference, modelosNativos, embedModel } = req.body;
 
         log.info(`POST /api/config — ollamaModel="${ollamaModel}" provider="${defaultProvider}"`);
 
@@ -165,10 +171,20 @@ export function createConfigRouter(ctx: DashboardContext): Router {
         // !== undefined e não truthy: string vazia significa "limpar a pasta configurada", uma
         // escolha legítima do usuário, e um `if (localModelsDir)` a descartaria calado.
         if (localModelsDir !== undefined) ctx.config.localModelsDir = String(localModelsDir).trim();
-        // Issue 071: vale na hora — o ProviderFactory lê a variável a cada chamada.
-        if (typeof allowCloudFallback === 'boolean') {
-            ctx.config.allowCloudFallback = allowCloudFallback;
-            process.env.PERMITIR_NUVEM_COMO_RESERVA = allowCloudFallback ? 'true' : 'false';
+        // Modelos escolhidos pelo usuário — valem na hora. Só os provedores conhecidos; string vazia = "nenhum escolhido".
+        if (modelosNativos && typeof modelosNativos === 'object') {
+            const atuais: ModelosNativos = { ...(ctx.config.modelosNativos || {}) };
+            for (const provedor of Object.keys(VARIAVEL_DO_MODELO_NATIVO) as Array<keyof ModelosNativos>) {
+                const valor = (modelosNativos as Record<string, unknown>)[provedor];
+                if (typeof valor !== 'string') continue;
+                atuais[provedor] = valor.trim();
+                ctx.providerFactory?.setModeloNativo(provedor, valor.trim());
+            }
+            ctx.config.modelosNativos = atuais;
+        }
+        if (typeof embedModel === 'string') {
+            ctx.config.embedModel = embedModel.trim();
+            process.env.EMBED_MODEL = ctx.config.embedModel;   // lido a cada uso (modeloDeEmbedding)
         }
         // Objeto inteiro substitui o anterior: a UI sempre manda o mapa completo, e um merge aqui
         // impediria APAGAR as opções de um modelo (a chave removida simplesmente não chegaria).

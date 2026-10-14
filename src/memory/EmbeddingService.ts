@@ -19,18 +19,30 @@ import { Database } from 'better-sqlite3';
  * embedding mais recente no banco de produção era de 09/06/2026, dois meses antes desta
  * descoberta, apesar da aplicação rodando continuamente e criando nós novos o tempo todo.
  */
-export const DEFAULT_EMBED_MODEL = 'nomic-embed-text:v1.5';
+/**
+ * O modelo de embedding escolhido pelo usuário (EMBED_MODEL). Vazio = nenhum escolhido: os embeddings ficam desligados e a busca
+ * segue por palavras. Diretiva de 14/10/2026 — nenhum modelo no código (antes: 'nomic-embed-text:v1.5' fixo, sem configuração;
+ * nas instâncias da mantenedora ele já não gerava vetores — 5 tentativas, 0 gerados).
+ */
+export function modeloDeEmbedding(): string {
+    return (process.env.EMBED_MODEL || '').trim();
+}
 
 export class EmbeddingService {
     private ollamaUrl: string;
-    private model: string;
+    private modeloFixo?: string;
     private db: Database;
 
-    constructor(db: Database, ollamaUrl: string = 'http://localhost:11434', model: string = DEFAULT_EMBED_MODEL) {
+    /** Sem `model`, vale a escolha atual do usuário (EMBED_MODEL), lida a cada uso: trocar no painel vale na hora. */
+    constructor(db: Database, ollamaUrl: string = 'http://localhost:11434', model?: string) {
         this.db = db;
         this.ollamaUrl = ollamaUrl;
-        this.model = model;
+        this.modeloFixo = model;
         this.initializeSchema();
+    }
+
+    private get model(): string {
+        return this.modeloFixo ?? modeloDeEmbedding();
     }
 
     private initializeSchema(): void {
@@ -53,6 +65,7 @@ export class EmbeddingService {
      * Generate embedding via Ollama API
      */
     async embed(text: string): Promise<number[] | null> {
+        if (!this.model) return null;   // nenhum modelo de embedding escolhido (EMBED_MODEL)
         try {
             const res = await fetch(`${this.ollamaUrl}/api/embeddings`, {
                 method: 'POST',
@@ -159,6 +172,7 @@ export class EmbeddingService {
      * Check if embedding model is available
      */
     async isAvailable(): Promise<boolean> {
+        if (!this.model) return false;   // nenhum modelo escolhido: não está disponível, sem adivinhar
         try {
             const res = await fetch(`${this.ollamaUrl}/api/tags`);
             if (!res.ok) return false;

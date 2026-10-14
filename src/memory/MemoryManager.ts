@@ -27,7 +27,7 @@ import * as snap from './snapshotRepository';
 import { DashboardMemoryRepository } from '../dashboard/DashboardMemoryRepository';
 import type { ResponseAttachment } from '../channels/ChannelAdapter';
 import { MemoryGraphRepository } from './MemoryGraphRepository';
-import { EmbeddingService, DEFAULT_EMBED_MODEL } from './EmbeddingService';
+import { EmbeddingService, modeloDeEmbedding } from './EmbeddingService';
 import { ClassificationMemory } from './ClassificationMemory';
 import { DecisionMemory } from './DecisionMemory';
 import { DomainSummaryService } from './DomainSummaryService';
@@ -525,11 +525,12 @@ export class MemoryManager {
     getAttentionLayer(): AttentionLayer | null { return this.attentionLayer; }
 
     private async generateEmbedding(text: string): Promise<Float64Array | null> {
+        if (!modeloDeEmbedding()) return null;   // nenhum modelo de embedding escolhido (EMBED_MODEL)
         try {
             const response = await fetch(`${this.ollamaUrl}/api/embeddings`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ model: DEFAULT_EMBED_MODEL, prompt: text })
+                body: JSON.stringify({ model: modeloDeEmbedding(), prompt: text })
             });
             if (!response.ok) return null;
             const data = await response.json() as { embedding?: number[] };

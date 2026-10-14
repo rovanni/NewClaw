@@ -130,7 +130,8 @@ async function main() {
     console.log('\n=== S365-3 — assistente: campo de Model ID, raciocínio e imagens ===');
     {
         const etapa = CW.slice(CW.indexOf('function renderCustomModelSelect'), CW.indexOf('async function confirmCustomEntry'));
-        assert(/id="ml-cw-customModelId"/.test(etapa) && /bindDraft\('ml-cw-customModelId', 'customModelId'\)/.test(etapa),
+        // ADR-018: o campo passou a reavaliar o "Próximo" a cada tecla (o Model ID virou obrigatório), em vez de bindDraft.
+        assert(/id="ml-cw-customModelId"/.test(etapa) && /getElementById\('ml-cw-customModelId'\)\?\.addEventListener\('input', e => \{\s*session\.draft\.customModelId = e\.target\.value;/.test(etapa),
             'há um campo de texto para o Model ID, ligado ao rascunho');
         assert(/models\.length === 1 \? models\[0\]/.test(etapa), 'servidor de modelo único: o campo já vem preenchido');
         assert(/session\.draft\.customModelId = id/.test(etapa), 'clicar na lista preenche o campo (a lista é atalho, não obrigação)');

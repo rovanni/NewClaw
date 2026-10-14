@@ -62,7 +62,7 @@ export async function buildHarness() {
 
     const providerFactory = new ProviderFactory({
         ollamaUrl,
-        ollamaModel: process.env.OLLAMA_MODEL || 'glm-5.1:cloud',
+        ollamaModel: process.env.OLLAMA_MODEL || '',   // sem modelo no código: quem roda define OLLAMA_MODEL
         defaultProvider: 'ollama',
     });
 

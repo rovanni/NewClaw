@@ -59,20 +59,15 @@ const DEFAULT_OLLAMA_URL = 'http://localhost:11434';
 const PROVIDER_CAPABILITIES = {
   local:       { family: 'local-gguf', capabilities: { discovery: true,  modelSelection: true,  modelPull: false, serving: true,  auth: false } },
   ollama:      { family: 'ollama',     capabilities: { discovery: true,  modelSelection: true,  modelPull: true,  serving: false, auth: true  }, modes: ['local', 'cloud'] },
-  gemini:      { family: 'native',     capabilities: { discovery: true,  modelSelection: false, modelPull: false, serving: false, auth: true  } },
-  deepseek:    { family: 'native',     capabilities: { discovery: true,  modelSelection: false, modelPull: false, serving: false, auth: true  } },
-  groq:        { family: 'native',     capabilities: { discovery: true,  modelSelection: false, modelPull: false, serving: false, auth: true  } },
-  openrouter:  { family: 'native',     capabilities: { discovery: true,  modelSelection: false, modelPull: false, serving: false, auth: true  } },
-  anthropic:   { family: 'native',     capabilities: { discovery: true,  modelSelection: false, modelPull: false, serving: false, auth: true  } },
+  gemini:      { family: 'native',     capabilities: { discovery: true,  modelSelection: true,  modelPull: false, serving: false, auth: true  } },
+  deepseek:    { family: 'native',     capabilities: { discovery: true,  modelSelection: true,  modelPull: false, serving: false, auth: true  } },
+  groq:        { family: 'native',     capabilities: { discovery: true,  modelSelection: true,  modelPull: false, serving: false, auth: true  } },
+  openrouter:  { family: 'native',     capabilities: { discovery: true,  modelSelection: true,  modelPull: false, serving: false, auth: true  } },
+  anthropic:   { family: 'native',     capabilities: { discovery: true,  modelSelection: true,  modelPull: false, serving: false, auth: true  } },
   custom:      { family: 'custom',     capabilities: { discovery: true,  modelSelection: true,  modelPull: false, serving: false, auth: true  } },
 };
-
-/** "Tem modelo default" nunca foi um fato independente — é sempre a mesma pergunta que
- *  `!capabilities.modelSelection` já responde (só os 5 nativos dispensam seleção, porque só eles
- *  têm um modelo embutido no construtor do provider). Deriva em vez de guardar duas verdades. */
-function hasDefaultModel(providerId) {
-  return !PROVIDER_CAPABILITIES[providerId].capabilities.modelSelection;
-}
+// Diretiva de 14/10/2026: nenhum provedor tem modelo embutido no código — todos pedem a escolha do usuário. (Antes, os 5
+// nativos dispensavam a seleção com `modelSelection: false` e um `hasDefaultModel()` derivado disso; os dois saíram.)
 
 /** Ordem oficial da Tela 1 — decidida explicitamente, não alterar sem justificar tecnicamente. */
 const PROVIDER_ORDER = ['local', 'ollama', 'gemini', 'deepseek', 'groq', 'openrouter', 'anthropic', 'custom'];
@@ -112,7 +107,7 @@ function getProviderDisplay(providerId, { cloudProviders, provLabels, localProvi
  * chamada só — uma etapa "customTesting" separada seria a mesma tela vazia de novo.
  */
 const FAMILY_STEPS = {
-  native:       ['choose', 'credential', 'validating', 'conclusion'],
+  native:       ['choose', 'credential', 'validating', 'nativeModelSelect', 'conclusion'],
   ollama:       ['choose', 'ollamaMode', 'ollamaConfig', 'ollamaModelSelect', 'conclusion'],
   custom:       ['choose', 'customEndpoint', 'customModelSelect', 'conclusion'],
   // localServing/localConfirming (desenho original da Fase B) viraram um "localLoading" só:
@@ -172,7 +167,10 @@ function canAdvance(session) {
     case 'ollamaConfig':      return session.evidence.configOk === true;
     case 'ollamaModelSelect': return true; // seleção recomendada, não obrigatória (Ollama)
     case 'customEndpoint':    return session.evidence.configOk === true;
-    case 'customModelSelect': return true; // idem — recomendada, não obrigatória (Custom)
+    // Custom e nativo: obrigatória — diretiva de 14/10/2026, nenhum modelo no código (antes o Custom vazio caía num
+    // id 'default' embutido no ProviderFactory). Sem escolha não há o que usar.
+    case 'customModelSelect': return !!(session.draft.customModelId ?? '').trim();
+    case 'nativeModelSelect': return !!(session.draft.nativeModelId ?? '').trim();
     // localFolder: sem "Próximo" genérico liberado por seleção — a única transição real é o
     // clique numa linha específica de modelo, que já dispara o carregamento (mandatório aqui,
     // ao contrário de Ollama/Custom: um servidor local sempre serve UM arquivo específico, não
@@ -206,6 +204,10 @@ function back(session) {
   // testar de novo (a URL pode continuar valendo, mas a key só faz sentido em Cloud).
   if (steps[idx - 1] === 'ollamaMode') {
     return { ...session, evidence: {}, currentStep: 'ollamaMode' };
+  }
+  // 'validating' é só a tela de espera da verificação da chave — voltar leva ao campo da chave.
+  if (steps[idx - 1] === 'validating') {
+    return { ...session, evidence: {}, currentStep: 'credential' };
   }
   return { ...session, currentStep: steps[idx - 1] };
 }
@@ -265,6 +267,7 @@ export function mountConfigWizard(container, { cloudProviders, provLabels, local
     else if (session.family === 'local-gguf' && session.currentStep === 'localLoading') renderLocalLoading(stepEl);
     else if (session.family === 'native' && session.currentStep === 'credential') renderCredential(stepEl);
     else if (session.family === 'native' && session.currentStep === 'validating') renderValidating(stepEl);
+    else if (session.family === 'native' && session.currentStep === 'nativeModelSelect') renderNativeModelSelect(stepEl);
     else if (session.currentStep === 'conclusion') renderConclusion(stepEl);
     else renderStub(stepEl);
 
@@ -286,6 +289,8 @@ export function mountConfigWizard(container, { cloudProviders, provLabels, local
         confirmOllamaModelSelection();
       } else if (session.family === 'custom' && session.currentStep === 'customModelSelect') {
         confirmCustomEntry();
+      } else if (session.family === 'native' && session.currentStep === 'nativeModelSelect') {
+        confirmNativeModel();
       } else {
         session = next(session);
         render();
@@ -697,7 +702,12 @@ export function mountConfigWizard(container, { cloudProviders, provLabels, local
       });
       list.appendChild(row);
     });
-    bindDraft('ml-cw-customModelId', 'customModelId');
+    // "Próximo" depende do campo preenchido: reavalia o botão a cada tecla, sem redesenhar (o foco fica no campo).
+    document.getElementById('ml-cw-customModelId')?.addEventListener('input', e => {
+      session.draft.customModelId = e.target.value;
+      const nextBtn = document.getElementById('ml-cw-next');
+      if (nextBtn) nextBtn.disabled = !canAdvance(session) || busy;
+    });
     document.getElementById('ml-cw-customThinking')?.addEventListener('change', e => { session.draft.customThinking = e.target.value; });
     document.getElementById('ml-cw-customImages')?.addEventListener('change', e => { session.draft.customImages = e.target.value; });
   }
@@ -1033,22 +1043,12 @@ export function mountConfigWizard(container, { cloudProviders, provLabels, local
       : (display ? `${display.icon} ${display.label}` : '');
     const ready = typeof computeSystemReady === 'function' ? computeSystemReady() : false;
     const model = session.selectedModel?.id || configStore.salvo('modelRouter')?.chat || configStore.salvo('ollamaModel') || '';
-    // Custom sem modelo escolhido é diferente de um nativo sem modelo escolhido: o fallback
-    // 'default' (ProviderFactory.ts) só funciona de verdade em servidores de modelo único
-    // (llamafile) — um servidor real com vários modelos (LM Studio, vLLM, OpenAI oficial) rejeita
-    // um id "default" que não existe. Por isso aqui NÃO se afirma "vai funcionar", ao contrário do
-    // texto que uma família com fallback confiável (nativos) teria — honestidade sobre o que não
-    // foi verificado (Nunca Adivinhar), não uma reprovação: pode ser exatamente o caso certo.
-    const customNoModelCaveat = session.family === 'custom' && !model
-      ? `<div class="form-hint" style="margin-top:6px;">⚠️ ${t('ml_cw_custom_no_model_caveat')}</div>`
-      : '';
     el.innerHTML = `
       <div class="ml-test-title">${title}</div>
       <div class="form-hint" style="margin:8px 0;">
         ${ready ? `✓ ${t('ml_cw_conclusion_ready')}` : `⏳ ${t('ml_cw_conclusion_confirming')}`}
       </div>
       ${model ? `<div class="form-hint">${t('ml_cw_conclusion_model', { model: esc(model) })}</div>` : ''}
-      ${customNoModelCaveat}
       <button type="button" class="btn btn-ghost btn-sm" id="ml-cw-finish" style="margin-top:10px;">${t('ml_cw_btn_finish')}</button>`;
     document.getElementById('ml-cw-finish')?.addEventListener('click', () => {
       session = createWizardSession();
@@ -1117,20 +1117,15 @@ export function mountConfigWizard(container, { cloudProviders, provLabels, local
         // testada antes deste ponto. Setar defaultProvider antes da confirmação deixaria o sistema
         // apontado pra um provider quebrado até o usuário perceber e corrigir.
         applyDefaultProviderChange(session.provider);
-        // Issue 071: provedor nativo usa o próprio modelo padrão — limpa os nomes antigos de todos os perfis.
-        aplicarModeloATudo('');
-        await doSave();
-        if (destroyed) return;
-        // Achado da investigação de C5: computeSystemReady() exige `cs.salvo('currentModel')` não
-        // vazio, mas nem doSave() nem loadProviders(true) atualizam esse campo — ele só vem de um
-        // GET /api/config completo. Mesma disciplina de C3 (confirmCustomEntry()): busca só o
-        // config fresco e atualiza SÓ currentModel, nunca configStore.patch() do objeto inteiro
-        // (que descartaria edição não salva em outra aba). computeSystemReady() continua intocado —
-        // só os dados que ele já lia foram atualizados.
-        const fresh = await getConfig();
-        if (destroyed) return;
-        configStore.set('currentModel', fresh.currentModel);
-        session = { ...session, currentStep: 'conclusion' };
+        // Diretiva de 14/10/2026: o provedor nativo não tem modelo no código — o usuário escolhe na etapa seguinte,
+        // entre os que a própria chave acabou de listar (ou digitando o ID). Antes daqui, `aplicarModeloATudo('')`
+        // limpava os perfis e o provedor seguia com um modelo embutido no construtor.
+        const modelosDoProvedor = (providersStore.get('catalog') || [])
+          .filter(m => m.provider === session.provider && m.capabilities?.includes('chat'))
+          .map(m => m.id);
+        const atual = (configStore.get('modelosNativos') || {})[session.provider] || '';
+        session.draft.nativeModelId ??= atual || (modelosDoProvedor.length === 1 ? modelosDoProvedor[0] : '');
+        session = { ...session, evidence: { ...session.evidence, configOk: true, models: modelosDoProvedor }, currentStep: 'nativeModelSelect' };
       } else {
         configError = entry?.error || t('ml_cw_native_offline_generic');
         session = { ...session, currentStep: 'credential' };
@@ -1139,6 +1134,69 @@ export function mountConfigWizard(container, { cloudProviders, provLabels, local
       if (destroyed) return;
       configError = err.message;
       session = { ...session, currentStep: 'credential' };
+    } finally {
+      if (destroyed) return;
+      busy = false;
+      render();
+    }
+  }
+
+  /** Escolha do modelo de um provedor nativo — lista o que a chave listou (atalho) e aceita o ID digitado, como o Custom. */
+  function renderNativeModelSelect(el) {
+    const models = session.evidence.models || [];
+    el.innerHTML = `
+      <div class="ml-test-title">${t('ml_cw_custom_models_title')}</div>
+      <div class="form-hint" style="margin:6px 0 12px;">${t('ml_cw_native_models_hint')}</div>
+      <div id="ml-cw-nativeModelList" style="display:flex;flex-direction:column;gap:4px;max-height:220px;overflow-y:auto;"></div>
+      ${models.length === 0 ? `<div class="form-hint" style="margin-top:8px;">${t('ml_cw_native_models_empty')}</div>` : ''}
+      <div class="form-group" style="margin-top:10px;">
+        <label class="form-label" for="ml-cw-nativeModelId">${t('ml_cw_custom_model_id_label')}</label>
+        <input type="text" class="form-input" id="ml-cw-nativeModelId" value="${esc(session.draft.nativeModelId ?? '')}">
+      </div>
+      ${configError ? `<div class="form-hint" style="margin-top:8px;color:var(--error,#e74c3c);">❌ ${esc(configError)}</div>` : ''}`;
+    const list = document.getElementById('ml-cw-nativeModelList');
+    models.forEach(id => {
+      const row = document.createElement('button');
+      row.type = 'button';
+      row.className = `btn btn-sm ${session.draft.nativeModelId === id ? 'btn-primary' : 'btn-ghost'}`;
+      row.style.cssText = 'justify-content:flex-start;text-align:left;';
+      row.textContent = id;
+      row.addEventListener('click', () => { session.draft.nativeModelId = id; render(); });
+      list.appendChild(row);
+    });
+    // "Próximo" depende do campo preenchido: reavalia o botão a cada tecla, sem redesenhar (o foco fica no campo).
+    document.getElementById('ml-cw-nativeModelId')?.addEventListener('input', e => {
+      session.draft.nativeModelId = e.target.value;
+      const nextBtn = document.getElementById('ml-cw-next');
+      if (nextBtn) nextBtn.disabled = !canAdvance(session) || busy;
+    });
+  }
+
+  async function confirmNativeModel() {
+    if (busy) return;
+    const modelo = (session.draft.nativeModelId ?? '').trim();
+    if (!modelo) return;
+    busy = true;
+    configError = '';
+    render();
+    try {
+      // Decisão confirmada: o modelo do provedor (GEMINI_MODEL etc.) e o de todos os perfis — a escolha vale para tudo.
+      configStore.set('modelosNativos', { ...(configStore.get('modelosNativos') || {}), [session.provider]: modelo });
+      aplicarModeloATudo(modelo);
+      await doSave();
+      if (destroyed) return;
+      // Achado da investigação de C5: computeSystemReady() exige `cs.salvo('currentModel')` não
+      // vazio, mas nem doSave() nem loadProviders(true) atualizam esse campo — ele só vem de um
+      // GET /api/config completo. Mesma disciplina de C3 (confirmCustomEntry()): busca só o
+      // config fresco e atualiza SÓ currentModel, nunca configStore.patch() do objeto inteiro
+      // (que descartaria edição não salva em outra aba).
+      const fresh = await getConfig();
+      if (destroyed) return;
+      configStore.set('currentModel', fresh.currentModel);
+      session = { ...session, selectedModel: { id: modelo, provider: session.provider }, currentStep: 'conclusion' };
+    } catch (err) {
+      if (destroyed) return;
+      configError = err.message;
     } finally {
       if (destroyed) return;
       busy = false;
@@ -1170,4 +1228,4 @@ export function mountConfigWizard(container, { cloudProviders, provLabels, local
   return () => { destroyed = true; unsubHealth(); };
 }
 
-export { PROVIDER_CAPABILITIES, PROVIDER_ORDER, FAMILY_STEPS, hasDefaultModel, createWizardSession, next, back, canAdvance };
+export { PROVIDER_CAPABILITIES, PROVIDER_ORDER, FAMILY_STEPS, createWizardSession, next, back, canAdvance };

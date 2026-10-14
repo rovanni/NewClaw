@@ -12,7 +12,7 @@ import { OpenAIProvider } from './OpenAIProvider';
  * `visionProfile.provider` apontar pra cá sem a imagem nunca chegar ao modelo.
  */
 export class GroqProvider extends OpenAIProvider {
-    constructor(apiKey: string, model: string = 'llama-3.3-70b-versatile') {
+    constructor(apiKey: string, model: string) {   // modelo escolhido pelo usuário (GROQ_MODEL); vazio = não escolhido
         super(apiKey, model, 'https://api.groq.com/openai/v1', 'groq');
         this.name = 'groq';
     }

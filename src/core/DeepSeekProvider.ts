@@ -21,7 +21,7 @@ import { OpenAIProvider } from './OpenAIProvider';
  * formato exato da mensagem.
  */
 export class DeepSeekProvider extends OpenAIProvider {
-    constructor(apiKey: string, model: string = 'deepseek-chat') {
+    constructor(apiKey: string, model: string) {   // modelo escolhido pelo usuário (DEEPSEEK_MODEL); vazio = não escolhido
         super(apiKey, model, 'https://api.deepseek.com/v1', 'deepseek');
         this.name = 'deepseek';
     }
