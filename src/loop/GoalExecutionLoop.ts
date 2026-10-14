@@ -2474,13 +2474,15 @@ export class GoalExecutionLoop {
 
         this.recordFailedAttempt(goal, step, cycle, startMs, { error: `grounding_blocked:${block.state}` });
 
+        // Correção dirigida (14/10/2026): com o trecho da fonte que o juiz citou, o retry sabe o valor certo — não só o que estava errado.
         const claims = block.unconfirmedClaims.slice(0, 5)
-            .map(c => `"${c.claim.slice(0, 160)}" (${c.verdict === 'NOT_SUPPORTED' ? 'os dados coletados contradizem' : 'os dados coletados não confirmam'})`)
+            .map(c => `"${c.claim.slice(0, 160)}" (${c.verdict === 'NOT_SUPPORTED' ? 'os dados coletados contradizem' : 'os dados coletados não confirmam'}` +
+                `${c.trecho ? ` — na fonte: "${c.trecho.slice(0, 160)}"` : ''})`)
             .join('; ');
         const omitted = block.unconfirmedClaims.length > 5 ? ` (+${block.unconfirmedClaims.length - 5})` : '';
         const fact = block.state === 'UNVALIDATED'
             ? 'a resposta anterior deste step não pôde ser verificada contra os dados coletados (o verificador não concluiu); nada nela foi considerado falso'
-            : `na resposta anterior deste step, estas afirmações não foram confirmadas: ${claims}${omitted}. O verificador só confirma o que aparece nos resultados de ferramentas deste goal`;
+            : `na resposta anterior deste step, estas afirmações não foram confirmadas: ${claims}${omitted}. O verificador só confirma o que aparece nos resultados de ferramentas deste goal — informe os valores como aparecem nas fontes; conversão de fuso, unidade, conta ou contagem só com uma ferramenta, mostrando o valor original`;
 
         log.warn(
             `[GROUNDING-BLOCK] goal=${goal.id} step=${step.id} state=${block.state}` +

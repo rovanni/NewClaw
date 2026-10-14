@@ -67,6 +67,8 @@ export interface GroundedClaim {
     /** ids de evidência declarados pelo juiz; vazio = nenhuma evidência pertinente identificada */
     evidence: string[];
     verdict: ClaimVerdict;
+    /** Texto LITERAL da evidência citado pelo juiz (conferido pelo motor): o valor que a fonte mostra — usado na correção dirigida. */
+    trecho?: string;
 }
 
 /** Uma evidência candidata do turno, derivada de ExecutionTrace (ADR-010 §4). */

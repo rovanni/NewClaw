@@ -29,6 +29,8 @@ export interface AfirmacaoJulgada {
     /** ids de evidência citados pelo juiz (E1, E2…); vazio = nenhuma identificada */
     evidence: string[];
     verdict: VereditoDaAfirmacao;
+    /** O texto LITERAL da fonte que o juiz citou (conferido pelo motor) — para quem corrige saber o valor que a fonte mostra. */
+    trecho?: string;
 }
 
 export interface DecisaoDeGrounding {
@@ -44,6 +46,7 @@ export function adaptarGrounding(v: VereditoPadrao): DecisaoDeGrounding {
         // Só ids no formato das evidências do turno (E1, G2…); o resto do texto do campo é descartado.
         evidence: (i.evidencia ?? '').split(/[\s,;]+/).map(x => x.trim()).filter(x => /^[A-Z]\d+$/.test(x)),
         verdict: VEREDITO_POR_CONFERE[i.confere] ?? 'NOT_EVALUABLE',
+        ...(i.trecho ? { trecho: i.trecho } : {}),
     }));
     return { state: estadoDeGrounding(v), claims };
 }

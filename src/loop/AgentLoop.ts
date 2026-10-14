@@ -1264,7 +1264,7 @@ export class AgentLoop {
                         state: g.state,
                         unconfirmedClaims: g.claims
                             .filter((c): c is GroundedClaim & { verdict: 'NOT_SUPPORTED' | 'NOT_EVALUABLE' } => c.verdict !== 'SUPPORTED')
-                            .map(c => ({ claim: c.claim, verdict: c.verdict })),
+                            .map(c => ({ claim: c.claim, verdict: c.verdict, ...(c.trecho ? { trecho: c.trecho } : {}) })),
                     };
                     return AgentLoop.groundingBlockedMessage(g.state, turnState.groundingBlock.unconfirmedClaims);
                 }
@@ -1300,12 +1300,16 @@ export class AgentLoop {
         signal?: AbortSignal,
         recentMessages?: Array<{ role: string; content: string }>,
         /** S5: o que a resposta recusada afirmava e as fontes NÃO sustentaram — o usuário precisa saber que ficou de fora. */
-        unconfirmedClaims: Array<{ claim: string; verdict: 'NOT_SUPPORTED' | 'NOT_EVALUABLE' }> = [],
+        unconfirmedClaims: Array<{ claim: string; verdict: 'NOT_SUPPORTED' | 'NOT_EVALUABLE'; trecho?: string }> = [],
     ): Promise<string | null> {
         try {
             const factsList = supportedClaims.map(c => `- ${c.claim}`).join('\n');
+            // Correção dirigida (14/10/2026): quando o juiz citou o trecho da fonte que contradiz a afirmação, ele vai junto — é o valor
+            // que a fonte mostra. Sem ele, a reescrita sabia O QUE estava errado mas não o valor certo, e refazia a mesma conta errada
+            // (produção 12/10: horários de e-mail convertidos de fuso "de cabeça", contraditos pelos cabeçalhos Date).
             const pendentes = unconfirmedClaims.slice(0, 8)
-                .map(c => `- ${c.claim.slice(0, 160)} (${c.verdict === 'NOT_SUPPORTED' ? 'as fontes dizem outra coisa' : 'as fontes não confirmam'})`).join('\n');
+                .map(c => `- ${c.claim.slice(0, 160)} (${c.verdict === 'NOT_SUPPORTED' ? 'as fontes dizem outra coisa' : 'as fontes não confirmam'})` +
+                    (c.trecho ? ` — na fonte: "${c.trecho.slice(0, 200)}"` : '')).join('\n');
             // role: 'user', não 'system' — achado real (26/08/2026, produção): uma mensagem ÚNICA
             // com role:'system' (sem nenhuma mensagem 'user') fez o provider (Ollama) devolver
             // stream vazio (`done_reason="load"`, 0 chars) em vez de gerar texto, mesmo o modelo já
@@ -1325,7 +1329,9 @@ export class AgentLoop {
                     `provável. Se os fatos acima não permitem responder de forma minimamente útil ao usuário, responda ` +
                     `apenas com a palavra "INSUFICIENTE" e nada mais.` +
                     (pendentes
-                        ? `\n\nPontos da resposta anterior que NÃO foram confirmados (não os afirme na resposta):\n${pendentes}\n` +
+                        ? `\n\nPontos da resposta anterior que NÃO foram confirmados (não os afirme como estavam):\n${pendentes}\n` +
+                          `Quando um ponto traz o trecho da fonte, você PODE informar o valor exatamente como aparece nesse trecho — copiado, sem ` +
+                          `converter fuso, unidade ou formato e sem deduzir nada a partir dele.\n` +
                           `Depois da resposta, numa linha À PARTE que comece com "${MARCA_DO_AVISO_PARCIAL}", diga em UMA frase curta, no idioma do usuário, ` +
                           `que esses pontos não puderam ser confirmados nas fontes consultadas, citando-os de forma breve. Não afirme nada sobre eles.`
                         : ''),

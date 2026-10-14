@@ -213,5 +213,6 @@ export interface ProviderFailure {
 export interface GroundingBlock {
     state: Exclude<GroundingState, 'VALIDATED' | 'NOT_APPLICABLE'>;
     /** Afirmações que o juiz não confirmou. Sempre vazio em UNVALIDATED (o juiz não concluiu). */
-    unconfirmedClaims: Array<{ claim: string; verdict: Exclude<ClaimVerdict, 'SUPPORTED'> }>;
+    /** `trecho`: o texto literal da fonte citado pelo juiz — o valor que a fonte mostra, para a correção dirigida. */
+    unconfirmedClaims: Array<{ claim: string; verdict: Exclude<ClaimVerdict, 'SUPPORTED'>; trecho?: string }>;
 }
