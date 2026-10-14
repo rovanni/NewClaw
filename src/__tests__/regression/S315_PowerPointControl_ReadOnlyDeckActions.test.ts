@@ -54,7 +54,7 @@ async function withServer(run: (base: string) => Promise<void>): Promise<void> {
 }
 
 /** Faz o papel do add-in via HTTP: espera o comando aparecer na fila, devolve-o e posta o resultado. */
-async function fakeAddin(base: string, result: Record<string, unknown>): Promise<{ action: string; args: any }> {
+async function fakeAddin(base: string, result: Record<string, unknown>): Promise<{ action: string; args: any; commandId: string; httpStatus: number }> {
     let cmd: any = null;
     for (let i = 0; i < 100 && !cmd; i++) {
         const r = await fetch(`${base}/api/integrations/powerpoint/commands?sessionId=${SID}`);
@@ -62,10 +62,10 @@ async function fakeAddin(base: string, result: Record<string, unknown>): Promise
         if (!cmd) await new Promise(res => setTimeout(res, 20));
     }
     if (!cmd) throw new Error('nenhum comando chegou na fila');
-    await fetch(`${base}/api/integrations/powerpoint/commands/${cmd.commandId}/result`, {
+    const resposta = await fetch(`${base}/api/integrations/powerpoint/commands/${cmd.commandId}/result`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: SID, ...result }),
     });
-    return { action: cmd.action, args: cmd.args };
+    return { action: cmd.action, args: cmd.args, commandId: cmd.commandId, httpStatus: resposta.status };
 }
 
 async function main(): Promise<void> {
@@ -172,11 +172,25 @@ async function main(): Promise<void> {
         const r4 = await t4;
         assert(r4.success === true && r4.output.length <= DECK_MAX_TOTAL_CHARS, `80 slides: sucesso e saída ≤ ${DECK_MAX_TOTAL_CHARS} (foi ${r4.output.length})`);
 
+        // Payload gigante. Antes este cenário só conferia `r5 !== undefined` e, como o resultado recusado nunca chega, esperava os 60 s do
+        // prazo da tool. Agora confere o MECANISMO de proteção: a rota recusa o corpo (HTTP 413) e nada dele alcança a resposta da tool.
+        // Para não esperar o prazo, um segundo envio, pequeno, informa a falha — a tool resolve na hora.
         const t5 = tool.execute({ action: 'getPresentation' });
-        await fakeAddin(base, { status: 'executed', error: '', data: { slides: [{ slideId: '1', index: 1, title: 'Z'.repeat(5_000_000) }] } });
+        const enviado5 = await fakeAddin(base, { status: 'executed', error: '', data: { slides: [{ slideId: '1', index: 1, title: 'Z'.repeat(5_000_000) }] } });
+        assert(enviado5.httpStatus === 413, 'payload de 5 MB é recusado na entrada (HTTP 413) — a tool nunca recebe lixo gigante', enviado5.httpStatus);
+        await fetch(`${base}/api/integrations/powerpoint/commands/${enviado5.commandId}/result`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: SID, status: 'failed', error: 'resultado grande demais' }),
+        });
         const r5 = await t5;
-        assert(r5 !== undefined, 'payload de 5 MB não derruba o processo (o express.json limita o corpo; a tool nunca recebe lixo gigante)');
+        assert(r5 !== undefined && r5.success === false && !/Z{1000}/.test(String(r5.output)) && String(r5.output).length < 10_000,
+            'o processo segue de pé e a resposta da tool não carrega o payload recusado', String(r5?.output).slice(0, 120));
     });
+    {
+        // O limite que protege a rota de resultado em PRODUÇÃO é o do servidor do painel (este teste monta a mesma rota com o mesmo parser).
+        const servidor = fs.readFileSync(path.join(path.resolve(__dirname, '..', '..'), 'dashboard', 'DashboardServer.ts'), 'utf8');
+        assert(/this\.app\.use\(express\.json\(\)\);/.test(servidor) && !/express\.json\(\s*\{[^}]*limit/.test(servidor),
+            'o painel usa express.json() com o limite padrão (100 KB) — o mesmo que recusa o payload acima');
+    }
 
     console.log('\n[5] E4 — sem aprovação e sem escrita nesta etapa');
     const newActions = accepted.filter(a => a !== 'addTextBox');

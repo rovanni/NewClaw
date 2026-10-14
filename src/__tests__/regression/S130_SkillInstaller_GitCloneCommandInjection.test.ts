@@ -91,7 +91,10 @@ async function main() {
 
     console.log(`\n=== RESULTADO: ${passed} passou, ${failed} falhou ===`);
     fs.rmSync(workDir, { recursive: true, force: true });
-    if (failed > 0) process.exit(1);
+    // Encerramento explícito: `withTimeout` (SkillInstaller.ts) deixa um setTimeout de 60 s pendente depois que o clone termina — inofensivo
+    // no servidor do painel (processo longo, único usuário do SkillInstaller), mas aqui segurava o processo ~58 s DEPOIS do resultado
+    // (medido: RESULTADO aos 3,8 s, saída aos 62,5 s). Nada roda depois desta linha; a decisão já está tomada.
+    process.exit(failed > 0 ? 1 : 0);
 }
 
 main().catch(err => { console.error(err); process.exit(1); });
