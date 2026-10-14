@@ -44,6 +44,10 @@ async function main(): Promise<void> {
         assert(seg.detectarSegredos(`la contraseña es ${SENHA_ROTULADA}`).includes(SENHA_ROTULADA), 'valor rotulado (es)');
         assert(seg.detectarSegredos(`password: ${SENHA_ROTULADA}.`).includes(SENHA_ROTULADA), 'valor rotulado com dois-pontos, sem a pontuação final');
         assert(seg.detectarSegredos(`use ${CHAVE_SK}`).includes(CHAVE_SK), 'formato inconfundível (sk-…) mesmo sem palavra de credencial');
+        // Validação real (14/10/2026): estas duas passavam em claro — várias palavras entre o rótulo e o verbo, e o "é".
+        assert(seg.detectarSegredos(`A senha do servidor de teste é ${SENHA_ROTULADA}`).includes(SENHA_ROTULADA), 'rótulo, várias palavras e o verbo "é" (a frase da validação real)');
+        assert(seg.detectarSegredos(`a senha é ${SENHA_ROTULADA}`).includes(SENHA_ROTULADA), '"a senha é X" (o "é" precisa casar sem \\b)');
+        assert(seg.detectarSegredos('a senha do wifi da casa é muito difícil de lembrar').length === 0, 'prosa com rótulo e "é", sem valor com cara de senha, não é guardada');
         assert(seg.detectarSegredos('esta casa fica logo ali, pode ir').length === 0, 'quatro palavras de quatro letras sem contexto de credencial não são senha');
         assert(seg.detectarSegredos('a senha é complicada demais para lembrar').length === 0, '"a senha é complicada" não guarda "complicada" (sem cara de senha)');
 
@@ -117,6 +121,19 @@ async function main(): Promise<void> {
         assert(/SENHAS E CHAVES \(<SEGREDO:nome>\)/.test(src('core', 'agentControllerSetup.ts')), 'o agente sabe usar o marcador nos argumentos');
         const aprendizado = src('loop', 'aprendizadoDeSkills.ts');
         assert(/from '\.\.\/shared\/segredos'/.test(aprendizado) && !/const FORMATOS_DE_CREDENCIAL/.test(aprendizado), 'os padrões de credencial vivem num lugar só');
+
+        console.log('\n=== S395-6b — o planejador não trata o marcador como placeholder (validação real, 14/10/2026) ===');
+        {
+            const { PLACEHOLDER_ARG_PATTERN } = require('../../shared/placeholderPatterns') as typeof import('../../shared/placeholderPatterns');
+            assert(!PLACEHOLDER_ARG_PATTERN.test('password=<SEGREDO:senha_1>'), 'o marcador do cofre é um valor legítimo num argumento de plano');
+            assert(PLACEHOLDER_ARG_PATTERN.test('password=<a senha>') && PLACEHOLDER_ARG_PATTERN.test('user=<usuario> pass=<SEGREDO:x>'), 'um placeholder de verdade continua sendo pego, mesmo ao lado de um marcador');
+        }
+
+        console.log('\n=== S395-6c — gravações diretas em disco também mascaram (validação real, 14/10/2026) ===');
+        // O validador de conclusão lê o arquivo gerado direto do disco; o modelo recebeu o marcador (ProviderFactory), mas o
+        // gravador de voo dos avaliadores registrava o prompt cru — o valor apareceu em logs/avaliadores.
+        assert(/JSON\.stringify\(capar\(mascararProfundo\(/.test(src('shared', 'evaluatorFlightRecorder.ts')), 'o gravador de voo dos avaliadores mascara antes de gravar');
+        assert(/JSON\.stringify\(mascararProfundo\(entry\)\)/.test(src('session', 'SessionTranscript.ts')), 'a transcrição da sessão mascara antes de gravar');
 
         console.log('\n=== S395-7 — apagar ===');
         assert(seg.apagarSegredo('gmail', envPath) && process.env.SEGREDO_GMAIL === undefined && !fs.readFileSync(envPath, 'utf-8').includes('SEGREDO_GMAIL='), '/segredo_apagar remove do cofre e do .env');

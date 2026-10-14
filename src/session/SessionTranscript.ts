@@ -18,6 +18,7 @@ import path from 'path';
 import { mkdirSync, existsSync } from 'fs';
 import readline from 'readline';
 import { createLogger } from '../shared/AppLogger';
+import { mascararProfundo } from '../shared/segredos';
 import { toFileSafeId } from './SessionKeyFactory';
 const log = createLogger('Sessiontranscript');
 
@@ -241,7 +242,7 @@ export class SessionTranscript {
             meta
         };
 
-        const line = JSON.stringify(entry) + '\n';
+        const line = JSON.stringify(mascararProfundo(entry)) + '\n';   // ADR-019: nenhum valor do cofre vai ao disco
         const offset = this.index.lastOffset;
         this.writeStream.write(line);
 

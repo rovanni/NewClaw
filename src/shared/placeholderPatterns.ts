@@ -18,5 +18,8 @@
 // falhou como "arquivo não encontrado" — sem a mensagem que diz ao modelo que aquilo é um caminho-exemplo.
 // À direita, `(?![a-z0-9])` em vez de \b: aceita "_" (o caso real era "caminho_absoluto_workspace") mas não outra
 // letra ("full_paths.py" é nome de arquivo legítimo).
+// ADR-019: `<SEGREDO:nome>` NÃO é placeholder — é o marcador de uma senha do cofre, que só vira valor na execução da
+// ferramenta. Validação real de 14/10/2026: o planejador escreveu `content="password=<SEGREDO:senha_1>"` (certo), este
+// padrão o tomou por placeholder, o passo foi rebaixado ao AgentLoop e o agente INVENTOU uma senha no lugar.
 export const PLACEHOLDER_ARG_PATTERN =
-    /\b(caminho_do|path_to|arquivo_identificado|the_file_path|nome_do_arquivo|your_file|nome_arquivo|caminho\/do)\b|\b(caminho_absoluto|caminho_completo|absolute_path|full_path|path_absoluto)(?![a-z0-9])|\{[a-zA-Z_][a-zA-Z0-9_]{0,40}\}|<[^<>{}\n]{1,60}>|\/path\/to\/|\/caminho\/do\/|\{\{step_\d+\.output\}\}/i;
+    /\b(caminho_do|path_to|arquivo_identificado|the_file_path|nome_do_arquivo|your_file|nome_arquivo|caminho\/do)\b|\b(caminho_absoluto|caminho_completo|absolute_path|full_path|path_absoluto)(?![a-z0-9])|\{[a-zA-Z_][a-zA-Z0-9_]{0,40}\}|<(?!SEGREDO:[A-Za-z0-9_]+>)[^<>{}\n]{1,60}>|\/path\/to\/|\/caminho\/do\/|\{\{step_\d+\.output\}\}/i;

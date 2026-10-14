@@ -31,8 +31,12 @@ export const SENHA_DE_APP = /\b(?:[a-z]{4} ){3}[a-z]{4}\b/g;
 /** Palavra de credencial em pt-BR/en/es — o contexto que torna a senha de app (ou um valor rotulado) inequívoca. */
 const PALAVRA_DE_CREDENCIAL = /\b(senhas?|password|passwd|pwd|contrase(ñ|n)as?|claves?|chaves?|tokens?|api[ _-]?keys?|secret|segredo)\b/i;
 
-/** "senha: X", "password = X", "a senha é X", "my password is X", "la contraseña es X". */
-const VALOR_ROTULADO = /\b(?:senhas?|password|passwd|pwd|contrase(?:ñ|n)as?|claves?|token|api[ _-]?key|secret)\b(?:\s+(?:do|da|de|of|del|for|para)\s+[\w.@-]+)?\s*(?:[:=]|\b(?:é|e|is|es|será)\b)\s*["'`]?([^\s"'`]{6,})/gi;
+/**
+ * "senha: X", "password = X", "a senha é X", "a senha do servidor de teste é X", "my password is X", "la contraseña es X".
+ * Até 6 palavras entre o rótulo e o verbo/sinal. O verbo é procurado depois de ESPAÇO, não de `\b`: sem o modo unicode,
+ * `\b` não vê fronteira antes de "é" — achado na validação real de 14/10/2026 (a frase acima passou em claro).
+ */
+const VALOR_ROTULADO = /\b(?:senhas?|password|passwd|pwd|contrase(?:ñ|n)as?|claves?|chaves?|token|api[ _-]?key|secret)\b(?:\s+[^\s:=]+){0,6}?(?:\s*[:=]|\s+(?:é|e|is|es|será|são|son))\s*["'`]?([^\s"'`]{6,})/gi;
 
 /** Variável com nome sensível cujo VALOR não é segredo (ex.: WHATSAPP_AUTH_DIR é uma pasta) — não é mascarada. */
 const NAO_E_VALOR_SECRETO = /_(DIR|PATH|FILE|URL|MODE|ENABLED|TIMEOUT|PORT)$/i;

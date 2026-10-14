@@ -20,6 +20,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { createHash, randomBytes } from 'crypto';
 import type { AttemptTelemetry, CallTelemetry } from '../core/providerTypes';
+import { mascararProfundo } from './segredos';   // ADR-019: o registro em disco nunca leva valor do cofre
 
 /** `validacao_<tipo>`: tipos executados pelo motor único (ADR-014). */
 export type Avaliador = 'juiz_grounding' | 'validador_qualidade' | 'analise_risco' | `validacao_${string}`;
@@ -163,7 +164,7 @@ function gravar(avaliador: Avaliador, registro: Record<string, unknown>): void {
         const agora = new Date();
         const hoje = `${agora.getFullYear()}-${String(agora.getMonth() + 1).padStart(2, '0')}-${String(agora.getDate()).padStart(2, '0')}`;
         limparAntigos(pasta, hoje);
-        fs.appendFileSync(path.join(pasta, `${avaliador}-${hoje}.jsonl`), JSON.stringify(capar({ v: 1, ts: agora.toISOString(), ...registro })) + '\n', 'utf8');
+        fs.appendFileSync(path.join(pasta, `${avaliador}-${hoje}.jsonl`), JSON.stringify(capar(mascararProfundo({ v: 1, ts: agora.toISOString(), ...registro }))) + '\n', 'utf8');
     } catch { /* observabilidade nunca pode afetar o julgamento */ }
 }
 
