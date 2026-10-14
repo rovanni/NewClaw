@@ -1,28 +1,23 @@
 /// <reference types="node" />
 /**
- * TESTE DE REGRESSÃO — S389 (Campanha 2 — Sprint J1)
+ * TESTE DE REGRESSÃO — S389 (Campanha 2 — Sprint J1; política revista em 14/10/2026)
  *
- * Incidente real (12/10/2026 07:46):
- * O agente coletou com sucesso os 5 e-mails reais do usuário via CLI himalaya logo no 1º minuto.
- * A resposta final foi gerada com base nesses fatos. Porém, a verificação de groundedness
- * sofreu timeout no modo de raciocínio livre do juiz, gerando veredito inicial `UNVALIDATED`.
+ * Incidente real (12/10/2026 07:46): o agente coletou os e-mails do usuário no 1º minuto, mas o juiz de grounding estourou o prazo
+ * (UNVALIDATED). O código de então descartava a resposta e o goal replanejava por 33 minutos. A Sprint J1 passou a REVALIDAR a mesma
+ * resposta (mais uma chamada inteira do juiz, ~200 s) antes de descartar.
  *
- * No código anterior, `UNVALIDATED` caía diretamente no descarte da resposta e na emissão de
- * mensagem de bloqueio, fazendo o GoalExecutionLoop descartar todo o trabalho das ferramentas
- * e replanejar criando scripts repetitivos em disco até estourar 33 minutos de timeout.
+ * Decisão da mantenedora (14/10/2026, ADR-010 — adendo): quando o juiz NÃO CONCLUI, a resposta é ENTREGUE com um aviso explícito de que
+ * não foi conferida — sem a segunda espera e sem replanejar. Quando o juiz CONCLUI e acha problema (REJECTED/NOT_EVALUABLE), continua
+ * bloqueando, com a correção dirigida (S394). O nome do arquivo foi mantido para preservar o histórico.
  *
- * Correção J1:
- * Conforme ADR-010 §9, `UNVALIDATED` representa uma falha puramente transitória do verificador
- * (estouro de tempo limite ou recurso indisponível), e não falsidade das afirmações da resposta.
- * O `AgentLoop` agora tenta uma revalidação imediata da MESMA resposta (`phase: 'revalidation'`).
- * Se o verificador concluir (`VALIDATED` ou `NOT_APPLICABLE`), a resposta original é aproveitada
- * e devolvida diretamente ao usuário.
+ * REGRESSÃO SE: UNVALIDATED voltar a bloquear ou a pagar uma segunda chamada do juiz; o aviso sumir ou sair fora do idioma configurado;
+ * ou REJECTED/NOT_EVALUABLE passarem a ser entregues.
  *
  * Execução: npx ts-node src/__tests__/regression/S389_AgentLoop_UnvalidatedRevalidation.test.ts
  */
-
 import * as fs from 'fs';
 import * as path from 'path';
+import { AgentLoop } from '../../loop/AgentLoop';
 
 let passed = 0;
 let failed = 0;
@@ -31,51 +26,27 @@ function assert(condition: boolean, message: string, detail?: unknown): void {
     else { console.error(`  ❌ FALHOU: ${message}`, detail ?? ''); failed++; }
 }
 
-const agentLoopPath = path.join(process.cwd(), 'src', 'loop', 'AgentLoop.ts');
-const agentLoopSource = fs.readFileSync(agentLoopPath, 'utf-8');
+const fonte = fs.readFileSync(path.join(process.cwd(), 'src', 'loop', 'AgentLoop.ts'), 'utf-8');
 
-async function main(): Promise<void> {
-    console.log('\n=== S389-1 — Revalidação da mesma resposta após UNVALIDATED inicial ===');
-    {
-        const unvalidatedBlockIdx = agentLoopSource.indexOf("if (g.state === 'UNVALIDATED')");
-        assert(unvalidatedBlockIdx > -1, "AgentLoop contém guard específico para 'UNVALIDATED'");
-
-        const partialBlockIdx = agentLoopSource.indexOf('const supportedClaims = g.claims.filter');
-        assert(unvalidatedBlockIdx > partialBlockIdx, 'o guard de UNVALIDATED fica após o tratamento de resposta parcial');
-
-        const blockContent = agentLoopSource.slice(unvalidatedBlockIdx, unvalidatedBlockIdx + 2000);
-
-        assert(/this\.observer\.validateGrounding\(response, evidences, signal/.test(blockContent),
-            'AgentLoop chama validateGrounding passando a resposta original (response) e as evidências');
-
-        assert(/phase:\s*'revalidation'/.test(blockContent),
-            "chamada de revalidação especifica phase: 'revalidation'");
-
-        assert(/if\s*\(reval\.state === 'VALIDATED' \|\| reval\.state === 'NOT_APPLICABLE'\)/.test(blockContent),
-            'se a revalidação retornar VALIDATED ou NOT_APPLICABLE, aceita');
-
-        assert(/return revalidatedResponse;/.test(blockContent),
-            'resposta original é liberada e retornada quando a revalidação tem sucesso');
-
-        assert(/resposta_liberada_apos_unvalidated/.test(blockContent),
-            'efeito no gravador de voo é registrado adequadamente');
-    }
-
-    console.log('\n=== S389-2 — Tipagem de ObserverValidator aceita fase revalidation ===');
-    {
-        const observerPath = path.join(process.cwd(), 'src', 'loop', 'ObserverValidator.ts');
-        const observerSource = fs.readFileSync(observerPath, 'utf-8');
-
-        assert(/phase\?:\s*'(initial|revalidation|partial-revalidation|shadow-extended|shadow-model)'[^;]*;/.test(observerSource) &&
-               observerSource.includes("'revalidation'"),
-            "GroundingContext em ObserverValidator.ts inclui 'revalidation' na união de tipos");
-    }
-
-    console.log(`\nResultado: ${passed} passaram, ${failed} falharam.`);
-    if (failed > 0) process.exit(1);
+console.log('\n=== S389-1 — UNVALIDATED: entrega com aviso, sem segunda chamada do juiz ===');
+{
+    const i = fonte.indexOf("if (g.state === 'UNVALIDATED')");
+    const bloco = fonte.slice(i, fonte.indexOf('}', fonte.indexOf('return AgentLoop.comAvisoSemVeredito(response);', i)) + 1);
+    assert(i > -1 && bloco.includes('return AgentLoop.comAvisoSemVeredito(response);'), 'o ramo UNVALIDATED devolve a resposta com o aviso', bloco.slice(0, 200));
+    assert(!/validateGrounding\(/.test(bloco), 'o ramo UNVALIDATED NÃO chama o juiz de novo (a espera de ~200 s saiu)');
+    assert(/resposta_entregue_sem_veredito/.test(bloco), 'o efeito vai para o gravador de voo');
+    assert(fonte.indexOf("if (g.state === 'UNVALIDATED')") > fonte.indexOf('const supportedClaims = g.claims.filter'), 'vem depois da tentativa de resposta parcial (que só existe com afirmações confirmadas)');
+    assert(/groundingBlockedMessage\(g\.state, turnState\.groundingBlock\.unconfirmedClaims\)/.test(fonte), 'REJECTED/NOT_EVALUABLE continuam bloqueando');
 }
 
-main().catch(err => {
-    console.error('Erro inesperado no teste S389:', err);
-    process.exit(1);
-});
+console.log('\n=== S389-2 — o aviso, nos três idiomas suportados ===');
+{
+    const r = AgentLoop.comAvisoSemVeredito('Faz 18 °C.  ', 'pt-BR');
+    assert(r.startsWith('Faz 18 °C.') && r.endsWith(AgentLoop.AVISO_SEM_VEREDITO['pt-BR']) && /não consegui conferir/i.test(r), 'pt-BR: resposta íntegra + aviso', r);
+    assert(AgentLoop.comAvisoSemVeredito('ok', 'en-US').endsWith(AgentLoop.AVISO_SEM_VEREDITO['en-US']) && /could not check/.test(AgentLoop.AVISO_SEM_VEREDITO['en-US']), 'en-US');
+    assert(AgentLoop.comAvisoSemVeredito('ok', 'es-ES').endsWith(AgentLoop.AVISO_SEM_VEREDITO['es-ES']) && /No pude verificar/.test(AgentLoop.AVISO_SEM_VEREDITO['es-ES']), 'es-ES');
+    assert(AgentLoop.comAvisoSemVeredito('ok', 'xx-YY').endsWith(AgentLoop.AVISO_SEM_VEREDITO['pt-BR']), 'idioma desconhecido → pt-BR (o padrão do projeto)');
+}
+
+console.log(`\nResultado: ${passed} passaram, ${failed} falharam.`);
+if (failed > 0) process.exit(1);

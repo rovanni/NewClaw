@@ -426,3 +426,21 @@ PRÓXIMO PASSO:         IMPLEMENTAR C1 CONFORME ESTA ADR
   a posteriori é o que esta ADR decide.
 - **Segundo modelo para reduzir correlação de erro.** Depende da instalação; o contrato funciona
   com um modelo, com garantia declaradamente mais fraca.
+
+---
+
+## Adendo — 14/10/2026: sem veredito, a resposta é entregue com aviso (revisa o §9)
+
+**Decisão da mantenedora.** Quando o juiz NÃO CONCLUI (`UNVALIDATED`: prazo esgotado, provedor fora, falha antes de julgar), a
+resposta é entregue com um aviso explícito, no idioma configurado, de que não foi conferida contra os dados. Não há mais a
+revalidação da mesma resposta (mais uma chamada inteira do juiz) nem o bloqueio que levava o goal a replanejar.
+`REJECTED` e `NOT_EVALUABLE` — o juiz concluiu e encontrou afirmações contraditas ou sem sustentação — continuam bloqueando, agora
+com correção dirigida: o trecho da fonte citado pelo juiz chega ao retry e à reescrita parcial (S394).
+
+**Evidência.** Produção, Windows, 12/10/2026, "E meus e-mails alguma novidade?": a resposta ficou pronta em 1 min 44 s; quatro
+julgamentos estouraram o prazo (~205 s cada, 107 mil caracteres de raciocínio sem resposta) e o pedido foi abandonado após 34 min.
+Reproduzido 7 vezes contra o mesmo modelo: o juiz gasta o tempo refazendo conversões de fuso horário que o agente fez de cabeça —
+e que estavam erradas. Por isso a outra metade da correção é do lado do agente (prompt: dados como as ferramentas mostraram).
+
+**O que muda do §9.** O princípio "o juiz que não conclui nunca é aprovação" continua: a resposta NÃO é marcada como validada, e o
+usuário é avisado disso — a decisão de confiar passa a ele, em vez de o sistema reter a resposta. Testes: S217, S320, S389.

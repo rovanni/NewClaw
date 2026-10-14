@@ -129,12 +129,12 @@ console.log('\n=== S320-1 — AgentLoop: bloqueio sai como fato estruturado, com
 
 console.log('\n=== S320-2 — AgentLoop: UNVALIDATED (juiz não concluiu) e exceção antes do julgamento ===');
 {
+    // Decisão de 14/10/2026 (ADR-010, adendo): sem veredito, a resposta é ENTREGUE com aviso — não vira bloqueio para o goal replanejar.
+    const aviso = AgentLoop.AVISO_SEM_VEREDITO['pt-BR'];
     const r1 = await runTurn(makeAgentLoop([verdict('UNVALIDATED')]), 'conv-s320-2a', 1);
-    const b1 = typeof r1 === 'string' ? undefined : r1.groundingBlock;
-    assert(b1?.state === 'UNVALIDATED' && b1.unconfirmedClaims.length === 0, 'UNVALIDATED sai com unconfirmedClaims vazio', b1);
+    assert(typeof r1 === 'string' && r1.startsWith('resposta 0') && r1.endsWith(aviso), 'UNVALIDATED: a resposta sai, com o aviso de que não foi conferida, e sem sinal de bloqueio', r1);
     const r2 = await runTurn(makeAgentLoop([new Error('getBudgetAuxiliar explodiu')]), 'conv-s320-2b', 1);
-    const b2 = typeof r2 === 'string' ? undefined : r2.groundingBlock;
-    assert(b2?.state === 'UNVALIDATED', 'falha antes do julgamento também sai como UNVALIDATED estruturado', b2);
+    assert(typeof r2 === 'string' && r2.startsWith('resposta 0') && r2.endsWith(aviso), 'falha antes do julgamento: mesma política — entregue com aviso, nunca em silêncio', r2);
 }
 
 console.log('\n=== S320-3 — AgentLoop: resposta aprovada não carrega o sinal; commit aprovado DEPOIS de um bloqueio o apaga ===');

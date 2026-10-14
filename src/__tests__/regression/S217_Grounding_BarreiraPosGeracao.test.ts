@@ -324,8 +324,10 @@ console.log('\n=== S217-16 — exceção do próprio gate → UNVALIDATED → bl
     const gate = agent.slice(ini, agent.indexOf('return response;', ini));
     assert(ini > 0 && gate.length > 0, 'o gate foi localizado no fonte', { ini, len: gate.length });
     assert(/try\s*\{[\s\S]*validateGrounding\(/.test(gate), 'a chamada ao juiz está dentro de um try próprio', gate.slice(0, 200));
-    assert(/catch[\s\S]*groundingBlockedMessage\('UNVALIDATED'\)/.test(gate),
-        'e o catch desse try BLOQUEIA com UNVALIDATED, em vez de deixar subir para o catch fail-open');
+    // Decisão de 14/10/2026 (ADR-010, adendo): sem veredito, a resposta sai COM AVISO de que não foi conferida — nunca sobe em silêncio
+    // para o catch fail-open (que entregaria sem aviso nenhum).
+    assert(/catch[\s\S]*comAvisoSemVeredito\(response\)/.test(gate),
+        'e o catch desse try não deixa subir para o catch fail-open: entrega COM AVISO de que não foi conferida');
 }
 
 console.log('\n=== S217-17 — args só da invocação adjacente da mesma ferramenta ===');

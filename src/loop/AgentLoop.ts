@@ -937,6 +937,21 @@ export class AgentLoop {
      * passo 6). Herda o mesmo débito de idioma que toda mensagem fixa deste método já tinha antes
      * desta correção (Core só emite pt-BR — issue 018, fora do escopo aqui).
      */
+    /**
+     * Aviso de resposta entregue sem veredito do juiz (ADR-010, adendo de 14/10/2026). Texto fixo do núcleo, no idioma configurado
+     * (APP_LANG) — o núcleo não tem tabela de traduções; as três línguas suportadas ficam aqui, juntas.
+     */
+    static readonly AVISO_SEM_VEREDITO: Record<string, string> = {
+        'pt-BR': '⚠️ Não consegui conferir esta resposta contra os dados obtidos a tempo — confirme os detalhes importantes antes de usar.',
+        'en-US': '⚠️ I could not check this answer against the retrieved data in time — confirm the important details before relying on it.',
+        'es-ES': '⚠️ No pude verificar a tiempo esta respuesta con los datos obtenidos — confirma los detalles importantes antes de usarla.',
+    };
+
+    static comAvisoSemVeredito(resposta: string, idioma: string = process.env.APP_LANG || 'pt-BR'): string {
+        const aviso = AgentLoop.AVISO_SEM_VEREDITO[idioma] ?? AgentLoop.AVISO_SEM_VEREDITO['pt-BR'];
+        return `${resposta.trimEnd()}\n\n${aviso}`;
+    }
+
     private static groundingBlockedMessage(state: GroundingState, unconfirmedClaims?: Array<{ claim: string; verdict: string }>): string {
         const claimsList = unconfirmedClaims && unconfirmedClaims.length > 0
             ? '\n\n' + (state === 'REJECTED' ? 'Pontos divergentes encontrados:\n' : 'Pontos que não foram confirmados pelas fontes:\n') +
@@ -1240,22 +1255,14 @@ export class AgentLoop {
                     }
 
                     if (g.state === 'UNVALIDATED') {
-                        // ADR-010 §9: UNVALIDATED é falha transitória do verificador (timeout/recurso),
-                        // não falsidade do conteúdo. Revalida a MESMA resposta uma vez antes de descartá-la.
-                        try {
-                            const reval = await this.observer.validateGrounding(response, evidences, signal, {
-                                traceId: trace.id, conversationId, phase: 'revalidation', userRequest: userText,
-                                recentMessages: channelContext?.recentMessages, ...channelContext?.goalTrace,
-                            });
-                            if (reval.state === 'VALIDATED' || reval.state === 'NOT_APPLICABLE') {
-                                log.info(`[${this.ts()}] [GROUNDING] resposta revalidada com sucesso após UNVALIDATED inicial`);
-                                efeitoDoJuiz('resposta_liberada_apos_unvalidated', { estado: reval.state });
-                                const revalidatedResponse = response;
-                                return revalidatedResponse;
-                            }
-                        } catch (revalErr) {
-                            log.warn(`[${this.ts()}] [GROUNDING] revalidação de UNVALIDATED falhou: ${errorMessage(revalErr)}`);
-                        }
+                        // Decisão da mantenedora (14/10/2026, ADR-010 adendo): o juiz que NÃO CONCLUIU (prazo, provedor) não disse
+                        // que a resposta está errada — entrega-se a resposta com um aviso explícito de que não foi conferida, em vez
+                        // de bloquear e replanejar (produção 12/10: 34 min até abandonar um pedido cuja resposta saiu em 1 min 44 s).
+                        // Sem a revalidação de antes: era mais uma chamada inteira do juiz (~200 s) na frente do usuário.
+                        // REJECTED/NOT_EVALUABLE (o juiz concluiu e achou problema) continuam bloqueando, com correção dirigida.
+                        efeitoDoJuiz('resposta_entregue_sem_veredito', { estado: g.state, motivo: (g.reason ?? '').slice(0, 120) });
+                        log.warn(`[${this.ts()}] [GROUNDING] juiz não concluiu — entregando COM AVISO (${g.reason})`);
+                        return AgentLoop.comAvisoSemVeredito(response);
                     }
 
                     log.info(`[GROUNDING-TRACE] ${JSON.stringify({ v: 1, phase: 'decision', traceId: trace.id, conversationId, ...channelContext?.goalTrace, state: g.state, claimsTotal: g.claims.length, supported: supportedClaims.length, path: supportedClaims.length > 0 ? 'blocked_partial_rejected' : 'blocked_no_supported_claims', evidenceSources: { turn: evidences.length - (channelContext?.priorStepEvidence?.length ?? 0), priorSteps: channelContext?.priorStepEvidence?.length ?? 0 } })}`);
@@ -1269,9 +1276,9 @@ export class AgentLoop {
                     return AgentLoop.groundingBlockedMessage(g.state, turnState.groundingBlock.unconfirmedClaims);
                 }
             } catch (groundingErr) {
-                log.warn(`[${this.ts()}] [GROUNDING] falha antes do julgamento (${errorMessage(groundingErr)}) — bloqueando por segurança`);
-                turnState.groundingBlock = { state: 'UNVALIDATED', unconfirmedClaims: [] };
-                return AgentLoop.groundingBlockedMessage('UNVALIDATED');
+                // O juiz nem chegou a julgar: mesma política de "sem veredito" acima — entrega com aviso (decisão de 14/10/2026).
+                log.warn(`[${this.ts()}] [GROUNDING] falha antes do julgamento (${errorMessage(groundingErr)}) — entregando COM AVISO`);
+                return AgentLoop.comAvisoSemVeredito(response);
             }
 
             return response;
