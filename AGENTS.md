@@ -15,6 +15,11 @@
 
 6. **Verificar regressões e o fluxo completo de navegação.** Após cada modificação, verifique as regressões pertinentes e percorra a navegação como uma pessoa usuária iniciante, seguindo o fluxo completo desde o início até o resultado, sem pular etapas. Informe o que foi verificado e quaisquer limitações do ambiente. Não afirme que verificações foram feitas se não foram executadas.
 
+    A suíte de regressão completa leva mais de meia hora; por isso, duas etapas:
+
+    - **Durante o trabalho:** `npm run test:regression:afetados` — roda só os testes afetados pelas mudanças desde que a branch saiu de `origin/main` (commits, alterações não commitadas e arquivos novos). A seleção é conservadora e mostra o motivo de cada teste escolhido (ver `docs/testes/TESTES_AFETADOS.md`).
+    - **Ao terminar, antes de enviar ao GitHub (push ou PR):** a suíte completa, `npm run test:regression`. O resultado dos afetados nunca substitui a completa nem pode ser relatado como "suíte verde" — o relatório diz `modo: "afetados"`. O CI também roda a completa em todo push e PR.
+
 7. **Consultar os alertas de segurança do GitHub.** Ao trabalhar neste projeto, verifique os problemas reportados em [GitHub Security do NewClaw](https://github.com/rovanni/NewClaw/security) e considere os alertas relevantes para a mudança investigada.
 
 8. **Determinar quem decide e com quais informações.** Antes de escolher mecanismo para uma decisão, siga a diretriz **Responsabilidade antes do Mecanismo** (`docs/ARCHITECTURE/RESPONSABILIDADE_ANTES_DO_MECANISMO.md`): determinismo valida aspectos objetivos e estruturais; interpretação semântica cabe ao LLM ou componente semântico apropriado, sem regex ou heurísticas como substitutos. Para qualquer decisão delegada a um LLM, aplique **Informação Completa para Decidir** (`docs/ARCHITECTURE/INFORMACAO_COMPLETA_PARA_DECIDIR.md`): forneça as informações necessárias para a decisão, torne lacunas explícitas e não espere que o modelo infira contexto que não recebeu.

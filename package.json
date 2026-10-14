@@ -11,6 +11,7 @@
     "recover": "node scripts/recover-db.cjs",
     "test:regression": "node scripts/run-regression-tests.cjs",
     "test:regression:selftest": "node scripts/run-regression-tests.cjs --selftest",
+    "test:regression:afetados": "node scripts/run-regression-tests.cjs --afetados",
     "test:integration": "ts-node scripts/testes/integration-campaign-runner.ts"
   },
   "//optionalDependencies": "newclaw-kernel-adapter é um pacote NÃO publicado, resolvido por caminho relativo (file:../newclaw-kernel-adapter) que só existe quando os dois repositórios são irmãos na mesma máquina. Como dependência normal, quebrava `npm run build` em toda instalação que não fosse a do autor — inclusive qualquer clone do GitHub. Fica como opcional: npm ignora a falha de instalação, e CognitiveKernelGate carrega o pacote sob demanda, desativando o gate quando ausente.",

@@ -34,6 +34,13 @@
  *   node scripts/run-regression-tests.cjs --allow-empty           → zero testes não é falha (exceção explícita)
  *   node scripts/run-regression-tests.cjs --strict-skips          → qualquer teste IGNORADO conta como falha
  *   node scripts/run-regression-tests.cjs --selftest              → prova (fixtures descartáveis) que o harness detecta tudo isso
+ *   node scripts/run-regression-tests.cjs --afetados              → só os testes afetados pelas mudanças desde que a branch saiu de
+ *                                                                   origin/main (commits + não commitadas + novos); seleção em
+ *                                                                   scripts/testes-afetados.cjs. Para o dia a dia — NÃO substitui a
+ *                                                                   completa antes do push (o relatório diz `modo: "afetados"`)
+ *   node scripts/run-regression-tests.cjs --base <ref>            → idem, comparando com outra referência (implica --afetados)
+ *   node scripts/run-regression-tests.cjs --mapa-de-leituras m.json → registra os arquivos do repositório que cada teste lê de fato
+ *                                                                   (serve para conferir a seleção por módulo)
  */
 const fs = require('fs');
 const os = require('os');
@@ -59,11 +66,15 @@ const CODIGO_DE_TESTE_IGNORADO = 77;
 const LINHA_DE_MOTIVO = /^SKIP:\s*(.+)$/m;
 
 function lerArgumentos(argv) {
-    const opcoes = { selftest: false, allowEmpty: false, strictSkips: false, dir: null, report: null, filter: null, timeoutMs: TIMEOUT_PADRAO_MS };
+    const opcoes = { selftest: false, allowEmpty: false, strictSkips: false, dir: null, report: null, filter: null, timeoutMs: TIMEOUT_PADRAO_MS,
+        afetados: false, base: null, mapaDeLeituras: null };
     for (let i = 0; i < argv.length; i++) {
         const a = argv[i];
         const valor = () => (a.includes('=') ? a.slice(a.indexOf('=') + 1) : argv[++i]);
         if (a === '--selftest') opcoes.selftest = true;
+        else if (a === '--afetados') opcoes.afetados = true;
+        else if (a === '--base' || a.startsWith('--base=')) { opcoes.base = valor(); opcoes.afetados = true; }
+        else if (a === '--mapa-de-leituras' || a.startsWith('--mapa-de-leituras=')) opcoes.mapaDeLeituras = valor();
         else if (a === '--allow-empty') opcoes.allowEmpty = true;
         else if (a === '--strict-skips') opcoes.strictSkips = true;
         else if (a === '--dir' || a.startsWith('--dir=')) opcoes.dir = valor();
@@ -79,6 +90,8 @@ function lerArgumentos(argv) {
 }
 
 let sequencia = 0;
+/** `--mapa-de-leituras`: o preload registra os arquivos do repositório que cada teste lê (só observação). */
+let registrarLeituras = false;
 
 function runOne(filePath, timeoutMs = TIMEOUT_PADRAO_MS) {
     const arquivoDeMedicao = path.join(os.tmpdir(), `nc-regressao-${process.pid}-${sequencia++}.json`);
@@ -86,6 +99,7 @@ function runOne(filePath, timeoutMs = TIMEOUT_PADRAO_MS) {
     const env = {
         ...process.env,
         NC_TIMING_FILE: arquivoDeMedicao,
+        ...(registrarLeituras ? { NC_REGISTRAR_LEITURAS: '1' } : {}),
         NC_ORIG_NODE_OPTIONS: nodeOptionsOriginal,
         // Barras normais: o NODE_OPTIONS trata a barra invertida como escape (no Windows o caminho chegava corrompido).
         NODE_OPTIONS: `${nodeOptionsOriginal} --require "${PRELOAD.replace(/\\/g, '/')}"`.trim(),
@@ -125,6 +139,7 @@ function runOne(filePath, timeoutMs = TIMEOUT_PADRAO_MS) {
         rssMB: medicao ? medicao.rssMB : null,
         failMarkers: marcadores,
         motivoIgnorado: status === 'skipped' ? motivoIgnorado : null,
+        leituras: medicao && Array.isArray(medicao.leituras) ? medicao.leituras : null,
         stdout,
         stderr,
     };
@@ -186,6 +201,9 @@ function montarRelatorio(results, descobertos, duracaoTotalMs, opcoes) {
         arvoreLimpa: commitDoGit ? sujos.length === 0 : null,
         arquivosAlterados: sujos.slice(0, 40),
         comando: `node scripts/run-regression-tests.cjs ${process.argv.slice(2).join(' ')}`.trim(),
+        // "completa" | "filtrada" | "afetados": um relatório parcial nunca se passa pelo da suíte inteira.
+        modo: opcoes.selecao ? 'afetados' : opcoes.filter ? 'filtrada' : 'completa',
+        ...(opcoes.selecao ? { selecao: opcoes.selecao } : {}),
         timeoutPorTesteMs: opcoes.timeoutMs,
         totais: {
             descobertos: descobertos,
@@ -218,11 +236,61 @@ function executar(opcoes) {
         console.error(`Nenhum teste (*.test.ts) descoberto em ${dir}${opcoes.filter ? ` com o filtro "${opcoes.filter}"` : ''}. Zero testes não é sucesso${opcoes.allowEmpty ? ' (ignorado por --allow-empty)' : ''}.`);
         return { relatorio: null, exitCode: opcoes.allowEmpty ? 0 : 1 };
     }
+    let aRodar = files;
+    if (opcoes.afetados) {
+        // Seleção por módulo (scripts/testes-afetados.cjs). Zero afetados é um resultado LEGÍTIMO aqui (ex.: só documentação mudou) e é
+        // dito com todas as letras — diferente de zero testes DESCOBERTOS, que continua sendo falha.
+        const { arquivosAlterados, selecionar, carregarMapa } = require('./testes-afetados.cjs');
+        let mudancas;
+        try { mudancas = arquivosAlterados({ base: opcoes.base }); } catch (e) {
+            console.error(`--afetados: não foi possível obter os arquivos alterados pelo git (${e.message.split('\n')[0]}). Rode a suíte completa.`);
+            return { relatorio: null, exitCode: 1 };
+        }
+        const observado = carregarMapa();
+        const s = selecionar(files, mudancas.alterados, { mapa: observado ? observado.mapa : null, criadosOuRemovidos: mudancas.criadosOuRemovidos });
+        console.log(`MODO AFETADOS — base ${mudancas.base.slice(0, 12)}: ${mudancas.alterados.length} arquivo(s) alterado(s)`);
+        if (observado) console.log(`Dependências observadas: mapa da suíte completa de ${observado.geradoEm || '?'} (commit ${String(observado.commit || '?').slice(0, 7)}).`);
+        else console.log('AVISO: sem mapa de dependências observadas (ele é gravado por toda suíte completa). A seleção será só estática e pode\n'
+            + '       omitir testes que varrem pastas inteiras — rode `npm run test:regression` uma vez nesta máquina.');
+        for (const a of mudancas.alterados.slice(0, 25)) console.log(`  · ${a}`);
+        if (mudancas.alterados.length > 25) console.log(`  · … e mais ${mudancas.alterados.length - 25}`);
+        if (s.tudo) console.log(`Mudança que afeta todos os testes (${s.tudo}) → a suíte inteira será executada.`);
+        else for (const x of s.selecionados) console.log(`  → ${path.basename(x.arquivo)}: ${x.motivos.slice(0, 3).join('; ')}${x.motivos.length > 3 ? ` (+${x.motivos.length - 3})` : ''}`);
+        console.log(`${s.selecionados.length} de ${files.length} testes selecionados. ISTO NÃO SUBSTITUI A SUÍTE COMPLETA antes de enviar ao GitHub.\n`);
+        opcoes.selecao = { base: mudancas.base, alterados: mudancas.alterados, testesNaSuite: files.length,
+            selecionados: s.selecionados.map((x) => ({ arquivo: path.basename(x.arquivo), motivos: x.motivos })) };
+        if (s.selecionados.length === 0) {
+            console.log('Nenhum teste afetado pelas mudanças — nada a executar.');
+            if (opcoes.report) {
+                fs.mkdirSync(path.dirname(path.resolve(opcoes.report)), { recursive: true });
+                fs.writeFileSync(opcoes.report, JSON.stringify(montarRelatorio([], 0, 0, opcoes), null, 2));
+            }
+            return { relatorio: null, exitCode: 0 };
+        }
+        aRodar = s.selecionados.map((x) => x.arquivo);
+    }
+    // A suíte completa (pasta padrão, sem filtro nem seleção) sempre registra o que cada teste lê e atualiza o mapa observado usado por
+    // --afetados. Custo medido: nenhum (1533 s com registro × 1539 s sem, mesma suíte).
+    const suiteCompletaPadrao = !opcoes.dir && !opcoes.filter && !opcoes.afetados;
+    registrarLeituras = !!opcoes.mapaDeLeituras || suiteCompletaPadrao;
     const t0 = process.hrtime.bigint();
-    const results = runSuite(files, opcoes.timeoutMs);
+    const results = runSuite(aRodar, opcoes.timeoutMs);
     const duracaoTotalMs = Math.round(Number(process.hrtime.bigint() - t0) / 1e6);
-    const relatorio = montarRelatorio(results, files.length, duracaoTotalMs, opcoes);
+    const relatorio = montarRelatorio(results, aRodar.length, duracaoTotalMs, opcoes);
     const t = relatorio.totais;
+    if (registrarLeituras) {
+        const mapa = {};
+        for (const r of results) mapa[path.basename(r.file)] = r.leituras;
+        const conteudo = { commit: relatorio.commit, plataforma: relatorio.plataforma, geradoEm: new Date().toISOString(), mapa };
+        if (opcoes.mapaDeLeituras) {
+            fs.mkdirSync(path.dirname(path.resolve(opcoes.mapaDeLeituras)), { recursive: true });
+            fs.writeFileSync(opcoes.mapaDeLeituras, JSON.stringify(conteudo, null, 1));
+            console.log(`Mapa de leituras: ${opcoes.mapaDeLeituras} (${results.filter((r) => r.leituras).length}/${results.length} testes registrados)`);
+        }
+        if (suiteCompletaPadrao) {
+            try { require('./testes-afetados.cjs').gravarMapa(conteudo); } catch (e) { console.error(`(mapa de dependências não gravado: ${e.message})`); }
+        }
+    }
 
     console.log('');
     const ignorados = results.filter((r) => r.status === 'skipped');
@@ -235,7 +303,8 @@ function executar(opcoes) {
     console.log('Mais lentos:');
     for (const r of lentos) console.log(`  ${segundos(r.durationMs).padStart(7)}  ${path.basename(r.file)}`);
     console.log('');
-    console.log(`SUÍTE: ${t.aprovados}/${t.descobertos} passaram | executados=${t.executados} falhos=${t.falhos} inconsistentes=${t.inconsistentes} timeouts=${t.timeouts} ignorados=${t.ignorados} pendentes=${t.pendentes} | duração ${segundos(duracaoTotalMs)}`);
+    const rotulo = opcoes.selecao ? `AFETADOS (${t.descobertos} de ${opcoes.selecao.testesNaSuite} — não é a suíte completa)` : 'SUÍTE';
+    console.log(`${rotulo}: ${t.aprovados}/${t.descobertos} passaram | executados=${t.executados} falhos=${t.falhos} inconsistentes=${t.inconsistentes} timeouts=${t.timeouts} ignorados=${t.ignorados} pendentes=${t.pendentes} | duração ${segundos(duracaoTotalMs)}`);
 
     if (opcoes.report) {
         fs.mkdirSync(path.dirname(path.resolve(opcoes.report)), { recursive: true });
