@@ -601,7 +601,12 @@ export class ProviderFactory {
                     // External cancel trumps all other error classification
                     if (externalSignal?.aborted) {
                         log.info(`[${attemptId}] Cancelled by external signal`);
-                        attemptLog.push({ provider: providerName, model: providerName, duration, status: 'cancelled', errorMessage: 'Cancelled' });
+                        // O modelo REAL da tentativa, como nas falhas abaixo. Gravar o nome do provedor aqui fazia o [LLM-CALL] de uma
+                        // chamada cancelada pelo prazo mostrar `model=ollama` — parecia um modelo local de reserva (não era: era o
+                        // modelo escolhido, servido pelo provedor Ollama), e levou a um diagnóstico errado (logs de 12/10/2026).
+                        const provCancelado = this.providers.get(providerName);
+                        const modeloCancelado = attemptModel ?? ((provCancelado instanceof OllamaProvider) ? provCancelado.getModel() : (provCancelado as { model?: string })?.model || providerName);
+                        attemptLog.push({ provider: providerName, model: modeloCancelado, duration, status: 'cancelled', errorMessage: 'Cancelled' });
                         if (tentativaTele) Object.assign(tentativaTele, { status: 'cancelled', durationMs: duration });
                         return { status: 'cancelled', content: '', fallbackReason: 'cancelled', fallbackMessage: 'Operação cancelada.', attempts: attemptLog };
                     }

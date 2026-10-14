@@ -120,6 +120,32 @@ async function main(): Promise<void> {
         assert(semDiag.length === 0, 'nenhum chamador sem diag', semDiag);
     }
 
+    console.log('\n=== S299.6 — chamada CANCELADA registra o modelo escolhido, não o nome do provedor ===');
+    {
+        // Produção, 12/10/2026: chamadas do juiz canceladas pelo prazo apareciam como `model=ollama` — parecia um modelo local de
+        // reserva e levou a um diagnóstico errado; era o modelo escolhido pelo usuário, servido pelo provedor Ollama.
+        const http = await import('http');
+        const pendentes: Array<import('http').ServerResponse> = [];
+        const servidor = http.createServer((_req, res) => { pendentes.push(res); });   // nunca responde
+        await new Promise<void>(r => servidor.listen(0, '127.0.0.1', () => r()));
+        const porta = (servidor.address() as import('net').AddressInfo).port;
+        try {
+            const pf = new ProviderFactory({ defaultProvider: 'ollama', ollamaUrl: `http://127.0.0.1:${porta}`, ollamaModel: 'modelo-escolhido:cloud' } as any);
+            const ac = new AbortController();
+            setTimeout(() => ac.abort(), 400);
+            const r = await pf.chatWithFallback(msgs, undefined, undefined, 20_000, ac.signal, undefined, { diag: { component: 'S299' } });
+            const tentativa = r.attempts?.[0];
+            assert(r.status === 'cancelled', `a chamada é cancelada pelo sinal externo (status=${r.status})`);
+            assert(tentativa?.model === 'modelo-escolhido:cloud', `a tentativa cancelada registra o modelo escolhido (model=${tentativa?.model})`, r.attempts);
+            const linha = buildLlmCallSummary({ component: 'S299' }, msgs, r, 400);
+            assert(/model=modelo-escolhido:cloud/.test(linha) && !/model=ollama\b/.test(linha), 'a linha [LLM-CALL] mostra o modelo, não "ollama"', linha);
+        } finally {
+            for (const res of pendentes) { try { res.destroy(); } catch { /* conexão já fechada */ } }
+            servidor.closeAllConnections?.();
+            await new Promise<void>(r => servidor.close(() => r()));
+        }
+    }
+
     console.log(`\nS299 RESULTADO: ${passed} passou | ${failed} falhou`);
     process.exit(failed > 0 ? 1 : 0);
 }
