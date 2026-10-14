@@ -11,6 +11,7 @@
  * impede que texto de terceiros vire instrução persistente numa skill, e que dados do usuário sejam copiados para ela.
  */
 import { descreverArgumentos } from '../shared/argumentosDaChamada';
+import { NOME_SENSIVEL, FORMATOS_DE_CREDENCIAL, SENHA_DE_APP } from '../shared/segredos';
 
 export type ModoDeAprendizado = 'automatico' | 'proposta' | 'desligado';
 
@@ -89,15 +90,8 @@ export function montarTrajetoria(tentativas: TentativaMinima[], rastroDe: (trace
 
 // ── Segredos ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
-/** Nome de campo/variável que carrega credencial. */
-const NOME_SENSIVEL = /(pass(word|wd)?|senha|secret|segredo|token|api[_-]?key|apikey|auth|credential|credencial|private[_-]?key)/i;
-/** Formatos inconfundíveis de credencial — procurados no texto da skill. */
-const FORMATOS_DE_CREDENCIAL: RegExp[] = [
-    /\bsk-[A-Za-z0-9_-]{16,}/, /\bghp_[A-Za-z0-9]{20,}/, /\bgithub_pat_[A-Za-z0-9_]{20,}/, /\bAKIA[0-9A-Z]{16}\b/,
-    /\bxox[abprs]-[A-Za-z0-9-]{10,}/, /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/, /-----BEGIN [A-Z ]*PRIVATE KEY-----/,
-];
-/** Senha de app do Google (4 grupos de 4 letras). Ambíguo em prosa comum: só vale como valor CONCRETO tirado do que a tarefa usou. */
-const SENHA_DE_APP = /\b(?:[a-z]{4} ){3}[a-z]{4}\b/g;
+// Os padrões de credencial vivem num lugar só (ADR-019) — o mesmo conhecimento protege a entrada do chat e as skills.
+// Aqui a senha de app (ambígua em prosa) só vale como valor CONCRETO tirado do que a tarefa usou.
 
 /**
  * Valores concretos que não podem aparecer na skill nem ir ao LLM: variáveis de ambiente sensíveis, argumentos sensíveis da

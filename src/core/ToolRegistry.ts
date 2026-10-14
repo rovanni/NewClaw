@@ -4,6 +4,7 @@
 
 import { ToolExecutor, ToolResult } from '../loop/agentLoopTypes';
 import { createLogger } from '../shared/AppLogger';
+import { resolverMarcadores, mascararProfundo } from '../shared/segredos';
 import { permissionRegistry } from './PermissionRegistry';
 import { isReadOnlyExecCommand } from '../tools/exec_command';
 const log = createLogger('Toolregistry');
@@ -115,6 +116,37 @@ interface ToolEntry {
     dangerous: boolean;  // ex: exec_command
 }
 
+const EMBRULHADA = Symbol('comSegredos');
+const embrulhos = new WeakMap<ToolExecutor, ToolExecutor>();
+
+/**
+ * ADR-019: a ferramenta como os despachos a enxergam. Os argumentos chegam com <SEGREDO:nome> (o modelo nunca viu o
+ * valor) e só aqui, no instante da execução, o marcador vira o valor do cofre; o que a ferramenta devolve volta
+ * mascarado — um `cat` de um arquivo de configuração não devolve a senha ao modelo, ao trace nem ao log. Um ponto só
+ * para os três despachos (AgentLoop, ProactiveRecovery, WorkflowEngine). Idempotente: embrulhar duas vezes não resolve
+ * duas vezes. O resto da ferramenta (nome, parâmetros, setContext…) passa intacto.
+ */
+export function comSegredos(tool: ToolExecutor): ToolExecutor {
+    if ((tool as unknown as Record<symbol, boolean>)[EMBRULHADA]) return tool;
+    const pronto = embrulhos.get(tool);
+    if (pronto) return pronto;
+    const proxy = new Proxy(tool, {
+        get(alvo, prop) {
+            if (prop === EMBRULHADA) return true;
+            if (prop === 'execute') {
+                return async (args: Record<string, unknown>, ...resto: unknown[]) => {
+                    const resultado = await (alvo.execute as (...a: unknown[]) => Promise<unknown>).call(alvo, resolverMarcadores(args), ...resto);
+                    return mascararProfundo(resultado);
+                };
+            }
+            const v = Reflect.get(alvo, prop, alvo);
+            return typeof v === 'function' ? v.bind(alvo) : v;
+        },
+    });
+    embrulhos.set(tool, proxy);
+    return proxy;
+}
+
 export class ToolRegistryClass {
     private tools: Map<string, ToolEntry> = new Map();
 
@@ -132,7 +164,7 @@ export class ToolRegistryClass {
 
     get(name: string): ToolExecutor | undefined {
         const entry = this.tools.get(name);
-        return entry?.enabled ? entry.tool : undefined;
+        return entry?.enabled ? comSegredos(entry.tool) : undefined;
     }
 
     getAll(): ToolEntry[] {
@@ -142,7 +174,7 @@ export class ToolRegistryClass {
     getEnabled(): ToolExecutor[] {
         return Array.from(this.tools.values())
             .filter(e => e.enabled)
-            .map(e => e.tool);
+            .map(e => comSegredos(e.tool));
     }
 
     enable(name: string): boolean {

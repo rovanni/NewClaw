@@ -15,6 +15,7 @@ import { GroqProvider } from './GroqProvider';
 import { getBudgetAuxiliar, PerfilAuxiliar, OrcamentoAuxiliar } from '../shared/auxTimeout';
 import { OpenAIProvider, OpenRouterProvider } from './OpenAIProvider';
 import { OllamaProvider, NO_MODEL_CONFIGURED_MESSAGE } from './OllamaProvider';
+import { mascararProfundo } from '../shared/segredos';
 import { AnthropicProvider } from './AnthropicProvider';
 
 // Nomes reservados pelos providers nativos — um customProvider com label colidente seria
@@ -319,6 +320,9 @@ export class ProviderFactory {
         const t0 = Date.now();
         // Cancelamento do TURNO (botão "Parar"): vale para a chamada em voo de QUALQUER componente, sem passar o sinal à mão.
         externalSignal = combinarSinais(externalSignal, sinalDoTurno());
+        // ADR-019: nenhum valor do cofre ou de chave de API sai para um modelo — vale para todo componente que chama um
+        // LLM, inclusive texto que chegou à memória antes de o cofre existir. Cópia: o array de quem chamou não muda.
+        messages = mascararProfundo(messages);
         const result = await this.chatWithFallbackImpl(messages, tools, preferredProvider, timeoutMs, externalSignal, modelOverride, opts);
         try {
             log.info(`[LLM-CALL] ${buildLlmCallSummary(opts?.diag, messages, result, Date.now() - t0)}`);

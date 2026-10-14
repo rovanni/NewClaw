@@ -24,6 +24,7 @@ import {
 } from './ChannelAdapter';
 import { createLogger } from '../shared/AppLogger';
 import { errorMessage } from '../shared/errors';
+import { protegerEntrada, mascararSegredos, detectarSegredos, avisoDeSegredoGuardado, avisoDeFalhaNoCofre } from '../shared/segredos';
 import { ConversationQueueManager } from '../core/ConversationQueueManager';
 import type { GoalOrchestrator } from '../loop/GoalOrchestrator';
 
@@ -349,6 +350,27 @@ export class MessageBus {
 
         const correlationId = crypto.randomUUID();
         const adapter = this.adapters.get(msg.channel);
+
+        // ADR-019: antes de qualquer log ou processamento, o valor de uma senha sai do texto e vai para o cofre. Daqui em
+        // diante — log, sessão, banco, goal, prompts — circula só o marcador <SEGREDO:nome>. Se o cofre não puder gravar,
+        // o valor é removido mesmo assim (nunca segue em claro) e o usuário é avisado.
+        let guardados: string[] = [];
+        let falhaNoCofre = '';
+        try {
+            const protegida = protegerEntrada(msg.text);
+            msg = { ...msg, text: protegida.texto };
+            guardados = protegida.guardados;
+        } catch (e) {
+            falhaNoCofre = errorMessage(e);
+            let texto = mascararSegredos(msg.text);
+            for (const v of detectarSegredos(texto)) texto = texto.split(v).join('<SEGREDO:nao_guardado>');
+            msg = { ...msg, text: texto };
+        }
+        if ((guardados.length > 0 || falhaNoCofre) && adapter) {
+            const aviso = falhaNoCofre ? avisoDeFalhaNoCofre(falhaNoCofre) : avisoDeSegredoGuardado(guardados);
+            await adapter.send({ text: aviso, format: 'plain' }, msg.rawContext).catch(() => {});
+            log.info('segredo_guardado', `nomes=${guardados.join(',') || '(falha)'}`, { channel: msg.channel, userId: msg.userId });
+        }
 
         log.info('message_received', msg.text.slice(0, 50), {
             channel: msg.channel,

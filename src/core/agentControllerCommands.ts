@@ -1,4 +1,5 @@
 import { errorMessage } from '../shared/errors';
+import { nomesNoCofre, apagarSegredo } from '../shared/segredos';
 import type { MessageBus } from '../channels/MessageBus';
 import type { MemoryManager } from '../memory/MemoryManager';
 import type { MemoryFacade } from '../memory/MemoryFacade';
@@ -69,6 +70,29 @@ export function registerCommands(
             if (!match) return `Skill com ID curto "${rawId}" não encontrada.`;
             memoryFacade.setAutoSkillStatus(match, 'active');
             return `✅ Skill aprovada: ${match}`;
+        } catch (e) {
+            return `⚠️ Erro: ${errorMessage(e)}`;
+        }
+    });
+
+    // ADR-019: cofre de senhas. O valor de `/segredo <nome> <valor>` já foi guardado e trocado pelo marcador no
+    // MessageBus.processMessage (antes de qualquer log) — aqui só se confirma; o comando nunca vê o valor.
+    messageBus.registerCommand('/segredo', async (msg) => {
+        const nome = msg.text.trim().split(/\s+/)[1];
+        if (!nome || !/<SEGREDO:/.test(msg.text)) return 'Use /segredo <nome> <valor> — o valor vai para o cofre e some da conversa. Ver os guardados: /segredos';
+        return `🔐 Guardado como <SEGREDO:${nome.toLowerCase()}>. Peça a tarefa normalmente; eu uso o marcador.`;
+    });
+    messageBus.registerCommand('/segredos', async () => {
+        const nomes = nomesNoCofre();
+        return nomes.length > 0
+            ? `🔐 No cofre (só os nomes):\n${nomes.map(n => `• <SEGREDO:${n}>`).join('\n')}\nApagar: /segredo_apagar <nome>`
+            : 'O cofre está vazio. Guardar: /segredo <nome> <valor>';
+    });
+    messageBus.registerCommand('/segredo_apagar', async (msg) => {
+        const nome = msg.text.trim().split(/\s+/)[1];
+        if (!nome) return 'Use /segredo_apagar <nome>. Ver os guardados: /segredos';
+        try {
+            return apagarSegredo(nome) ? `🗑️ Apagado do cofre: ${nome.toLowerCase()}` : `Nenhum segredo chamado "${nome}".`;
         } catch (e) {
             return `⚠️ Erro: ${errorMessage(e)}`;
         }

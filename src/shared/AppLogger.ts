@@ -18,6 +18,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import { segredosConhecidos, mascararSegredos, mascararProfundo } from './segredos';
 
 type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
@@ -131,6 +132,15 @@ function getComponentColor(name: string): string {
 
 function writeLog(level: LogLevel, component: string, event: string, message?: string, meta?: Record<string, any>) {
     if (!shouldLog(level)) return;
+
+    // ADR-019: nenhum valor do cofre nem de chave de API chega ao console ou ao log de auditoria — nem quando uma
+    // ferramenta registra o comando já resolvido.
+    const conhecidos = segredosConhecidos();
+    if (conhecidos.length > 0) {
+        event = mascararSegredos(event, conhecidos);
+        if (message) message = mascararSegredos(message, conhecidos);
+        if (meta) meta = mascararProfundo(meta, conhecidos);
+    }
 
     const timestamp = formatTimestamp();
     const levelColor = COLORS[level];

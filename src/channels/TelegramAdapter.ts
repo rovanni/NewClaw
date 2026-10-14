@@ -414,7 +414,8 @@ export class TelegramAdapter implements ChannelAdapter {
         // This allows /cancel to be processed immediately even while a turn is running.
         this.bot.on('message:text', (ctx) => {
             const userId = ctx.from!.id.toString();
-            log.info('text_message_received', `userId=${userId} text="${ctx.message?.text?.slice(0, 50)}"`);
+            // Só o tamanho: o texto pode trazer uma senha, e quem a guarda e mascara é o MessageBus (ADR-019) — logo depois.
+            log.info('text_message_received', `userId=${userId} chars=${ctx.message?.text?.length ?? 0}`);
             if (!isSenderAllowed(this.config.allowedUserIds, userId)) {
                 log.info('unauthorized', `Usuário não autorizado: ${userId}`);
                 return;

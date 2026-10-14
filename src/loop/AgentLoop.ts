@@ -37,6 +37,7 @@ import { AgentFSM, AgentFSMEvent, type AgentFSMState } from './AgentFSM';
 import { FSMHistoryStore } from './FSMHistoryStore';
 import { descreverArgumentos } from '../shared/argumentosDaChamada';
 import { ToolRegistry, DIRECT_DELIVERABLE_TOOLS } from '../core/ToolRegistry';
+import { comSegredos } from '../core/ToolRegistry';
 import { isReadOnlyExecCommand } from '../tools/exec_command';
 import { SkillLoader } from '../skills/SkillLoader';
 import { ModelProfile } from './ModelProfileRegistry';
@@ -601,7 +602,8 @@ export class AgentLoop {
         this.sessionContext = sessionContext;
     }
 
-    public registerTool(tool: ToolExecutor): void { this.tools.set(tool.name, tool); }
+    // ADR-019: toda ferramenta do loop resolve <SEGREDO:nome> só na execução e devolve a saída mascarada (idempotente).
+    public registerTool(tool: ToolExecutor): void { this.tools.set(tool.name, comSegredos(tool)); }
 
     private ts(): string { return new Date().toLocaleTimeString('pt-BR', { hour12: false }); }
 
