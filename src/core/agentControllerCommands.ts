@@ -68,6 +68,13 @@ export function registerCommands(
         try {
             const match = memoryFacade.findAutoSkillIdBySuffix(rawId);
             if (!match) return `Skill com ID curto "${rawId}" não encontrada.`;
+            // Mesmo caminho do painel (POST /api/skills/auto/:id/approve): o SkillLearner exporta o SKILL.md, que é o que
+            // o SkillLoader lê. Antes o comando só mudava o status no banco — a skill "aprovada" pelo chat nunca era usada.
+            if (skillLearner) {
+                return skillLearner.approveSkill(match)
+                    ? `✅ Skill aprovada: ${match}`
+                    : `A skill ${match} não está aguardando aprovação (só propostas podem ser aprovadas). Veja com /skills`;
+            }
             memoryFacade.setAutoSkillStatus(match, 'active');
             return `✅ Skill aprovada: ${match}`;
         } catch (e) {
@@ -118,6 +125,10 @@ export function registerCommands(
         try {
             const match = memoryFacade.findAutoSkillIdBySuffix(rawId);
             if (!match) return `Skill com ID curto "${rawId}" não encontrada.`;
+            // Mesmo caminho do painel: o SkillLearner também remove o SKILL.md — senão a skill rejeitada continuaria ativa.
+            if (skillLearner) {
+                return skillLearner.rejectSkill(match) ? `❌ Skill rejeitada: ${match}` : `Skill com ID curto "${rawId}" não encontrada.`;
+            }
             memoryFacade.setAutoSkillStatus(match, 'rejected');
             return `❌ Skill rejeitada: ${match}`;
         } catch (e) {
