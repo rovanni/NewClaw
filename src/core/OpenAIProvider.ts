@@ -313,7 +313,7 @@ export class OpenAIProvider implements ILLMProvider {
 }
 
 export class OpenRouterProvider extends OpenAIProvider {
-    constructor(apiKey: string, model: string) {   // modelo escolhido pelo usuário (OPENROUTER_MODEL); vazio = não escolhido
+    constructor(apiKey: string, model: string = '') {   // modelo escolhido pelo usuário (OPENROUTER_MODEL); vazio = não escolhido
         super(apiKey, model, 'https://openrouter.ai/api/v1', 'openrouter');
         this.name = 'openrouter';
     }

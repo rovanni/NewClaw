@@ -49,7 +49,8 @@ console.log('\n=== S329-1 — OpenAIProvider: o parâmetro só vai quando declar
     assert(JSON.stringify(off.chat_template_kwargs) === '{"enable_thinking":false}', "thinking 'off' → enable_thinking=false", off.chat_template_kwargs);
     const on = await captureBody(() => new OpenAIProvider('', 'm', 'http://127.0.0.1:8080/v1', 'local', { thinking: 'on' }).chat(msgs));
     assert(JSON.stringify(on.chat_template_kwargs) === '{"enable_thinking":true}', "thinking 'on' → enable_thinking=true", on.chat_template_kwargs);
-    const none = await captureBody(() => new OpenAIProvider('', 'gpt-4o').chat(msgs));
+    // ADR-018: o OpenAIProvider não tem mais modelo nem endereço padrão — vêm do cadastro do provedor.
+    const none = await captureBody(() => new OpenAIProvider('', 'modelo-escolhido', 'http://127.0.0.1:8080/v1').chat(msgs));
     assert(!('chat_template_kwargs' in none), 'sem declaração (ex.: OpenAI oficial) → parâmetro ausente', none);
 }
 

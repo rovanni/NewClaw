@@ -10,7 +10,7 @@ export class GeminiProvider implements ILLMProvider {
     private apiKey: string;
     private model: string;
 
-    constructor(apiKey: string, model: string) {   // modelo escolhido pelo usuário (GEMINI_MODEL); vazio = não escolhido — nunca um padrão
+    constructor(apiKey: string, model: string = '') {   // modelo escolhido pelo usuário (GEMINI_MODEL); vazio = não escolhido — nunca um padrão
         this.apiKey = apiKey;
         this.model = model;
     }

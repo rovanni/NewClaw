@@ -76,7 +76,7 @@ export class AnthropicProvider implements ILLMProvider {
     private apiKey: string;
     private model: string;
 
-    constructor(apiKey: string, model: string) {   // modelo escolhido pelo usuário (ANTHROPIC_MODEL); vazio = não escolhido
+    constructor(apiKey: string, model: string = '') {   // modelo escolhido pelo usuário (ANTHROPIC_MODEL); vazio = não escolhido
         this.apiKey = apiKey;
         this.model = model;
     }

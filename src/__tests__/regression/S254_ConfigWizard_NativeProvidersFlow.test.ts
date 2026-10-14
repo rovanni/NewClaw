@@ -174,7 +174,8 @@ console.log('\n=== S254-6 — fluxo completo nativo (choose → credential → v
     s = { ...s, draft: { nativeModelId: 'modelo-escolhido' } };
     assert(canAdvance(s) === true, 'com o modelo escolhido (da lista ou digitado), avança');
     const fsCW = CW.match(/const FAMILY_STEPS = \{[\s\S]*?\n\};/)?.[0] || '';
-    assert(/native:\s*\['choose', 'credential', 'validating', 'nativeModelSelect', 'conclusion'\]/.test(fsCW), 'FAMILY_STEPS.native real tem a etapa de escolha do modelo, antes da conclusão');
+    const nativaReal = fsCW.match(/native:\s*(\[[^\]]*\])/)?.[1] || '';
+    assert(nativaReal.replace(/'/g, '"') === JSON.stringify(FAMILY_STEPS.native).replace(/,/g, ', '), 'FAMILY_STEPS.native real é a mesma reproduzida aqui — com a escolha do modelo antes da conclusão', nativaReal);
     assert(/case 'nativeModelSelect': return !!\(session\.draft\.nativeModelId \?\? ''\)\.trim\(\);/.test(CW), 'canAdvance real exige o modelo escolhido');
 }
 
