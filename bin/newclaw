@@ -353,7 +353,28 @@ function restoreLocalKernelAdapter(execute = execSync) {
   return true;
 }
 
-async function installBuildRestart(restart, execute = execSync, restartProcess = commands.restart, healthCheck = waitForApplication, migrateAutostart = true) {
+/** O NewClaw está rodando agora? (pm2 quando há; senão, o arquivo de PID do modo sem pm2.) */
+function newclawRodando() {
+  return PM2_BIN ? pm2JStart() === 'online' : fs.existsSync(PID_FILE);
+}
+
+/**
+ * No Windows, o `npm ci` apaga e recria node_modules — e um binário nativo carregado pelo NewClaw em execução
+ * (better_sqlite3.node) não pode ser apagado (EPERM). Produção, 14/10/2026: `newclaw update restart` falhou nesse ponto
+ * DEPOIS de o npm já ter removido quase todo o node_modules; o NewClaw seguia vivo só porque os módulos estavam na
+ * memória — um reinício teria derrubado tudo. Por isso, no Windows, para antes de reinstalar; no fim religa quem estava
+ * rodando. (Linux/macOS permitem apagar arquivo em uso e seguem sem parada extra.)
+ */
+function pararAntesDeReinstalar(platform, isRunning, stopProcess) {
+  if (platform !== 'win32' || !isRunning()) return false;
+  console.log('🛑 Parando o NewClaw antes de reinstalar as dependências (o Windows trava os arquivos em uso)...');
+  stopProcess();
+  return true;
+}
+
+async function installBuildRestart(restart, execute = execSync, restartProcess = commands.restart, healthCheck = waitForApplication, migrateAutostart = true,
+                                   platform = process.platform, isRunning = newclawRodando, stopProcess = commands.stop) {
+  const parado = pararAntesDeReinstalar(platform, isRunning, stopProcess);
   console.log('📦 Sincronizando dependências...');
   try {
     execute('npm ci', { cwd: DIR, stdio: 'inherit' });
@@ -396,8 +417,9 @@ async function installBuildRestart(restart, execute = execSync, restartProcess =
     }
   }
 
-  if (restart) {
-    console.log('🔄 Reiniciando...');
+  // Parado para reinstalar (Windows) volta a rodar mesmo sem "restart": quem estava no ar não fica fora do ar.
+  if (restart || parado) {
+    console.log(restart ? '🔄 Reiniciando...' : '🔄 Religando o NewClaw (foi parado para reinstalar as dependências)...');
     restartProcess(['--daemon']);
     return healthCheck();
   } else {
@@ -405,7 +427,9 @@ async function installBuildRestart(restart, execute = execSync, restartProcess =
   }
 }
 
-async function rollbackUpdate(originalHead, localStashRef, execute = execSync, restartProcess = commands.restart, healthCheck = waitForApplication) {
+async function rollbackUpdate(originalHead, localStashRef, execute = execSync, restartProcess = commands.restart, healthCheck = waitForApplication,
+                              platform = process.platform, isRunning = newclawRodando, stopProcess = commands.stop) {
+  pararAntesDeReinstalar(platform, isRunning, stopProcess);   // mesmo motivo: o npm ci abaixo
   execute(`git reset --hard ${originalHead}`, { cwd: DIR, stdio: 'inherit' });
   execute('npm ci', { cwd: DIR, stdio: 'inherit' });
   execute('npm run build', { cwd: DIR, stdio: 'inherit' });

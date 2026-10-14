@@ -67,9 +67,11 @@ async function main(): Promise<void> {
 
     const { assertGitReady, installBuildRestart, rollbackUpdate } = require(path.join(root, 'bin', 'newclaw')) as {
         installBuildRestart: (restart: boolean, execute: (command: string) => void,
-            restartProcess: () => void, healthCheck: () => Promise<void>, migrateAutostart?: boolean) => Promise<void>;
+            restartProcess: () => void, healthCheck: () => Promise<void>, migrateAutostart?: boolean,
+            platform?: string, isRunning?: () => boolean, stopProcess?: () => void) => Promise<void>;
         rollbackUpdate: (head: string, stash: string | null, execute: (command: string) => void,
-            restartProcess: () => void, healthCheck: () => Promise<void>) => Promise<void>;
+            restartProcess: () => void, healthCheck: () => Promise<void>,
+            platform?: string, isRunning?: () => boolean, stopProcess?: () => void) => Promise<void>;
         updateEnvFile: (values: Record<string, string | null>, filePath: string) => void;
         assertGitReady: (execute: (command: string) => string, exists: (filePath: string) => boolean) => void;
     };
@@ -79,21 +81,43 @@ async function main(): Promise<void> {
     for (const failedCommand of ['npm ci', 'npm run build', 'npm prune --omit=dev']) {
         const rejected = await rejects(() => installBuildRestart(false, command => {
             if (command === failedCommand) throw new Error(`mock failure: ${command}`);
-        }, () => undefined, async () => undefined, false));
+        }, () => undefined, async () => undefined, false, 'linux', () => false, () => { throw new Error('o teste nunca para o NewClaw real'); }));
         assert(rejected, `falha de instalação/build/prune em ${failedCommand} propaga erro`);
     }
     let healthCalled = false;
     assert(await rejects(() => installBuildRestart(true, () => undefined,
-        () => { throw new Error('mock restart failure'); }, async () => { healthCalled = true; }, false))
+        () => { throw new Error('mock restart failure'); }, async () => { healthCalled = true; }, false, 'linux', () => false, () => { throw new Error('o teste nunca para o NewClaw real'); }))
         && !healthCalled, 'falha no reinício interrompe o pipeline antes do health check');
     assert(await rejects(() => installBuildRestart(true, () => undefined, () => undefined,
-        async () => { throw new Error('mock health failure'); }, false)),
+        async () => { throw new Error('mock health failure'); }, false, 'linux', () => false, () => { throw new Error('o teste nunca para o NewClaw real'); })),
     'falha no health check propaga erro após o restart');
+
+    {
+        // Produção Windows, 14/10/2026: npm ci com o NewClaw rodando → EPERM em better_sqlite3.node, depois de o npm já ter
+        // apagado quase todo o node_modules. No Windows, parar antes e religar quem estava no ar.
+        const ordem: string[] = [];
+        await installBuildRestart(false, command => { ordem.push(command); }, () => { ordem.push('religar'); }, async () => { ordem.push('health'); }, false,
+            'win32', () => true, () => { ordem.push('parar'); });
+        assert(ordem[0] === 'parar' && ordem.indexOf('npm ci') > 0 && ordem.slice(-2).join(',') === 'religar,health',
+            'Windows com o NewClaw no ar: para antes do npm ci e religa no fim (mesmo sem "restart")', ordem);
+        const parado: string[] = [];
+        await installBuildRestart(false, command => { parado.push(command); }, () => { parado.push('religar'); }, async () => { parado.push('health'); }, false,
+            'win32', () => false, () => { parado.push('parar'); });
+        assert(!parado.includes('parar') && !parado.includes('religar'), 'Windows com o NewClaw parado: não para nem liga o que estava desligado', parado);
+        const linux: string[] = [];
+        await installBuildRestart(false, command => { linux.push(command); }, () => { linux.push('religar'); }, async () => {}, false,
+            'linux', () => true, () => { linux.push('parar'); });
+        assert(!linux.includes('parar'), 'Linux: sem parada extra (apagar arquivo em uso é permitido)', linux);
+        const rb: string[] = [];
+        await rollbackUpdate('abc123', null, command => rb.push(command), () => rb.push('religar'), async () => { rb.push('health'); },
+            'win32', () => true, () => { rb.push('parar'); });
+        assert(rb[0] === 'parar' && rb.indexOf('npm ci') > 0, 'rollback no Windows também para antes do npm ci', rb);
+    }
 
     const recoveryCommands: string[] = [];
     await rollbackUpdate('abc123', null, command => recoveryCommands.push(command), () => {
         recoveryCommands.push('restart');
-    }, async () => { recoveryCommands.push('health'); });
+    }, async () => { recoveryCommands.push('health'); }, 'linux', () => false, () => { throw new Error('o teste nunca para o NewClaw real'); });
     const expectedRecoveryCommands = [
         'git reset --hard abc123', 'npm ci', 'npm run build',
         ...(fs.existsSync(path.resolve(root, '..', 'newclaw-kernel-adapter', 'package.json'))
@@ -104,7 +128,7 @@ async function main(): Promise<void> {
         'rollback só confirma após restaurar commit, reinstalar, compilar, reiniciar e checar health');
     assert(await rejects(() => rollbackUpdate('abc123', null, command => {
         if (command.startsWith('git reset --hard')) throw new Error('mock git failure');
-    }, () => undefined, async () => undefined)), 'falha de Git durante rollback não é mascarada');
+    }, () => undefined, async () => undefined, 'linux', () => false, () => { throw new Error('o teste nunca para o NewClaw real'); })), 'falha de Git durante rollback não é mascarada');
 
     assertGitReady(command => command.replace('git rev-parse --git-path ', '.git/'), () => false);
     let gitOperationBlocked = false;
