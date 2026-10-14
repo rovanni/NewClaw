@@ -90,7 +90,9 @@ curl -fsSL https://raw.githubusercontent.com/rovanni/NewClaw/main/install.sh | b
 ### Requisitos
 
 - Windows 10 (1809+) / Windows 11, o Linux/macOS
-- Node.js 22+ (el instalador lo instala automáticamente si falta)
+- Node.js 22.22.2+ o 24.15.0+ (el instalador lo instala automáticamente si falta)
+- npm (cualquier versión reciente; con npm 12.2+ también se aplica la lista de scripts de instalación permitidos del proyecto)
+- El adaptador local de Cognitive Kernel es opcional; para desarrollo con el repositorio hermano y sus dependencias instalados, vincúlalo con `node scripts/link-local-kernel-adapter.cjs`
 - 2GB+ de RAM, 5GB+ de espacio libre en disco
 - No se necesita ningún canal de chat para empezar — NewClaw funciona de forma
   independiente a través del Dashboard Web local (`http://localhost:3090`). Agrega
@@ -113,12 +115,12 @@ curl -fsSL https://raw.githubusercontent.com/rovanni/NewClaw/main/install.sh | b
   Ejecuta `newclaw doctor` para un diagnóstico completo, o usa `npm start` como alternativa
   (sin auto-restart, pero funciona).
 - **`newclaw update` falla al compilar (error de TypeScript sobre un módulo faltante)**: el
-  `npm install` se ejecuta automáticamente en cada update, así que esto debería ser raro —
+  `npm ci` se ejecuta automáticamente en cada update, así que esto debería ser raro —
   pero si pasa (ej: red inestable durante la instalación, o una dependencia nativa que falló
   al compilar), solucionalo a mano:
   ```bash
   cd <tu carpeta de instalación de NewClaw>
-  npm install
+  npm ci
   npm run build
   newclaw restart --daemon
   ```

@@ -89,7 +89,9 @@ curl -fsSL https://raw.githubusercontent.com/rovanni/NewClaw/main/install.sh | b
 ### Requirements
 
 - Windows 10 (1809+) / Windows 11, or Linux/macOS
-- Node.js 22+ (the installer installs it for you if missing)
+- Node.js 22.22.2+ or 24.15.0+ (the installer installs it for you if missing)
+- npm (any recent version; with npm 12.2+ the project's install-script allowlist is also enforced)
+- The local Cognitive Kernel adapter is optional; for development with the sibling repository and its dependencies installed, link it with `node scripts/link-local-kernel-adapter.cjs`
 - 2GB+ RAM, 5GB+ free disk space
 - No chat channel is required to get started — NewClaw runs standalone through the local
   Web Dashboard (`http://localhost:3090`). Add Telegram, Discord, WhatsApp or Signal later
@@ -109,12 +111,12 @@ curl -fsSL https://raw.githubusercontent.com/rovanni/NewClaw/main/install.sh | b
 - **Windows — PM2 fails to connect / the bot doesn't stay running**: usually a leftover PM2
   daemon started under a different privilege level (`EPERM` on the named pipe). Run
   `newclaw doctor` for a full diagnosis, or fall back to `npm start` (no auto-restart, but works).
-- **`newclaw update` fails to compile (TypeScript error about a missing module)**: `npm install`
+- **`newclaw update` fails to compile (TypeScript error about a missing module)**: `npm ci`
   is run automatically on every update, so this should be rare — but if it happens (e.g. a
   flaky network mid-install, or a native dependency that failed to build), fix it by hand:
   ```bash
   cd <your NewClaw install folder>
-  npm install
+  npm ci
   npm run build
   newclaw restart --daemon
   ```
