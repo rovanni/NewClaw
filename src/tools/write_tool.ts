@@ -13,7 +13,7 @@ import { resolvePath, selfEditError } from '../utils/crossPlatform';
 import { errorMessage } from '../shared/errors';
 import { createLogger } from '../shared/AppLogger';
 import { PLACEHOLDER_ARG_PATTERN as PATH_PLACEHOLDER_PATTERN } from '../shared/placeholderPatterns';
-import { CONTENT_STUB_PATTERNS } from '../shared/contentStubPatterns';
+import { padroesDeMoldePara } from '../shared/contentStubPatterns';
 import { MIN_DELIVERABLE_SIZE } from '../loop/planning/artifactContract';
 
 const log = createLogger('WriteTool');
@@ -63,7 +63,8 @@ export class WriteTool implements ToolExecutor {
         // Sem este gate, o GoalExecutionLoop aceita o write como "sucesso" e gasta
         // todo o replanBudget tentando converter um arquivo inexistente (exec_command,
         // ssh_exec, Marp, etc.) antes de perceber que o artefato é inválido.
-        const stubMatch = CONTENT_STUB_PATTERNS.find(p => p.test(content));
+        const padroesDeMolde = padroesDeMoldePara(rawPath);
+        const stubMatch = padroesDeMolde.find(p => p.test(content));
         if (stubMatch) {
             log.warn(`[CONTENT-STUB-GATE] path="${rawPath}" chars=${content.length} pattern="${stubMatch.source.slice(0, 60)}"`);
             return {
@@ -104,7 +105,7 @@ export class WriteTool implements ToolExecutor {
             // a proteger — a sobrescrita (mesmo com conteúdo menor) é sempre preferível a preservar um stub.
             if (existed && charsBefore > 0 && chars < charsBefore * 0.5) {
                 const existingContent = fs.readFileSync(finalPath, 'utf-8');
-                const existingIsStub = CONTENT_STUB_PATTERNS.some(p => p.test(existingContent))
+                const existingIsStub = padroesDeMolde.some(p => p.test(existingContent))
                     || (charsBefore <= 300 && /^\[.*\]$/.test(existingContent.trim()));
                 if (existingIsStub) {
                     log.info(

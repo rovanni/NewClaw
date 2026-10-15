@@ -8,6 +8,8 @@
  * única) — antes eram 2 listas quase-idênticas (write_tool.ts tinha 8 padrões de "LLM
  * meta-placeholder" que GoalPlanner.ts não tinha) que já tinham divergido de verdade.
  */
+const PLACEHOLDER_LITERAL = /placeholder|PLACEHOLDER/;
+
 export const CONTENT_STUB_PATTERNS: RegExp[] = [
     /\.\.\.\s*\(.*?conteúdo/i,                         // "... (conteúdo completo da aula)"
     /\(conteúdo\s+(completo|da\s+aula|real)\b/i,        // "(conteúdo completo...)"
@@ -27,7 +29,7 @@ export const CONTENT_STUB_PATTERNS: RegExp[] = [
     /será\s+preenchido\s+(depois|posteriormente|pelo\s+(modelo|agente))/i,
     /\[escrever\s+aqui\]|\[preencher\s+aqui\]|\[adicionar\s+aqui\]/i,
     /\[conteúdo\s+da\s+(aula|disciplina|curso|matéria)\]/i,
-    /placeholder|PLACEHOLDER/,                          // literal "placeholder"
+    PLACEHOLDER_LITERAL,                                // literal "placeholder" (em código: ver padroesDeMoldePara)
     // Reproduzido ao vivo (VPS, 01/07): "[Conteúdo do resumo gerado a partir do texto lido no
     // step_1]" escapava de todos os padrões acima (nenhum casava "gerado a partir de/do").
     /\[.*?gerado\s+a\s+partir/i,                        // "[X gerado a partir de/do Y]"
@@ -97,3 +99,27 @@ export const CONTENT_STUB_PATTERNS: RegExp[] = [
     // inteira (qualquer nome_de_variável, não só "passo"/"step") em vez de mais uma string:
     /\[[a-zà-öø-ÿ][a-zà-öø-ÿ0-9]*(?:_[a-zà-öø-ÿ0-9]+)+\]/i,
 ];
+
+/**
+ * Código-fonte e marcação: neles "placeholder" é vocabulário do PRÓPRIO formato, não marca de conteúdo faltando —
+ * python-pptx (`slide.placeholders`, `placeholder_format`, `MSO_SHAPE_TYPE.PLACEHOLDER`), HTML (`placeholder="…"`),
+ * CSS (`::placeholder`), pptxgenjs (`{ placeholder: 'body' }`). Reproduzido ao vivo (Telegram, 15/10/2026): o script
+ * python-pptx de uma aula (gerar_aula.py, 4.782 chars) foi bloqueado como "placeholder" logo depois de o classificador
+ * de molde (LLM) julgá-lo "conteúdo real, completo"; o goal replanejou do zero e terminou abandonado após 34 min.
+ */
+const EXTENSOES_DE_CODIGO = new Set([
+    '.py', '.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.vue', '.html', '.htm', '.css', '.scss', '.sass', '.less',
+    '.json', '.xml', '.svg', '.yaml', '.yml', '.sh', '.bash', '.ps1', '.bat', '.cmd', '.java', '.kt', '.c', '.h', '.cpp',
+    '.hpp', '.cs', '.go', '.rs', '.rb', '.php', '.swift', '.lua', '.r', '.sql', '.ipynb',
+]);
+
+/** Em código, só a marca em MAIÚSCULAS solta ("PLACEHOLDER", "<p>PLACEHOLDER</p>") — não `PP_PLACEHOLDER` nem `.PLACEHOLDER`. */
+const PLACEHOLDER_SOLTO_EM_CODIGO = /(?<![.\w])PLACEHOLDER(?![\w.])/;
+
+/** Os padrões de conteúdo-molde que valem para o arquivo `caminho` (a extensão decide; sem extensão, todos). */
+export function padroesDeMoldePara(caminho: string): RegExp[] {
+    const ponto = caminho.lastIndexOf('.');
+    const extensao = ponto >= 0 ? caminho.slice(ponto).toLowerCase() : '';
+    if (!EXTENSOES_DE_CODIGO.has(extensao)) return CONTENT_STUB_PATTERNS;
+    return CONTENT_STUB_PATTERNS.map(p => (p === PLACEHOLDER_LITERAL ? PLACEHOLDER_SOLTO_EM_CODIGO : p));
+}

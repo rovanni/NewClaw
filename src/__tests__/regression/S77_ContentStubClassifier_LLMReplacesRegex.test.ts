@@ -167,7 +167,10 @@ console.log('\n=== S77-7 [estrutural] — GoalPlanner e RiskAnalyzer constroem/a
 console.log('\n=== S77-8 [estrutural] — CONTENT_STUB_PATTERNS (regex) continua existindo e protegendo write_tool.ts em runtime ===');
 {
     const writeToolSrc = readSrc('tools/write_tool.ts');
-    assert(writeToolSrc.includes("import { CONTENT_STUB_PATTERNS } from '../shared/contentStubPatterns'"), 'write_tool.ts continua importando a lista de regex — última linha de defesa em runtime não foi removida, só o gate de planejamento trocou', null);
+    // Atualizado DE PROPÓSITO em 15/10/2026 (S405): a lista chega ao write_tool pelos padrões do TIPO de arquivo
+    // (padroesDeMoldePara) — em código, "placeholder" é vocabulário do formato. A defesa em runtime continua.
+    assert(writeToolSrc.includes("import { padroesDeMoldePara } from '../shared/contentStubPatterns'") && /padroesDeMoldePara\(rawPath\)/.test(writeToolSrc),
+        'write_tool.ts continua aplicando a lista de regex (pelo tipo do arquivo) — última linha de defesa em runtime não foi removida, só o gate de planejamento trocou', null);
 }
 
 console.log(`\n${'─'.repeat(60)}`);
