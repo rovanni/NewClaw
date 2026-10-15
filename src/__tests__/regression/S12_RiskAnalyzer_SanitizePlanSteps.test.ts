@@ -35,7 +35,7 @@ import { ExecCommandTool } from '../../tools/exec_command';
 import { ListWorkspaceTool } from '../../tools/list_workspace';
 import { SendDocumentTool } from '../../tools/send_document';
 import { Goal, PlanStep } from '../../loop/GoalTypes';
-import './_fixtures/motorLegado';   // juízes simulados no formato antigo → formato do motor único (ADR-014)
+import { vereditoRiscoDaRevisao, tipoDaPerguntaDoMotor, orcamentoDeTeste } from './_fixtures/veredito';
 
 let passed = 0;
 let failed = 0;
@@ -85,7 +85,11 @@ function makeGoal(objective: string): Goal {
 // o mesmo mecanismo que ObserverValidator (S258) já usa.
 function makeFakeProviderFactory(getResponse: () => string) {
     return {
-        chatWithFallback: async () => ({ status: 'success', content: getResponse(), attempts: [] }),
+        chatWithFallback: async (msgs: Array<{ content?: unknown }>) => ({
+            status: 'success', attempts: [],
+            content: tipoDaPerguntaDoMotor(msgs) === 'risco' ? vereditoRiscoDaRevisao(getResponse()) : getResponse(),
+        }),
+        getBudgetAuxiliar: orcamentoDeTeste,
     } as unknown as import('../../core/ProviderFactory').ProviderFactory;
 }
 

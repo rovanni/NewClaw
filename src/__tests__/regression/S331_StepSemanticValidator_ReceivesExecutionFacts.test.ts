@@ -17,7 +17,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { StepSemanticValidator } from '../../loop/StepSemanticValidator';
 import type { PlanStep } from '../../loop/GoalTypes';
-import './_fixtures/motorLegado';   // juízes simulados no formato antigo → formato do motor único (ADR-014)
+import { vereditoPasso, tipoDaPerguntaDoMotor } from './_fixtures/veredito';
 
 let passed = 0;
 let failed = 0;
@@ -25,12 +25,12 @@ function assert(c: boolean, m: string, d?: unknown): void {
     if (c) { console.log(`  ✅ ${m}`); passed++; } else { console.error(`  ❌ FALHOU: ${m}`, d ?? ''); failed++; }
 }
 
-function capturingFactory(prompts: string[], verdict: string) {
+function capturingFactory(prompts: string[], verdict: string, doMotor: string) {
     return {
         getBudgetAuxiliar: () => ({ timeoutMs: 45_000, origem: 'padrao', latenciaTipicaMs: null }),
         chatWithFallback: async (messages: Array<{ content: string }>) => {
             prompts.push(messages[0].content);
-            return { status: 'success', content: verdict, attempts: [] };
+            return { status: 'success', content: tipoDaPerguntaDoMotor(messages) === 'passo' ? doMotor : verdict, attempts: [] };
         },
     } as any;
 }
@@ -49,7 +49,7 @@ async function main(): Promise<void> {
 console.log('\n=== S331-1 — com fatos: o prompt do LLM traz ferramentas, falhas e arquivos ===');
 {
     const prompts: string[] = [];
-    const v = new StepSemanticValidator(capturingFactory(prompts, '{"result":"relevant","confidence":0.9,"reason":"arquivo gravado"}'));
+    const v = new StepSemanticValidator(capturingFactory(prompts, '{"result":"relevant","confidence":0.9,"reason":"arquivo gravado"}', vereditoPasso('relevant', 0.9, 'arquivo gravado')));
     const r = await quiet(() => v.validate(step, output, 'proponha a aula 06', {
         toolsCalled: ['read', 'write'], toolsFailed: [], artifacts: ['aulas/aula_06.md'],
     }));
@@ -66,7 +66,7 @@ console.log('\n=== S331-1 — com fatos: o prompt do LLM traz ferramentas, falha
 console.log('\n=== S331-2 — "nenhuma escrita" também é fato visível ===');
 {
     const prompts: string[] = [];
-    const v = new StepSemanticValidator(capturingFactory(prompts, '{"result":"mismatch","confidence":0.9,"reason":"nada gravado"}'));
+    const v = new StepSemanticValidator(capturingFactory(prompts, '{"result":"mismatch","confidence":0.9,"reason":"nada gravado"}', vereditoPasso('mismatch', 0.9, 'nada gravado')));
     const r = await quiet(() => v.validate(step, output, undefined, { toolsCalled: ['exec_command', 'exec_command'], toolsFailed: ['exec_command'], artifacts: [] }));
     const p = prompts[0] ?? '';
     assert(p.includes('Ferramentas chamadas: exec_command') && !p.includes('exec_command, exec_command'), 'repetidas aparecem uma vez');
@@ -80,7 +80,7 @@ console.log('\n=== S331-2b — arquivos NÃO registrados (step agentloop) não v
     // Visto na validação real (05/10/2026): o step agentloop chamou read+write, mas o sistema não registra
     // producedArtifactPaths para agentloop — o prompt dizia "nenhum" ao lado de "write", contraditório e falso.
     const prompts: string[] = [];
-    const v = new StepSemanticValidator(capturingFactory(prompts, '{"result":"relevant","confidence":0.9}'));
+    const v = new StepSemanticValidator(capturingFactory(prompts, '{"result":"relevant","confidence":0.9}', vereditoPasso('relevant', 0.9)));
     await quiet(() => v.validate(step, output, undefined, { toolsCalled: ['read', 'write'], toolsFailed: [] }));
     assert(prompts[0].includes('Arquivos gravados/produzidos: não registrado para este tipo de etapa'), 'artifacts ausente → "não registrado"', prompts[0]);
     assert(!prompts[0].includes('Arquivos gravados/produzidos: nenhum'), 'nunca "nenhum" quando não há registro');
@@ -89,7 +89,7 @@ console.log('\n=== S331-2b — arquivos NÃO registrados (step agentloop) não v
 console.log('\n=== S331-3 — sem fatos: prompt como antes ===');
 {
     const prompts: string[] = [];
-    const v = new StepSemanticValidator(capturingFactory(prompts, '{"result":"relevant","confidence":0.9}'));
+    const v = new StepSemanticValidator(capturingFactory(prompts, '{"result":"relevant","confidence":0.9}', vereditoPasso('relevant', 0.9)));
     await quiet(() => v.validate(step, output));
     assert(!prompts[0].includes('Fatos da execução') && prompts[0].includes('ENDEREÇA a intenção do passo'), 'sem bloco de fatos, e a pergunta continua a mesma (motor único)');
 }

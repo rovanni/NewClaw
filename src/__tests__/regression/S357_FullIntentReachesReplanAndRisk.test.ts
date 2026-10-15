@@ -16,7 +16,7 @@ import { RiskAnalyzer } from '../../loop/RiskAnalyzer';
 import { ToolRegistry } from '../../core/ToolRegistry';
 import { ReadTool } from '../../tools/read_tool';
 import type { Goal, GoalBlocker, PlanStep } from '../../loop/GoalTypes';
-import './_fixtures/motorLegado';   // juízes simulados no formato antigo → formato do motor único (ADR-014)
+import { vereditoRisco, tipoDaPerguntaDoMotor } from './_fixtures/veredito';
 
 let passed = 0;
 let failed = 0;
@@ -76,7 +76,7 @@ async function main(): Promise<void> {
     try { ToolRegistry.register(new ReadTool()); } catch { /* já registrado */ }
     const promptsRisco: string[] = [];
     const fRisco = {
-        chatWithFallback: async (msgs: Array<{ content: string }>) => { promptsRisco.push(msgs[0]?.content ?? ''); return { status: 'success', content: '{"risks": [], "plan": null}', attempts: [] }; },
+        chatWithFallback: async (msgs: Array<{ content: string }>) => { promptsRisco.push(msgs[0]?.content ?? ''); return { status: 'success', content: (tipoDaPerguntaDoMotor(msgs) === 'risco' ? vereditoRisco([]) : '{"risks": [], "plan": null}'), attempts: [] }; },
         getBudgetAuxiliar: () => ({ timeoutMs: 1000, origem: 'padrao' }),
     } as any;
     const risco = new RiskAnalyzer(fRisco, ToolRegistry, { findHardConstraints: () => [], findToolFailures: () => '' } as never);

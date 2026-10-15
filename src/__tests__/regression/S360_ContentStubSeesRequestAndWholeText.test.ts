@@ -13,7 +13,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { makeContentStubClassifier } from '../../shared/contentStubClassifier';
-import './_fixtures/motorLegado';   // juízes simulados no formato antigo → formato do motor único (ADR-014)
+import { vereditoMolde, tipoDaPerguntaDoMotor } from './_fixtures/veredito';
 
 let passed = 0;
 let failed = 0;
@@ -32,7 +32,7 @@ async function main(): Promise<void> {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { getBudgetAuxiliar } = require('../../shared/auxTimeout');
     const f = {
-        chatWithFallback: async (msgs: Array<{ content: string }>) => { prompts.push(msgs[0].content); return { status: 'success', content: '{"isStub": false, "reason": "conteúdo real"}', attempts: [] }; },
+        chatWithFallback: async (msgs: Array<{ content: string }>) => { prompts.push(msgs[0].content); return { status: 'success', content: (tipoDaPerguntaDoMotor(msgs) === 'molde' ? vereditoMolde(false, 'conteúdo real') : '{"isStub": false, "reason": "conteúdo real"}'), attempts: [] }; },
         getBudgetAuxiliar: (p: 'classificacao' | 'validacao') => getBudgetAuxiliar(p, null, null),
     } as any;
     const classificar = makeContentStubClassifier(f);

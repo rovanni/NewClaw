@@ -13,17 +13,28 @@ import { GoalExecutionLoop } from '../../../loop/GoalExecutionLoop';
 import { GoalStore } from '../../../loop/GoalStore';
 import { Goal, PlanStep } from '../../../loop/GoalTypes';
 import { ChannelContext } from '../../../loop/agentLoopTypes';
+import { vereditoConclusao, tipoDaPerguntaDoMotor, orcamentoDeTeste } from './veredito';
 
-export function fakeProviderFactory(validationJson: object) {
+type Conclusao = { achieved?: boolean; summary?: string; reason?: string; suggestions?: string[] };
+
+/**
+ * `formatoDoMotor`: o juiz de conclusão recebe `validationJson` traduzido para o formato do motor único (ADR-014);
+ * as demais chamadas, o JSON como está. Sem a opção, todas recebem o JSON como está (comportamento original).
+ */
+export function fakeProviderFactory(validationJson: Conclusao, opcoes: { formatoDoMotor?: boolean } = {}) {
     const content = JSON.stringify(validationJson);
+    const doMotor = vereditoConclusao(validationJson.achieved === true, validationJson);
     return {
-        chatWithFallback: async () => ({ status: 'success', content }),
+        chatWithFallback: async (msgs: Array<{ content?: unknown }>) => ({
+            status: 'success', content: opcoes.formatoDoMotor && tipoDaPerguntaDoMotor(msgs) === 'conclusao' ? doMotor : content,
+        }),
+        ...(opcoes.formatoDoMotor ? { getBudgetAuxiliar: orcamentoDeTeste } : {}),
         getProvider: () => undefined,
         getProviderWithModel: () => ({ chat: async () => ({ status: 'success', content }) }),
     } as unknown as import('../../../core/ProviderFactory').ProviderFactory;
 }
 
-export function makeLoop(validationJson: object) {
+export function makeLoop(validationJson: Conclusao, opcoes: { formatoDoMotor?: boolean } = {}) {
     const db = new (Database as any)(':memory:');
     const goalStore = new GoalStore(db);
     const fakeMemory = { getDatabase: () => db, semanticSearch: async () => [] } as any;
@@ -35,7 +46,7 @@ export function makeLoop(validationJson: object) {
     const loop = new GoalExecutionLoop(
         { process: async () => 'não deveria ser chamado' } as any, goalStore, fakePlanner,
         { record: () => {}, buildContextHint: () => '', findHardConstraints: () => [], findToolFailures: () => '' } as any,
-        ToolRegistry, fakeProviderFactory(validationJson), fakeMemory,
+        ToolRegistry, fakeProviderFactory(validationJson, opcoes), fakeMemory,
         { findApplicableCasesShadow: async () => [], backfillMissingEmbeddings: async () => {}, captureIfEligible: () => {}, findSimilarShadow: () => [] } as any,
     );
     return { loop, goalStore };

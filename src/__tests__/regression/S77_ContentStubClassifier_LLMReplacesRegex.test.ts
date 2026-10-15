@@ -35,7 +35,7 @@ import * as path from 'path';
 import { makeContentStubClassifier } from '../../shared/contentStubClassifier';
 import { getBudgetAuxiliar, PerfilAuxiliar } from '../../shared/auxTimeout';
 import { sanitizePlanSteps } from '../../loop/planning/sanitizePlanSteps';
-import './_fixtures/motorLegado';   // juízes simulados no formato antigo → formato do motor único (ADR-014)
+import { vereditoMolde, tipoDaPerguntaDoMotor } from './_fixtures/veredito';
 
 let passed = 0;
 let failed = 0;
@@ -56,9 +56,12 @@ function readSrc(relPath: string): string {
  * docs/ARCHITECTURE/INVENTARIO_DUPLICACAO_2026-08-24.md: mesma migração já feita em
  * ObserverValidator (S258) e agora aplicada a contentStubClassifier.
  */
-function makeFakeProviderFactory(getResponse: () => string) {
+function makeFakeProviderFactory(getResponse: () => string, doMotor?: () => string) {
     return {
-        chatWithFallback: async () => ({ status: 'success', content: getResponse(), attempts: [] }),
+        chatWithFallback: async (msgs: Array<{ content?: unknown }>) => ({
+            status: 'success', attempts: [],
+            content: doMotor && tipoDaPerguntaDoMotor(msgs) === 'molde' ? doMotor() : getResponse(),
+        }),
         // Sprint 043: o classificador deixou de ter teto fixo de 6s e passou a derivar o prazo da
         // latência observada (shared/auxTimeout.ts), como DomainRegistry e GoalExtractor já faziam.
         // O dublê usa a função real sem fonte de medição — que é o caminho documentado de partida
@@ -74,7 +77,7 @@ async function main(): Promise<void> {
 
 console.log('\n=== S77-1 [runtime] — makeContentStubClassifier: LLM responde isStub=true → sanitizePlanSteps converte o step ===');
 {
-    const classifier = makeContentStubClassifier(makeFakeProviderFactory(() => '{"isStub": true, "reason": "descreve o processo, não o resultado"}'));
+    const classifier = makeContentStubClassifier(makeFakeProviderFactory(() => '{"isStub": true, "reason": "descreve o processo, não o resultado"}', () => vereditoMolde(true, 'descreve o processo, não o resultado')));
     const rawSteps = [
         { id: 'step_1', toolName: 'send_audio', toolArgs: { text: 'qualquer coisa que o LLM decidiu classificar como stub' }, description: 'Enviar áudio' },
     ];
@@ -87,7 +90,7 @@ console.log('\n=== S77-1 [runtime] — makeContentStubClassifier: LLM responde i
 
 console.log('\n=== S77-2 [runtime] — LLM responde isStub=false → sanitizePlanSteps mantém o step intacto ===');
 {
-    const classifier = makeContentStubClassifier(makeFakeProviderFactory(() => '{"isStub": false, "reason": "conteúdo real e completo"}'));
+    const classifier = makeContentStubClassifier(makeFakeProviderFactory(() => '{"isStub": false, "reason": "conteúdo real e completo"}', () => vereditoMolde(false, 'conteúdo real e completo')));
     const rawSteps = [
         { id: 'step_1', toolName: 'send_audio', toolArgs: { text: 'Olá! Aqui está a previsão real do tempo para hoje: céu limpo, 25 graus.' }, description: 'Enviar áudio' },
     ];

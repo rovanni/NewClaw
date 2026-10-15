@@ -31,7 +31,7 @@ import { GoalExecutionLoop } from '../../loop/GoalExecutionLoop';
 import { GoalStore } from '../../loop/GoalStore';
 import { ToolRegistry } from '../../core/ToolRegistry';
 import { Goal, SuccessCriterion } from '../../loop/GoalTypes';
-import './_fixtures/motorLegado';   // juízes simulados no formato antigo → formato do motor único (ADR-014)
+import { vereditoConclusao, tipoDaPerguntaDoMotor, orcamentoDeTeste } from './_fixtures/veredito';
 
 // Sprint 0.6, Front A: validateGoalCompletion() passou a receber o GoalExecutionState
 // explicitamente (antes era um campo de instância `this.progressModel`). O tipo não é
@@ -52,7 +52,7 @@ function readSource(relPath: string): string {
 }
 
 function makeFakeProviderFactory(chatImpl: (...args: unknown[]) => Promise<unknown>) {
-    return { chatWithFallback: chatImpl } as unknown as import('../../core/ProviderFactory').ProviderFactory;
+    return { chatWithFallback: chatImpl, getBudgetAuxiliar: orcamentoDeTeste } as unknown as import('../../core/ProviderFactory').ProviderFactory;
 }
 
 /** Constrói um GoalExecutionLoop real, mas com dependências não usadas por
@@ -123,9 +123,9 @@ async function main() {
     // ══════════ 2/3. LLM confirma com evidência → comportamento preservado ══════════
     console.log('\n=== S21.2/3 — LLM retorna achieved=true válido, sem claim detectável → preservado ===');
     {
-        const loop = makeLoop(makeFakeProviderFactory(async () => ({
+        const loop = makeLoop(makeFakeProviderFactory(async (msgs: unknown) => ({
             status: 'success',
-            content: JSON.stringify({ achieved: true, summary: 'Tarefa concluída conforme solicitado.' }),
+            content: tipoDaPerguntaDoMotor(msgs as Array<{ content?: unknown }>) === 'conclusao' ? vereditoConclusao(true, { summary: 'Tarefa concluída conforme solicitado.' }) : JSON.stringify({ achieved: true, summary: 'Tarefa concluída conforme solicitado.' }),
         })));
         const store = (loop as any).goalStore as GoalStore;
         const goal = makeGoal(store, {});
@@ -134,9 +134,9 @@ async function main() {
     }
     console.log('\n=== S21.2b — LLM confirma claim com evidência operacional real → achieved=true preservado ===');
     {
-        const loop = makeLoop(makeFakeProviderFactory(async () => ({
+        const loop = makeLoop(makeFakeProviderFactory(async (msgs: unknown) => ({
             status: 'success',
-            content: JSON.stringify({ achieved: true, summary: 'O arquivo foi enviado ao usuário com sucesso.' }),
+            content: tipoDaPerguntaDoMotor(msgs as Array<{ content?: unknown }>) === 'conclusao' ? vereditoConclusao(true, { summary: 'O arquivo foi enviado ao usuário com sucesso.' }) : JSON.stringify({ achieved: true, summary: 'O arquivo foi enviado ao usuário com sucesso.' }),
         })));
         const store = (loop as any).goalStore as GoalStore;
         const goal = makeGoal(store, {

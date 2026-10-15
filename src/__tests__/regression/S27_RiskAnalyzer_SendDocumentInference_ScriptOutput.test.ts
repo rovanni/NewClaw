@@ -39,7 +39,7 @@ import { ListWorkspaceTool } from '../../tools/list_workspace';
 import { SendDocumentTool } from '../../tools/send_document';
 import { Goal, PlanStep } from '../../loop/GoalTypes';
 import { getBudgetAuxiliar, PerfilAuxiliar } from '../../shared/auxTimeout';
-import './_fixtures/motorLegado';   // juízes simulados no formato antigo → formato do motor único (ADR-014)
+import { vereditoRiscoDaRevisao, tipoDaPerguntaDoMotor } from './_fixtures/veredito';
 
 let passed = 0;
 let failed = 0;
@@ -87,7 +87,11 @@ function makeGoal(objective: string): Goal {
 // contentStubClassifier migraram para o mesmo mecanismo que ObserverValidator (S258) já usa.
 function makeFakeProviderFactory(getResponse: () => string) {
     return {
-        chatWithFallback: async () => ({ status: 'success', content: getResponse(), attempts: [] }),
+        // O juiz de risco do motor (ADR-014) recebe o veredito equivalente à revisão; as demais chamadas, a revisão como está.
+        chatWithFallback: async (msgs: Array<{ content?: unknown }>) => ({
+            status: 'success', attempts: [],
+            content: tipoDaPerguntaDoMotor(msgs) === 'risco' ? vereditoRiscoDaRevisao(getResponse()) : getResponse(),
+        }),
         // Sprint 043 — ver a mesma nota em S77: o classificador de stub passou a derivar o prazo
         // da latência observada; sem fonte de medição, a função real devolve o padrão do perfil.
         getBudgetAuxiliar: (perfil: PerfilAuxiliar) => getBudgetAuxiliar(perfil, null, null),

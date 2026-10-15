@@ -27,7 +27,7 @@ import { ToolRegistry } from '../../core/ToolRegistry';
 import { Goal, PlanStep } from '../../loop/GoalTypes';
 import { ChannelContext } from '../../loop/agentLoopTypes';
 import { traceManager } from '../../core/ExecutionTrace';
-import './_fixtures/motorLegado';   // juízes simulados no formato antigo → formato do motor único (ADR-014)
+import { vereditoConclusao, tipoDaPerguntaDoMotor } from './_fixtures/veredito';
 
 let passed = 0;
 let failed = 0;
@@ -46,7 +46,7 @@ function emptyState(goalId: string): { cognitiveContext: unknown; progressModel:
 function makeFakeProviderFactory() {
     return {
         getBudgetAuxiliar: () => ({ timeoutMs: 45_000, origem: 'padrao', latenciaTipicaMs: null }),
-        chatWithFallback: async () => ({ status: 'success', content: JSON.stringify({ achieved: true, summary: 'teste S89' }) }),
+        chatWithFallback: async (msgs: Array<{ content?: unknown }>) => ({ status: 'success', content: tipoDaPerguntaDoMotor(msgs) === 'conclusao' ? vereditoConclusao(true, { summary: 'teste S89' }) : JSON.stringify({ achieved: true, summary: 'teste S89' }) }),
         getProvider: () => undefined,
         getProviderWithModel: () => ({ chat: async () => ({ status: 'success', content: JSON.stringify({ achieved: true, summary: 'teste S89' }) }) }),
     } as unknown as import('../../core/ProviderFactory').ProviderFactory;

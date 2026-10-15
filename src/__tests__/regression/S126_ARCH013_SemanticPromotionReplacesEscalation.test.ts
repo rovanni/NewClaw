@@ -29,7 +29,7 @@ import { GoalStore } from '../../loop/GoalStore';
 import { Goal, GoalAttempt } from '../../loop/GoalTypes';
 import { StepSemanticValidator } from '../../loop/StepSemanticValidator';
 import { PlanStep } from '../../loop/GoalTypes';
-import './_fixtures/motorLegado';   // juízes simulados no formato antigo → formato do motor único (ADR-014)
+import { vereditoPasso, tipoDaPerguntaDoMotor } from './_fixtures/veredito';
 
 let passed = 0;
 let failed = 0;
@@ -70,9 +70,12 @@ function makeAttempt(overrides: Partial<GoalAttempt> = {}): GoalAttempt {
 // Mocka chatWithFallback (não mais getProviderWithModel().chat() direto) — D-08,
 // docs/ARCHITECTURE/INVENTARIO_DUPLICACAO_2026-08-24.md: StepSemanticValidator.llmValidate migrou
 // para o mesmo mecanismo que ObserverValidator (S258) já usa.
-function makeProviderFactory(response: { result: string; confidence: number }) {
+function makeProviderFactory(response: { result: 'relevant' | 'mismatch' | 'unverifiable'; confidence: number }) {
     return {
-        chatWithFallback: async () => ({ status: 'success', content: JSON.stringify(response), attempts: [] }),
+        chatWithFallback: async (msgs: Array<{ content?: unknown }>) => ({
+            status: 'success', attempts: [],
+            content: tipoDaPerguntaDoMotor(msgs) === 'passo' ? vereditoPasso(response.result, response.confidence) : JSON.stringify(response),
+        }),
         getBudgetAuxiliar: () => ({ timeoutMs: 45_000, origem: 'padrao', latenciaTipicaMs: null }),
     } as unknown as import('../../core/ProviderFactory').ProviderFactory;
 }

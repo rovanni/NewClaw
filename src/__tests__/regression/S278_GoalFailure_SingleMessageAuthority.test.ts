@@ -39,7 +39,6 @@ import { permissionRegistry } from '../../core/PermissionRegistry';
 import { OperationalMode } from '../../core/CapabilityMode';
 import { Goal } from '../../loop/GoalTypes';
 import { makeLoop, makeGoal, emptyState, channelContext } from './_fixtures/goalLoopHarness';
-import './_fixtures/motorLegado';   // juízes simulados no formato antigo → formato do motor único (ADR-014)
 
 let passed = 0;
 let failed = 0;
@@ -60,7 +59,7 @@ async function runFailingGoal(
     over: Partial<Goal> = {},
 ) {
     ToolRegistry.register({ name: toolName, description: 'test', parameters: {}, execute });
-    const { loop, goalStore } = makeLoop(validationJson);
+    const { loop, goalStore } = makeLoop(validationJson, { formatoDoMotor: true });
     const goal = makeGoal(goalStore, [
         { id: 's1', description: 'passo', toolName, toolArgs: {}, status: 'pending', fallbackSteps: [] },
     ], over);
@@ -144,7 +143,7 @@ async function main(): Promise<void> {
     console.log('\n=== S278.3 [regras] — "existe um arquivo no disco" NÃO é "existe um arquivo pronto para o usuário" ===');
     {
         const authority = new GracefulDeliveryOrchestrator();
-        const { goalStore } = makeLoop({ achieved: true });
+        const { goalStore } = makeLoop({ achieved: true }, { formatoDoMotor: true });
         const goal = makeGoal(goalStore, [], {
             toolsTried: ['write', 'exec_command'],
             attempts: [

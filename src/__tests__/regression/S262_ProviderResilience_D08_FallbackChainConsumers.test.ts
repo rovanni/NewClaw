@@ -36,7 +36,7 @@ import { ReflectionMemory } from '../../memory/ReflectionMemory';
 import { ToolRegistry } from '../../core/ToolRegistry';
 import { LLMMessage, LLMResult } from '../../core/ProviderFactory';
 import { PlanStep } from '../../loop/GoalTypes';
-import './_fixtures/motorLegado';   // juízes simulados no formato antigo → formato do motor único (ADR-014)
+import { vereditoMolde, tipoDaPerguntaDoMotor } from './_fixtures/veredito';
 
 let passed = 0;
 let failed = 0;
@@ -58,7 +58,7 @@ type ChatWithFallbackCall = {
 };
 
 /** ProviderFactory fake — grava os argumentos de cada chamada e devolve o LLMResult configurado. */
-function makeRecordingProviderFactory(result: () => LLMResult) {
+function makeRecordingProviderFactory(result: (messages: LLMMessage[]) => LLMResult) {
     const calls: ChatWithFallbackCall[] = [];
     const factory = {
         chatWithFallback: async (
@@ -66,7 +66,7 @@ function makeRecordingProviderFactory(result: () => LLMResult) {
             timeoutMs: number | undefined, _externalSignal: unknown, modelOverride: string | undefined,
         ) => {
             calls.push({ messages, tools, preferredProvider, timeoutMs, modelOverride });
-            return result();
+            return result(messages);
         },
         getBudgetAuxiliar: () => ({ timeoutMs: 8000, perfil: 'classificacao', fonte: 'padrao' }),
     } as unknown as import('../../core/ProviderFactory').ProviderFactory;
@@ -134,7 +134,7 @@ console.log('\n=== S262-4 [funcional] — contentStubClassifier: fail-closed (is
 
 console.log('\n=== S262-5 [funcional] — contentStubClassifier: sucesso via chatWithFallback é interpretado normalmente ===');
 {
-    const { factory } = makeRecordingProviderFactory(() => ({ status: 'success', content: '{"isStub": false, "reason": "conteúdo real"}', attempts: [] }));
+    const { factory } = makeRecordingProviderFactory((msgs) => ({ status: 'success', content: tipoDaPerguntaDoMotor(msgs) === 'molde' ? vereditoMolde(false, 'conteúdo real') : '{"isStub": false, "reason": "conteúdo real"}', attempts: [] }));
     const classifier = makeContentStubClassifier(factory);
     const verdict = await classifier('conteúdo real, suficientemente longo pra passar do fast-path de vazio', 'write');
     assert(verdict.isStub === false && verdict.reason === 'conteúdo real', 'resposta de sucesso do chatWithFallback interpretada normalmente (isStub=false)', verdict);

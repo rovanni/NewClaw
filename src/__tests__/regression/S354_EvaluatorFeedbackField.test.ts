@@ -19,7 +19,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { ObserverValidator } from '../../loop/ObserverValidator';
 import { INSTRUCAO_DIFICULDADE, INSTRUCAO_FALTOU, lerDificuldade, lerFaltou } from '../../shared/evaluatorFlightRecorder';
-import './_fixtures/motorLegado';   // juízes simulados no formato antigo → formato do motor único (ADR-014)
+import { vereditoGrounding, vereditoQualidade, trechoDaFonte } from './_fixtures/veredito';
 
 let passed = 0;
 let failed = 0;
@@ -31,11 +31,11 @@ const quiet = async <T>(fn: () => Promise<T>): Promise<T> => {
     (process.stdout.write as unknown) = (): boolean => true;
     try { return await fn(); } finally { process.stdout.write = orig; }
 };
-function fake(conteudo: string, prompts: string[]) {
+function fake(resposta: (msgs: Array<{ content: string }>) => string, prompts: string[]) {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { getBudgetAuxiliar } = require('../../shared/auxTimeout');
     return {
-        chatWithFallback: async (msgs: Array<{ content: string }>) => { prompts.push(msgs[msgs.length - 1].content); return { status: 'success', content: conteudo, attempts: [] }; },
+        chatWithFallback: async (msgs: Array<{ content: string }>) => { prompts.push(msgs[msgs.length - 1].content); return { status: 'success', content: resposta(msgs), attempts: [] }; },
         getBudgetAuxiliar: (p: 'classificacao' | 'validacao') => getBudgetAuxiliar(p, null, null),
     } as any;
 }
@@ -59,8 +59,10 @@ async function main(): Promise<void> {
     console.log('\n=== S354-2 — juiz de grounding: prompt pede o campo; veredito igual com e sem ele; observação gravada ===');
     const pj: string[] = [];
     const ev = [{ id: 'E1', tool: 'weather', output: 'Curitiba: 18.4 °C' }];
-    const semCampo = await quiet(() => new ObserverValidator(fake('{"claims":[{"claim":"faz 27 °C","evidence":["E1"],"verdict":"NOT_SUPPORTED"}]}', pj), 'm').validateGrounding('Faz 27 °C.', ev, undefined, { phase: 'initial' }));
-    const comCampo = await quiet(() => new ObserverValidator(fake('{"claims":[{"claim":"faz 27 °C","evidence":["E1"],"verdict":"NOT_SUPPORTED"}],"faltou":"o pedido do usuário"}', pj), 'm').validateGrounding('Faz 27 °C.', ev, undefined, { phase: 'initial' }));
+    const refutada = (faltou?: string) => (msgs: Array<{ content: string }>) =>
+        vereditoGrounding([{ afirmacao: 'faz 27 °C', confere: 'nao', evidencia: 'E1', trecho: trechoDaFonte(msgs) }], { faltou });
+    const semCampo = await quiet(() => new ObserverValidator(fake(refutada(), pj), 'm').validateGrounding('Faz 27 °C.', ev, undefined, { phase: 'initial' }));
+    const comCampo = await quiet(() => new ObserverValidator(fake(refutada('o pedido do usuário'), pj), 'm').validateGrounding('Faz 27 °C.', ev, undefined, { phase: 'initial' }));
     assert(pj[0].includes(INSTRUCAO_FALTOU), 'o prompt do juiz contém a instrução única');
     assert(semCampo.state === comCampo.state && semCampo.state === 'REJECTED', `veredito não muda com o campo (${semCampo.state} / ${comCampo.state})`);
     const rj = ler('validacao_saida_contra_evidencia-').find(r => r.id === comCampo.avaliacaoId);
@@ -70,8 +72,8 @@ async function main(): Promise<void> {
 
     console.log('\n=== S354-3 — validador de qualidade: idem ===');
     const pq: string[] = [];
-    const q0 = await quiet(() => new ObserverValidator(fake('{"approved": false, "reason": "r", "confidence": 0.8}', pq), 'm').validate('pedido', 'i', 'edit', 'Conteúdo adicionado', 'Resposta completa ao usuário.'));
-    const q1 = await quiet(() => new ObserverValidator(fake('{"approved": false, "reason": "r", "confidence": 0.8, "faltou": "o resultado das outras ferramentas"}', pq), 'm').validate('pedido', 'i', 'edit', 'Conteúdo adicionado', 'Resposta completa ao usuário.'));
+    const q0 = await quiet(() => new ObserverValidator(fake(() => vereditoQualidade(false, { reason: 'r', confidence: 0.8 }), pq), 'm').validate('pedido', 'i', 'edit', 'Conteúdo adicionado', 'Resposta completa ao usuário.'));
+    const q1 = await quiet(() => new ObserverValidator(fake(() => vereditoQualidade(false, { reason: 'r', confidence: 0.8, faltou: 'o resultado das outras ferramentas' }), pq), 'm').validate('pedido', 'i', 'edit', 'Conteúdo adicionado', 'Resposta completa ao usuário.'));
     assert(pq[0].includes(INSTRUCAO_FALTOU), 'o prompt do validador contém a instrução única');
     assert(q0.approved === q1.approved && q0.confidence === q1.confidence, 'aprovação e confiança não mudam com o campo');
     assert(ler('validacao_qualidade_da_resposta-').find(r => r.id === q1.avaliacaoId)?.depois?.conteudo?.faltou === 'o resultado das outras ferramentas', 'gravador registra a observação do validador');

@@ -37,7 +37,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { ObserverValidator, EvidenceItem } from '../../loop/ObserverValidator';
 import type { ProviderFactory, LLMResult } from '../../core/ProviderFactory';
-import './_fixtures/motorLegado';   // juízes simulados no formato antigo → formato do motor único (ADR-014)
+import { vereditoGrounding, vereditoQualidade, trechoDaFonte } from './_fixtures/veredito';
 
 let passed = 0;
 let failed = 0;
@@ -92,7 +92,8 @@ console.log('\n=== S258-2 — validateGrounding(): repassa observerModel como mo
     let capturedArgs: unknown[] = [];
     const validator = makeValidator((async (...args: unknown[]) => {
         capturedArgs = args;
-        return { status: 'success', content: '{"claims":[{"claim":"17.9°C","verdict":"SUPPORTED","evidence_id":"E1"}]}', attempts: [] } as LLMResult;
+        const msgs = args[0] as Array<{ content?: unknown }>;
+        return { status: 'success', content: vereditoGrounding([{ afirmacao: '17.9°C', confere: 'sim', evidencia: 'E1', trecho: trechoDaFonte(msgs) }]), attempts: [] } as LLMResult;
     }) as ProviderFactory['chatWithFallback'], 'glm-5.2:cloud');
 
     const verdict = await validator.validateGrounding('Está 17.9°C em Cornélio Procópio.', EVID);
@@ -108,9 +109,9 @@ console.log('\n=== S258-3 — validateGrounding(): provider preferido (local) fa
     // indisponível/lento não pode mais significar "juiz nunca conclui". chatWithFallback já
     // decide sozinho quando cair para o próximo provider — o teste simula o resultado FINAL
     // agregado que ele devolve nesse cenário (mesma técnica do S222-4).
-    const validator = makeValidator((async () => ({
+    const validator = makeValidator((async (msgs: Array<{ content?: unknown }>) => ({
         status: 'success',
-        content: '{"claims":[{"claim":"parcialmente nublado","verdict":"SUPPORTED","evidence_id":"E1"}]}',
+        content: vereditoGrounding([{ afirmacao: 'parcialmente nublado', confere: 'sim', evidencia: 'E1', trecho: trechoDaFonte(msgs) }]),
         attempts: [
             { provider: 'Modelo local', model: 'default', duration: 30011, status: 'error' as const, errorMessage: 'This operation was aborted' },
             { provider: 'Modelo local', model: 'default', duration: 41567, status: 'error' as const, errorMessage: 'This operation was aborted' },
@@ -144,7 +145,7 @@ console.log('\n=== S258-5 — validate() (Q3, checagem de qualidade pós-execuç
 {
     const validator = makeValidator((async () => ({
         status: 'success',
-        content: '{"approved":true,"confidence":0.8,"reason":"resposta atende ao pedido"}',
+        content: vereditoQualidade(true, { confidence: 0.8, reason: 'resposta atende ao pedido' }),
         attempts: [
             { provider: 'Modelo local', model: 'default', duration: 30011, status: 'error' as const, errorMessage: 'This operation was aborted' },
             { provider: 'ollama', model: 'glm-5.2:cloud', duration: 1800, status: 'success' as const },

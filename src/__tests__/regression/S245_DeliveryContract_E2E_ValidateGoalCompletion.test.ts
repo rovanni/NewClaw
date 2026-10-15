@@ -27,7 +27,7 @@ import { GoalStore } from '../../loop/GoalStore';
 import { ToolRegistry } from '../../core/ToolRegistry';
 import { Goal, PlanStep, createEmptyStepCognitiveContext } from '../../loop/GoalTypes';
 import { AUTO_DELIVERY_CRITERION_IDS } from '../../loop/planning/ensureDeliverySuccessCriteria';
-import './_fixtures/motorLegado';   // juízes simulados no formato antigo → formato do motor único (ADR-014)
+import { vereditoConclusao, tipoDaPerguntaDoMotor, orcamentoDeTeste } from './_fixtures/veredito';
 
 let passed = 0;
 let failed = 0;
@@ -42,7 +42,7 @@ function makeLoop(chatWithFallback: (...args: unknown[]) => Promise<{ status: st
     const fakeMemory = { getDatabase: () => db } as any;
     const fakePlanner = { getAvailableSkills: () => [], setSkillContext: () => {}, setModel: () => {}, replan: async () => ({ steps: [], strategy: 'n/a' }) } as any;
     const fakeAgentLoop = { process: async () => '' } as any;
-    const fakeProviderFactory = { chatWithFallback } as any;
+    const fakeProviderFactory = { chatWithFallback, getBudgetAuxiliar: orcamentoDeTeste } as any;
     const loop = new GoalExecutionLoop(
         fakeAgentLoop, goalStore, fakePlanner,
         { record: () => {}, buildContextHint: () => '', findHardConstraints: () => [] } as any,
@@ -110,7 +110,7 @@ console.log('\n=== S245-3 — validateGoalCompletion(): COM o GATE (abandono rea
     const { loop, goalStore } = makeLoop(async (messages: any) => {
         llmCalls++;
         lastPrompt = messages[0].content;
-        return { status: 'success', content: '{"achieved":false,"reason":"PDF prometido não foi entregue"}' };
+        return { status: 'success', content: tipoDaPerguntaDoMotor(messages) === 'conclusao' ? vereditoConclusao(false, { reason: 'PDF prometido não foi entregue' }) : '{"achieved":false,"reason":"PDF prometido não foi entregue"}' };
     });
     const goal = makeGoal(goalStore, {
         currentPlan: [{ id: 's1', description: 'write local', toolName: 'write', status: 'completed', fallbackSteps: [] }],
@@ -131,7 +131,7 @@ console.log('\n=== S245-3 — validateGoalCompletion(): COM o GATE (abandono rea
 console.log('\n=== S245-4 — validateGoalCompletion(): GATE presente mas artefato JÁ entregue — prompt não acusa abandono ===');
 {
     let lastPrompt = '';
-    const { loop, goalStore } = makeLoop(async (messages: any) => { lastPrompt = messages[0].content; return { status: 'success', content: '{"achieved":true,"summary":"ok"}' }; });
+    const { loop, goalStore } = makeLoop(async (messages: any) => { lastPrompt = messages[0].content; return { status: 'success', content: tipoDaPerguntaDoMotor(messages) === 'conclusao' ? vereditoConclusao(true, { summary: 'ok' }) : '{"achieved":true,"summary":"ok"}' }; });
     const goal = makeGoal(goalStore, {
         currentPlan: [{ id: 's1', description: 'write local', toolName: 'write', status: 'completed', fallbackSteps: [] }],
         attempts: [{ id: 'a1', planStepId: 's1', toolName: 'write', args: {}, result: 'success', durationMs: 1, executedAt: Date.now() }],

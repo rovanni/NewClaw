@@ -30,7 +30,7 @@ import { GoalStore } from '../../loop/GoalStore';
 import { ToolRegistry } from '../../core/ToolRegistry';
 import { Goal, PlanStep } from '../../loop/GoalTypes';
 import { ChannelContext } from '../../loop/agentLoopTypes';
-import './_fixtures/motorLegado';   // juízes simulados no formato antigo → formato do motor único (ADR-014)
+import { vereditoConclusao, tipoDaPerguntaDoMotor, orcamentoDeTeste } from './_fixtures/veredito';
 
 let passed = 0;
 let failed = 0;
@@ -53,6 +53,7 @@ ToolRegistry.register({
 function makeFakeProviderFactory(chatImpl: (...args: unknown[]) => Promise<unknown>) {
     return {
         chatWithFallback: chatImpl,
+        getBudgetAuxiliar: orcamentoDeTeste,
         getProvider: () => undefined,
     } as unknown as import('../../core/ProviderFactory').ProviderFactory;
 }
@@ -127,11 +128,12 @@ async function main() {
     // (chamadas sequenciais, não concorrentes — reflete exatamente o bug de vazamento
     // SEQUENCIAL via resumeGoal(), que é determinístico e não depende de timing de await).
     let phase: 'A' | 'B' = 'A';
-    const providerFactory = makeFakeProviderFactory(async () => {
+    const providerFactory = makeFakeProviderFactory(async (msgs: unknown) => {
+        const doJuiz = tipoDaPerguntaDoMotor(msgs as Array<{ content?: unknown }>) === 'conclusao';
         if (phase === 'A') {
-            return { status: 'success', content: JSON.stringify({ achieved: true, summary: 'Tarefa de teste concluída.' }) };
+            return { status: 'success', content: doJuiz ? vereditoConclusao(true, { summary: 'Tarefa de teste concluída.' }) : JSON.stringify({ achieved: true, summary: 'Tarefa de teste concluída.' }) };
         }
-        return { status: 'success', content: JSON.stringify({ achieved: false, summary: 'Ainda não concluído (teste).' }) };
+        return { status: 'success', content: doJuiz ? vereditoConclusao(false, { summary: 'Ainda não concluído (teste).' }) : JSON.stringify({ achieved: false, summary: 'Ainda não concluído (teste).' }) };
     });
 
     const { loop, goalStore } = makeLoop(providerFactory);

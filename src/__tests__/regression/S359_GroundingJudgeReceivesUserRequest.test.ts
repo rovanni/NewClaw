@@ -14,7 +14,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { ObserverValidator } from '../../loop/ObserverValidator';
-import './_fixtures/motorLegado';   // juízes simulados no formato antigo → formato do motor único (ADR-014)
+import { vereditoGrounding, tipoDaPerguntaDoMotor } from './_fixtures/veredito';
 
 let passed = 0;
 let failed = 0;
@@ -30,7 +30,7 @@ function juiz(prompts: string[]) {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { getBudgetAuxiliar } = require('../../shared/auxTimeout');
     const f = {
-        chatWithFallback: async (msgs: Array<{ content: string }>) => { prompts.push(msgs[0].content); return { status: 'success', content: '{"claims":[]}', attempts: [] }; },
+        chatWithFallback: async (msgs: Array<{ content: string }>) => { prompts.push(msgs[0].content); return { status: 'success', content: (tipoDaPerguntaDoMotor(msgs) === 'grounding' ? vereditoGrounding([]) : '{"claims":[]}'), attempts: [] }; },
         getBudgetAuxiliar: (p: 'classificacao' | 'validacao') => getBudgetAuxiliar(p, null, null),
     } as any;
     return new ObserverValidator(f, 'm');

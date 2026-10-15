@@ -39,7 +39,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { ObserverValidator, GroundedClaim, EvidenceItem } from '../../loop/ObserverValidator';
-import './_fixtures/motorLegado';   // juízes simulados no formato antigo → formato do motor único (ADR-014)
+import { vereditoGrounding, trechoDaFonte } from './_fixtures/veredito';
 import { agregarPorItens } from '../../validation/contratoDeValidacao';
 import { estadoDeGrounding } from '../../validation/tipos/saidaContraEvidencia';
 
@@ -63,40 +63,41 @@ const EVID: EvidenceItem[] = [
  * GoalPlanner.callPlannerLLM() desde S222 (chatWithFallback, com resiliência multi-provider), então
  * o fake precisa responder pela mesma interface real que o código agora chama.
  */
-function fakeFactory(conteudo: string | (() => never)) {
+type Resposta = (msgs: Array<{ content?: unknown }>) => string;
+function fakeFactory(conteudo: string | Resposta) {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { getBudgetAuxiliar } = require('../../shared/auxTimeout');
     return {
-        chatWithFallback: async () => {
-            if (typeof conteudo === 'function') conteudo();
-            return { status: 'success', content: conteudo as string, attempts: [] };
+        chatWithFallback: async (msgs: Array<{ content?: unknown }>) => {
+            return { status: 'success', content: typeof conteudo === 'function' ? conteudo(msgs) : conteudo, attempts: [] };
         },
         getBudgetAuxiliar: (perfil: 'classificacao' | 'validacao') => getBudgetAuxiliar(perfil, null, null),
     } as unknown as import('../../core/ProviderFactory').ProviderFactory;
 }
 
-const judge = (conteudo: string | (() => never)) => new ObserverValidator(fakeFactory(conteudo), 'modelo-de-teste');
+const judge = (conteudo: string | Resposta) => new ObserverValidator(fakeFactory(conteudo), 'modelo-de-teste');
 
 /**
  * Variante que REGISTRA o prompt entregue ao juiz. Necessária para provar duas coisas que não
  * aparecem no veredito: que a resposta chegou inteira, e que a evidência chegou literal.
  */
-function capturador(conteudo: string) {
+function capturador(resposta: Resposta) {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { getBudgetAuxiliar } = require('../../shared/auxTimeout');
     const prompts: string[] = [];
     const factory = {
         chatWithFallback: async (msgs: Array<{ content: string }>) => {
             prompts.push(msgs[0].content);
-            return { status: 'success', content: conteudo, attempts: [] };
+            return { status: 'success', content: resposta(msgs), attempts: [] };
         },
         getBudgetAuxiliar: (perfil: 'classificacao' | 'validacao') => getBudgetAuxiliar(perfil, null, null),
     } as unknown as import('../../core/ProviderFactory').ProviderFactory;
     return { factory, prompts };
 }
 
-const claims = (...cs: Array<[string, GroundedClaim['verdict']]>) =>
-    JSON.stringify({ claims: cs.map(([c, v]) => ({ claim: c, evidence: ['E1'], verdict: v })) });
+// O juiz de grounding (motor único, ADR-014): cada afirmação com a evidência E1 e a citação literal da fonte do prompt.
+const claims = (...cs: Array<[string, 'sim' | 'nao' | 'sem_evidencia']>): Resposta => msgs =>
+    vereditoGrounding(cs.map(([afirmacao, confere]) => ({ afirmacao, confere, evidencia: 'E1', trecho: trechoDaFonte(msgs) })));
 
 async function main(): Promise<void> {
 
@@ -123,8 +124,8 @@ console.log('\n=== S217-2 — o incidente Weather não pode mais ser entregue ==
 {
     // Evidência diz Nublado/24.9°C/74%; a resposta dizia Sol/24–31°C/70%.
     const v = await judge(claims(
-        ['O céu está ensolarado', 'NOT_SUPPORTED'],
-        ['A umidade é de 70%', 'NOT_SUPPORTED'],
+        ['O céu está ensolarado', 'nao'],
+        ['A umidade é de 70%', 'nao'],
     )).validateGrounding('Sol com algumas nuvens, entre 24 e 31 graus, umidade de 70%.', EVID);
     assert(v.state === 'REJECTED', 'estado é REJECTED', v.state);
     assert(v.state !== 'VALIDATED', 'NÃO autoriza entrega — o caminho do incidente deixa de existir', v.state);
@@ -133,14 +134,14 @@ console.log('\n=== S217-2 — o incidente Weather não pode mais ser entregue ==
 console.log('\n=== S217-3 — valor presente com papel errado também bloqueia ===');
 {
     // Caso real de 03/08/2026: os valores existem na evidência, o papel atribuído não.
-    const v = await judge(claims(['Hoje: mínima 16°C e máxima 25°C', 'NOT_SUPPORTED']))
+    const v = await judge(claims(['Hoje: mínima 16°C e máxima 25°C', 'nao']))
         .validateGrounding('Hoje: mínima de 16°C e máxima de 25°C.', EVID);
     assert(v.state === 'REJECTED', 'papel errado → REJECTED, ainda que os valores existam', v.state);
 }
 
 console.log('\n=== S217-4 — ambiguidade não vira suporte (ausência de contradição ≠ suporte) ===');
 {
-    const v = await judge(claims(['X está a 25°C', 'NOT_EVALUABLE']))
+    const v = await judge(claims(['X está a 25°C', 'sem_evidencia']))
         .validateGrounding('X está a 25°C.', [{ id: 'E1', tool: 'x', output: 'X: 25' }]);
     assert(v.state === 'NOT_EVALUABLE', 'evidência que não determina → NOT_EVALUABLE', v.state);
     assert(v.state !== 'VALIDATED', 'não autoriza entrega', v.state);
@@ -148,14 +149,14 @@ console.log('\n=== S217-4 — ambiguidade não vira suporte (ausência de contra
 
 console.log('\n=== S217-5 — fato adicional sobre evidência enumerativa bloqueia ===');
 {
-    const v = await judge(claims(['A = 10', 'SUPPORTED'], ['C = 30', 'NOT_SUPPORTED']))
+    const v = await judge(claims(['A = 10', 'sim'], ['C = 30', 'nao']))
         .validateGrounding('A = 10 e C = 30.', EVID);
     assert(v.state === 'REJECTED', 'uma afirmação não sustentada basta para bloquear o conjunto', v.state);
 }
 
 console.log('\n=== S217-6 — suporte real continua sendo entregue ===');
 {
-    const v = await judge(claims(['A = 10', 'SUPPORTED'], ['B = 20', 'SUPPORTED']))
+    const v = await judge(claims(['A = 10', 'sim'], ['B = 20', 'sim']))
         .validateGrounding('A = 10. B = 20.', EVID);
     assert(v.state === 'VALIDATED', 'todas sustentadas → VALIDATED', v.state);
     assert(v.claims.length === 2, 'veredito por afirmação preservado', v.claims);
@@ -163,7 +164,7 @@ console.log('\n=== S217-6 — suporte real continua sendo entregue ===');
 
 console.log('\n=== S217-7 — sem evidência, C1 não se aplica (≠ aprovado) ===');
 {
-    const v = await judge(claims(['qualquer', 'SUPPORTED'])).validateGrounding('Olá! Como posso ajudar?', []);
+    const v = await judge(claims(['qualquer', 'sim'])).validateGrounding('Olá! Como posso ajudar?', []);
     assert(v.state === 'NOT_APPLICABLE', 'nenhuma ferramenta no turno → NOT_APPLICABLE', v.state);
     assert(v.state !== 'VALIDATED', 'NOT_APPLICABLE é distinto de VALIDATED — não afirma verificação', v.state);
 }
@@ -182,11 +183,11 @@ console.log('\n=== S217-9 — saída estruturalmente inválida → UNVALIDATED =
 {
     for (const [rotulo, saida] of [
         ['sem JSON',            'não sei responder isso'],
-        ['sem campo claims',    '{"resultado":"ok"}'],
-        ['claims não é array',  '{"claims":"nenhuma"}'],
-        ['verdict inválido',    '{"claims":[{"claim":"a","evidence":["E1"],"verdict":"TALVEZ"}]}'],
-        ['claim vazio',         '{"claims":[{"claim":"","evidence":["E1"],"verdict":"SUPPORTED"}]}'],
-    ] as Array<[string, string]>) {
+        ['sem estado nem itens', '{"resultado":"ok"}'],
+        ['itens ausentes',      '{"claims":"nenhuma"}'],
+        ['confere inválido',    (msgs: Array<{ content?: unknown }>) => JSON.stringify({ estado: 'aprovado', itens: [{ item: 'a', confere: 'valor-invalido', evidencia: 'E1', trecho: trechoDaFonte(msgs) }], confianca: 0.9, motivo: '' })],
+        ['item vazio',          (msgs: Array<{ content?: unknown }>) => vereditoGrounding([{ afirmacao: '', confere: 'sim', evidencia: 'E1', trecho: trechoDaFonte(msgs) }])],
+    ] as Array<[string, string | Resposta]>) {
         const v = await judge(saida).validateGrounding('A = 10.', EVID);
         assert(v.state === 'UNVALIDATED', `${rotulo} → UNVALIDATED (não se "conserta" saída malformada)`, v.state);
     }
@@ -205,7 +206,7 @@ console.log('\n=== S217-10 — proveniência inventada não sustenta SUPPORTED =
 
 console.log('\n=== S217-11 — orçamento vem de getBudgetAuxiliar, não de constante nova ===');
 {
-    const v = await judge(claims(['A = 10', 'SUPPORTED'])).validateGrounding('A = 10.', EVID);
+    const v = await judge(claims(['A = 10', 'sim'])).validateGrounding('A = 10.', EVID);
     assert(v.budgetMs === 45_000, 'perfil validacao, padrão do mecanismo existente (45s)', v.budgetMs);
     assert(v.budgetOrigin === 'padrao', 'sem medição, declara que é padrão — não inventa número', v.budgetOrigin);
 
@@ -241,7 +242,7 @@ console.log('\n=== S217-13 — a resposta chega INTEIRA ao juiz (sem truncamento
     // Preferência 1 da orientação de 09/08/2026: avaliar a resposta completa, mantendo
     // 1 resposta → 1 julgamento → N afirmações. O corte em 4000 chars era decisão de
     // implementação, não da ADR-010 — e produzia veredito sobre prefixo.
-    const cap = capturador(claims(['A = 10', 'SUPPORTED']));
+    const cap = capturador(claims(['A = 10', 'sim']));
     const corpo = 'A = 10. ' + 'texto de enchimento. '.repeat(400);   // ~8k chars, > o antigo teto
     const resposta = `${corpo}FIM_DA_RESPOSTA_MARCA`;
     const v = await new ObserverValidator(cap.factory, 'modelo-de-teste').validateGrounding(resposta, EVID);
@@ -257,7 +258,7 @@ console.log('\n=== S217-14 — resposta que não cabe NÃO é truncada: é UNVAL
     // Preferência 2: havendo limite real de contexto, o comportamento seguro é não concluir.
     // Nunca truncar-e-aprovar, nunca NOT_SUPPORTED, nunca NOT_EVALUABLE — o juiz não recebeu
     // a resposta, então não concluiu sobre ela.
-    const cap = capturador(claims(['A = 10', 'SUPPORTED']));
+    const cap = capturador(claims(['A = 10', 'sim']));
     const excedente = 'TRECHO_ALEM_DO_TETO';
     const resposta = 'A = 10. ' + 'x'.repeat(61_000) + excedente;
     const v = await new ObserverValidator(cap.factory, 'modelo-de-teste').validateGrounding(resposta, EVID);
@@ -285,7 +286,7 @@ console.log('\n=== S217-15 — cifrão na evidência chega literal ao juiz ===')
     // por string, `$&`, `` $` ``, `$'` e `$$` são padrões — um output de ferramenta contendo
     // `$&` reescreveria o prompt do juiz com o texto casado.
     const especiais = "Preço: $2,80 | $& | $` | $' | $$ | var=$USER";
-    const cap = capturador(claims(['O preço é $2,80', 'SUPPORTED']));
+    const cap = capturador(claims(['O preço é $2,80', 'sim']));
     await new ObserverValidator(cap.factory, 'modelo-de-teste')
         .validateGrounding('O preço é $2,80.', [{ id: 'E1', tool: 'crypto_analysis', input: '{"symbol":"$RIVER"}', output: especiais }]);
 

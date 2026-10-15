@@ -19,7 +19,7 @@ process.env.WORKSPACE_DIR = process.env.WORKSPACE_DIR || 'D:/IA/newclaw/workspac
 import { ObserverValidator, EvidenceItem } from '../../loop/ObserverValidator';
 import { GoalExecutionLoop } from '../../loop/GoalExecutionLoop';
 import { Goal, PlanStep, SuccessCriterion } from '../../loop/GoalTypes';
-import './_fixtures/motorLegado';   // juízes simulados no formato antigo → formato do motor único (ADR-014)
+import { vereditoGrounding, trechoDaFonte } from './_fixtures/veredito';
 
 let passed = 0;
 let failed = 0;
@@ -27,13 +27,14 @@ function assert(c: boolean, m: string, d?: unknown): void {
     if (c) { console.log(`  ✅ ${m}`); passed++; } else { console.error(`  ❌ FALHOU: ${m}`, d ?? ''); failed++; }
 }
 
-function fakeFactory(kind: 'ok' | 'fail' | 'malformed', judgeJson = ''): import('../../core/ProviderFactory').ProviderFactory {
+type Resposta = (msgs: Array<{ content?: unknown }>) => string;
+function fakeFactory(kind: 'ok' | 'fail' | 'malformed', judgeJson: Resposta = () => ''): import('../../core/ProviderFactory').ProviderFactory {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { getBudgetAuxiliar } = require('../../shared/auxTimeout');
     return {
-        chatWithFallback: async () => {
+        chatWithFallback: async (msgs: Array<{ content?: unknown }>) => {
             if (kind === 'fail') return { status: 'error', content: '', attempts: [{ errorMessage: 'provedor fora' }] };
-            return { status: 'success', content: kind === 'malformed' ? 'isto não é json' : judgeJson, attempts: [] };
+            return { status: 'success', content: kind === 'malformed' ? 'isto não é json' : judgeJson(msgs), attempts: [] };
         },
         getBudgetAuxiliar: (p: 'classificacao' | 'validacao') => getBudgetAuxiliar(p, null, null),
     } as unknown as import('../../core/ProviderFactory').ProviderFactory;
@@ -49,11 +50,12 @@ const strip = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, '');
 const traces = (lines: string[], tag: string) => lines.map(strip).filter(l => l.includes(`${tag} {`))
     .map(l => JSON.parse(l.slice(l.indexOf(`${tag} `) + tag.length + 1)));
 
-const judgeJson = JSON.stringify({ claims: [
-    { claim: 'Hoje é 26/09/2026', evidence: [], verdict: 'NOT_EVALUABLE' },
-    { claim: 'O programa imprime 17 anos', evidence: ['E1'], verdict: 'SUPPORTED' },
-    { claim: 'O arquivo tem 36 linhas', evidence: ['E1'], verdict: 'SUPPORTED' },
-] });
+// Veredito do juiz de grounding (motor único, ADR-014), com a citação literal da fonte que o prompt trouxe.
+const judgeJson: Resposta = msgs => vereditoGrounding([
+    { afirmacao: 'Hoje é 26/09/2026', confere: 'sem_evidencia', evidencia: '', trecho: trechoDaFonte(msgs) },
+    { afirmacao: 'O programa imprime 17 anos', confere: 'sim', evidencia: 'E1', trecho: trechoDaFonte(msgs) },
+    { afirmacao: 'O arquivo tem 36 linhas', confere: 'sim', evidencia: 'E1', trecho: trechoDaFonte(msgs) },
+]);
 const bigOutput = 'x'.repeat(5000) + ' SEGREDO-DA-EVIDENCIA';
 const evidences: EvidenceItem[] = [{ id: 'E1', tool: 'read', input: '{"path":"a.py"}', output: bigOutput }];
 const response = 'Hoje é 26/09/2026. O programa imprime 17 anos. O arquivo tem 36 linhas.';

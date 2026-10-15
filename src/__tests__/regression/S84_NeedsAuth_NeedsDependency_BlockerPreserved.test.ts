@@ -29,7 +29,7 @@ import { Goal, PlanStep, CycleResult } from '../../loop/GoalTypes';
 import { ChannelContext } from '../../loop/agentLoopTypes';
 import { KNOWN_DEPS } from '../../loop/GoalEvaluator';
 import { CapabilityRegistry } from '../../core/CapabilityRegistry';
-import './_fixtures/motorLegado';   // juízes simulados no formato antigo → formato do motor único (ADR-014)
+import { vereditoConclusao, tipoDaPerguntaDoMotor } from './_fixtures/veredito';
 
 let passed = 0;
 let failed = 0;
@@ -75,7 +75,7 @@ ToolRegistry.register({
 function makeFakeProviderFactory() {
     return {
         getBudgetAuxiliar: () => ({ timeoutMs: 45_000, origem: 'padrao', latenciaTipicaMs: null }),
-        chatWithFallback: async () => ({ status: 'success', content: JSON.stringify({ achieved: true, summary: 'teste S84' }) }),
+        chatWithFallback: async (msgs: Array<{ content?: unknown }>) => ({ status: 'success', content: tipoDaPerguntaDoMotor(msgs) === 'conclusao' ? vereditoConclusao(true, { summary: 'teste S84' }) : JSON.stringify({ achieved: true, summary: 'teste S84' }) }),
         getProvider: () => undefined,
         getProviderWithModel: () => ({ chat: async () => ({ status: 'success', content: JSON.stringify({ achieved: true, summary: 'teste S84' }) }) }),
     } as unknown as import('../../core/ProviderFactory').ProviderFactory;

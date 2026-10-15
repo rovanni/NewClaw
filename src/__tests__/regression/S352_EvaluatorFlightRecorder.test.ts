@@ -26,7 +26,7 @@ import { RiskAnalyzer } from '../../loop/RiskAnalyzer';
 import { ToolRegistry } from '../../core/ToolRegistry';
 import { ReadTool } from '../../tools/read_tool';
 import type { Goal, PlanStep } from '../../loop/GoalTypes';
-import './_fixtures/motorLegado';   // juízes simulados no formato antigo → formato do motor único (ADR-014)
+import { vereditoGrounding, vereditoQualidade, vereditoRiscoDaRevisao, tipoDaPerguntaDoMotor, trechoDaFonte } from './_fixtures/veredito';
 
 let passed = 0;
 let failed = 0;
@@ -54,11 +54,16 @@ function fetchQueSoPensa(): typeof fetch {
     }) as unknown as typeof fetch;
 }
 
-function fakeFactory(conteudo: string) {
+type Resposta = (msgs: Array<{ content?: unknown }>) => string;
+/** No RiskAnalyzer o mesmo modelo responde ao revisor e ao juiz de risco: ao juiz, o veredito equivalente à revisão. */
+const revisao = (texto: string): Resposta => msgs => tipoDaPerguntaDoMotor(msgs) === 'risco' ? vereditoRiscoDaRevisao(texto) : texto;
+
+function fakeFactory(resposta: Resposta) {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { getBudgetAuxiliar } = require('../../shared/auxTimeout');
     return {
-        chatWithFallback: async (_m: unknown, _t: unknown, _p: unknown, _ms: unknown, _s: unknown, _mo: unknown, opts?: { telemetry?: CallTelemetry }) => {
+        chatWithFallback: async (m: Array<{ content?: unknown }>, _t: unknown, _p: unknown, _ms: unknown, _s: unknown, _mo: unknown, opts?: { telemetry?: CallTelemetry }) => {
+            const conteudo = resposta(m);
             opts?.telemetry?.attempts.push({ provider: 'ollama', model: 'modelo-de-teste', startedAt: new Date().toISOString(), status: 'success', thinkingChars: 12, thinkingText: 'pensei aqui.', contentChars: conteudo.length });
             return { status: 'success', content: conteudo, attempts: [] };
         },
@@ -96,7 +101,7 @@ async function main(): Promise<void> {
 
     console.log('\n=== S352-2 — juiz de grounding: registro antes/durante/depois, SEM conteúdo por padrão ===');
     delete process.env.TRACE_CONTENT;
-    const juiz = new ObserverValidator(fakeFactory('{"claims":[{"claim":"faz 27 °C","evidence":["E1"],"verdict":"NOT_SUPPORTED"}]}'), 'modelo-de-teste');
+    const juiz = new ObserverValidator(fakeFactory(msgs => vereditoGrounding([{ afirmacao: 'faz 27 °C', confere: 'nao', evidencia: 'E1', trecho: trechoDaFonte(msgs) }])), 'modelo-de-teste');
     const v = await quiet(() => juiz.validateGrounding('Faz 27 °C em Curitiba.', [{ id: 'E1', tool: 'weather', output: 'Curitiba: 18.4 °C' }], undefined, { phase: 'initial', goalId: 'goal_x', stepId: 'step_2' }));
     const regs = lerRegistros(pasta, 'validacao_saida_contra_evidencia-');
     const r = regs.find(x => x.tipo === 'avaliacao');
@@ -125,7 +130,7 @@ async function main(): Promise<void> {
     assert(ef?.avaliacaoId === v2.avaliacaoId && ef?.efeito === 'resposta_bloqueada', 'efeito gravado com o id da avaliação');
 
     console.log('\n=== S352-5 — validador de qualidade também grava; pulos não ===');
-    const qual = new ObserverValidator(fakeFactory('{"approved": false, "reason": "não atende", "confidence": 0.8, "failure_type": "other"}'), 'modelo-de-teste');
+    const qual = new ObserverValidator(fakeFactory(() => vereditoQualidade(false, { reason: 'não atende', confidence: 0.8, failureType: 'other' })), 'modelo-de-teste');
     const q = await quiet(() => qual.validate('qual a previsão?', 'question', 'edit', 'Conteúdo adicionado: questoes.md', 'Resposta completa ao usuário, com a tabela inteira.'));
     const pulo = await quiet(() => qual.validate('qual a previsão?', 'question', 'edit', 'Conteúdo adicionado: questoes.md', ''));
     const rq = lerRegistros(pasta, 'validacao_qualidade_da_resposta-');
@@ -134,7 +139,7 @@ async function main(): Promise<void> {
 
     console.log('\n=== S352-6 — análise de risco grava a revisão do plano (real) ===');
     try { ToolRegistry.register(new ReadTool()); } catch { /* já registrado */ }
-    const risco = new RiskAnalyzer(fakeFactory('{"risks": ["o passo 2 não usa o resultado do passo 1"], "plan": null}'), ToolRegistry,
+    const risco = new RiskAnalyzer(fakeFactory(revisao('{"risks": ["o passo 2 não usa o resultado do passo 1"], "plan": null}')), ToolRegistry,
         { findHardConstraints: () => [], findToolFailures: () => '' } as never);
     const agora = Date.now();
     const goal = { id: 'goal_risco', sessionKey: 't', conversationId: 'c', userIntent: 'ler e resumir', objective: 'ler e resumir notas.txt', status: 'planning',
@@ -149,9 +154,9 @@ async function main(): Promise<void> {
     assert(Array.isArray(rr?.depois?.conteudo?.riscos) && typeof rr?.antes?.conteudo?.prompt === 'string', 'com TRACE_CONTENT: riscos e prompt gravados');
 
     console.log('\n=== S352-6b — revisor de risco rejeita campo de observação selecionado sem descrição ===');
-    const riscoComRelatoVazio = new RiskAnalyzer(fakeFactory(JSON.stringify({
+    const riscoComRelatoVazio = new RiskAnalyzer(fakeFactory(revisao(JSON.stringify({
         risks: [], plan: [{ id: 'step_1', description: 'ler notas.txt', toolName: 'read', toolArgs: { path: 'notas.txt' } }], dificuldade: '',
-    })), ToolRegistry, { findHardConstraints: () => [], findToolFailures: () => '' } as never);
+    }))), ToolRegistry, { findHardConstraints: () => [], findToolFailures: () => '' } as never);
     const resultadoRelatoVazio = await quiet(() => riscoComRelatoVazio.analyze(goal, plano, []));
     assert(resultadoRelatoVazio.planRejected === true && /dificuldade/.test(resultadoRelatoVazio.rejectionReason ?? ''),
         'revisor não aplica plano quando incluiu dificuldade sem explicação', resultadoRelatoVazio);

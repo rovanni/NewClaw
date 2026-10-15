@@ -25,7 +25,7 @@ import { WriteTool } from '../../tools/write_tool';
 import { ExecCommandTool } from '../../tools/exec_command';
 import { SendDocumentTool } from '../../tools/send_document';
 import { Goal, PlanStep } from '../../loop/GoalTypes';
-import './_fixtures/motorLegado';   // juízes simulados no formato antigo → formato do motor único (ADR-014)
+import { vereditoRiscoDaRevisao, tipoDaPerguntaDoMotor, orcamentoDeTeste } from './_fixtures/veredito';
 
 let passed = 0;
 let failed = 0;
@@ -83,11 +83,12 @@ async function main(): Promise<void> {
     let delayMs = 0;
     let throwInLLM = false;
     const provider = {
-        chatWithFallback: async () => {
+        chatWithFallback: async (msgs: Array<{ content?: unknown }>) => {
             if (delayMs) await new Promise(r => setTimeout(r, delayMs));
             if (throwInLLM) throw new Error('boom');
-            return { status: 'success', content: response, attempts: [] };
+            return { status: 'success', content: tipoDaPerguntaDoMotor(msgs) === 'risco' ? vereditoRiscoDaRevisao(response) : response, attempts: [] };
         },
+        getBudgetAuxiliar: orcamentoDeTeste,
     } as unknown as import('../../core/ProviderFactory').ProviderFactory;
     const analyzer = new RiskAnalyzer(provider, ToolRegistry, fakeReflectionMemory, noStub);
 

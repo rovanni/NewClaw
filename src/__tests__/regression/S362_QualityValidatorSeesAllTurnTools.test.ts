@@ -15,7 +15,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { ObserverValidator } from '../../loop/ObserverValidator';
 import { DECISION_PROMPT_MAX_CHARS } from '../../core/providerTypes';
-import './_fixtures/motorLegado';   // juízes simulados no formato antigo → formato do motor único (ADR-014)
+import { vereditoQualidade, tipoDaPerguntaDoMotor } from './_fixtures/veredito';
 
 let passed = 0;
 let failed = 0;
@@ -31,7 +31,7 @@ function validador(prompts: string[]) {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { getBudgetAuxiliar } = require('../../shared/auxTimeout');
     const f = {
-        chatWithFallback: async (msgs: Array<{ content: string }>) => { prompts.push(msgs[msgs.length - 1].content); return { status: 'success', content: '{"approved": true, "reason": "ok", "confidence": 0.9}', attempts: [] }; },
+        chatWithFallback: async (msgs: Array<{ content: string }>) => { prompts.push(msgs[msgs.length - 1].content); return { status: 'success', content: (tipoDaPerguntaDoMotor(msgs) === 'qualidade' ? vereditoQualidade(true, { reason: 'ok', confidence: 0.9 }) : '{"approved": true, "reason": "ok", "confidence": 0.9}'), attempts: [] }; },
         getBudgetAuxiliar: (p: 'classificacao' | 'validacao') => getBudgetAuxiliar(p, null, null),
     } as any;
     return new ObserverValidator(f, 'm');

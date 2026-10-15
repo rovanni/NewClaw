@@ -16,7 +16,7 @@
  * Execução: npx ts-node src/__tests__/regression/S343_GroundingJudge_ScopeIsToolDerivedData.test.ts
  */
 import { ObserverValidator } from '../../loop/ObserverValidator';
-import './_fixtures/motorLegado';   // juízes simulados no formato antigo → formato do motor único (ADR-014)
+import { vereditoGrounding, trechoDaFonte } from './_fixtures/veredito';
 
 let passed = 0;
 let failed = 0;
@@ -24,27 +24,30 @@ function assert(c: boolean, m: string, d?: unknown): void {
     if (c) { console.log(`  ✅ ${m}`); passed++; } else { console.error(`  ❌ FALHOU: ${m}`, d ?? ''); failed++; }
 }
 
-function capturador(conteudo: string) {
+type Resposta = (msgs: Array<{ content: string }>) => string;
+function capturador(resposta: Resposta) {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { getBudgetAuxiliar } = require('../../shared/auxTimeout');
     const prompts: string[] = [];
     const factory = {
         chatWithFallback: async (msgs: Array<{ content: string }>) => {
             prompts.push(msgs[0].content);
-            return { status: 'success', content: conteudo, attempts: [] };
+            return { status: 'success', content: resposta(msgs), attempts: [] };
         },
         getBudgetAuxiliar: (perfil: 'classificacao' | 'validacao') => getBudgetAuxiliar(perfil, null, null),
     } as unknown as import('../../core/ProviderFactory').ProviderFactory;
     return { factory, prompts };
 }
-const claims = (...cs: Array<[string, string]>) => JSON.stringify({ claims: cs.map(([c, v]) => ({ claim: c, evidence: ['E1'], verdict: v })) });
+// O juiz de grounding (motor único, ADR-014): cada afirmação com a evidência E1 e a citação literal da fonte.
+const claims = (...cs: Array<[string, 'sim' | 'nao' | 'sem_evidencia']>): Resposta => msgs =>
+    vereditoGrounding(cs.map(([afirmacao, confere]) => ({ afirmacao, confere, evidencia: 'E1', trecho: trechoDaFonte(msgs) })));
 const PPTX = [{ id: 'E1', tool: 'exec_command', input: '{"command":"py -3 gerar_aula.py"}', output: 'Apresentação salva: aula.pptx (19 slides)' }];
 const AULA = 'Gerei aula.pptx com 19 slides. A rede elétrica no Brasil opera em 60 Hz e P = V × I.';
 
 async function main(): Promise<void> {
     console.log('\n=== S343-1 — o prompt enviado ao juiz restringe o escopo a dado obtido de ferramenta ===');
     {
-        const { factory, prompts } = capturador(claims(['aula.pptx tem 19 slides', 'SUPPORTED']));
+        const { factory, prompts } = capturador(claims(['aula.pptx tem 19 slides', 'sim']));
         await new ObserverValidator(factory, 'modelo-de-teste').validateGrounding(AULA, PPTX);
         const p = prompts[0] ?? '';
         assert(/apresenta como DADO OBTIDO das evidências/.test(p), 'escopo: afirmações apresentadas como dado obtido das evidências', p.slice(0, 200));
@@ -59,11 +62,11 @@ async function main(): Promise<void> {
     }
 
     console.log('\n=== S343-2 — agregação inalterada ===');
-    const estado = async (conteudo: string) => (await new ObserverValidator(capturador(conteudo).factory, 'modelo-de-teste').validateGrounding(AULA, PPTX)).state;
-    assert(await estado(claims(['19 slides', 'SUPPORTED'])) === 'VALIDATED', 'só SUPPORTED → VALIDATED');
-    assert(await estado(claims(['19 slides', 'SUPPORTED'], ['texto editável', 'NOT_EVALUABLE'])) === 'NOT_EVALUABLE', 'uma NOT_EVALUABLE → NOT_EVALUABLE');
-    assert(await estado(claims(['25 slides', 'NOT_SUPPORTED'], ['texto editável', 'NOT_EVALUABLE'])) === 'REJECTED', 'NOT_SUPPORTED tem precedência → REJECTED');
-    assert(await estado(JSON.stringify({ claims: [] })) === 'NOT_APPLICABLE', 'nenhuma afirmação de dado obtido → NOT_APPLICABLE (entrega segue)');
+    const estado = async (resposta: Resposta) => (await new ObserverValidator(capturador(resposta).factory, 'modelo-de-teste').validateGrounding(AULA, PPTX)).state;
+    assert(await estado(claims(['19 slides', 'sim'])) === 'VALIDATED', 'só SUPPORTED → VALIDATED');
+    assert(await estado(claims(['19 slides', 'sim'], ['texto editável', 'sem_evidencia'])) === 'NOT_EVALUABLE', 'uma NOT_EVALUABLE → NOT_EVALUABLE');
+    assert(await estado(claims(['25 slides', 'nao'], ['texto editável', 'sem_evidencia'])) === 'REJECTED', 'NOT_SUPPORTED tem precedência → REJECTED');
+    assert(await estado(claims()) === 'NOT_APPLICABLE', 'nenhuma afirmação de dado obtido → NOT_APPLICABLE (entrega segue)');
 
     console.log(`\n${'─'.repeat(60)}`);
     console.log(`S343 RESULTADO: ✅ ${passed} passou | ❌ ${failed} falhou`);

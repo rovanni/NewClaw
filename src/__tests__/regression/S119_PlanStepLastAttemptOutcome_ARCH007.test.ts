@@ -28,8 +28,7 @@ import { Goal, PlanStep } from '../../loop/GoalTypes';
 import { ChannelContext } from '../../loop/agentLoopTypes';
 import { permissionRegistry } from '../../core/PermissionRegistry';
 import { OperationalMode } from '../../core/CapabilityMode';
-import { vereditoPasso } from './_fixtures/veredito';
-import './_fixtures/motorLegado';   // juízes simulados no formato antigo → formato do motor único (ADR-014)
+import { vereditoPasso, vereditoConclusao, tipoDaPerguntaDoMotor } from './_fixtures/veredito';
 
 let passed = 0;
 let failed = 0;
@@ -61,7 +60,7 @@ if (TEXT_LONG_FALLBACK.length < 200) throw new Error('TEXT_LONG_FALLBACK curto d
 function makeFakeProviderFactory() {
     return {
         getBudgetAuxiliar: () => ({ timeoutMs: 45_000, origem: 'padrao', latenciaTipicaMs: null }),
-        chatWithFallback: async () => ({ status: 'success', content: JSON.stringify({ achieved: true, summary: 'teste S119' }) }),
+        chatWithFallback: async (msgs: Array<{ content?: unknown }>) => ({ status: 'success', content: tipoDaPerguntaDoMotor(msgs) === 'conclusao' ? vereditoConclusao(true, { summary: 'teste S119' }) : JSON.stringify({ achieved: true, summary: 'teste S119' }) }),
         getProvider: () => undefined,
         getProviderWithModel: () => ({ chat: async () => ({ status: 'success', content: JSON.stringify({ achieved: true, summary: 'teste S119' }) }) }),
     } as unknown as import('../../core/ProviderFactory').ProviderFactory;
@@ -174,7 +173,8 @@ async function main() {
                 if (prompt.includes('ENDEREÇA a intenção do passo')) {
                     return { status: 'success', content: vereditoPasso('mismatch', 0.9, 'teste S119 — output não endereça a intenção do step'), attempts: [] };
                 }
-                return { status: 'success', content: JSON.stringify({ achieved: true, summary: 'teste S119' }), attempts: [] };
+                const antigo = JSON.stringify({ achieved: true, summary: 'teste S119' });
+                return { status: 'success', content: tipoDaPerguntaDoMotor(messages) === 'conclusao' ? vereditoConclusao(true, { summary: 'teste S119' }) : antigo, attempts: [] };
             },
             getProvider: () => undefined,
         } as unknown as import('../../core/ProviderFactory').ProviderFactory;

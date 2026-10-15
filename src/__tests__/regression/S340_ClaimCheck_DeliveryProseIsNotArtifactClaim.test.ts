@@ -19,7 +19,7 @@ import { GoalStore } from '../../loop/GoalStore';
 import { ToolRegistry } from '../../core/ToolRegistry';
 import { Goal } from '../../loop/GoalTypes';
 import { ensureDeliverySuccessCriteria } from '../../loop/planning/ensureDeliverySuccessCriteria';
-import './_fixtures/motorLegado';   // juízes simulados no formato antigo → formato do motor único (ADR-014)
+import { vereditoConclusao, tipoDaPerguntaDoMotor, orcamentoDeTeste } from './_fixtures/veredito';
 
 let passed = 0;
 let failed = 0;
@@ -31,7 +31,13 @@ function makeLoop(summary: string): { loop: GoalExecutionLoop; store: GoalStore;
     let calls = 0;
     const db = new (Database as any)(':memory:');
     const store = new GoalStore(db);
-    const pf = { chatWithFallback: async () => { calls++; return { status: 'success', content: JSON.stringify({ achieved: true, summary }) }; } } as any;
+    const pf = {
+        chatWithFallback: async (msgs: Array<{ content?: unknown }>) => {
+            calls++;
+            return { status: 'success', content: tipoDaPerguntaDoMotor(msgs) === 'conclusao' ? vereditoConclusao(true, { summary }) : JSON.stringify({ achieved: true, summary }) };
+        },
+        getBudgetAuxiliar: orcamentoDeTeste,
+    } as any;
     const loop = new GoalExecutionLoop({} as any, store, {} as any, {} as any, ToolRegistry, pf, { getDatabase: () => db } as any, {} as any);
     return { loop, store, llmCalls: () => calls };
 }

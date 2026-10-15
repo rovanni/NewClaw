@@ -30,7 +30,7 @@ import { Goal, PlanStep, GoalAttempt } from '../../loop/GoalTypes';
 import { resolveArtifactPathFromEvidence } from '../../loop/planning/artifactContract';
 import { ProviderFactory } from '../../core/ProviderFactory';
 import { ReflectionMemory } from '../../memory/ReflectionMemory';
-import './_fixtures/motorLegado';   // juízes simulados no formato antigo → formato do motor único (ADR-014)
+import { vereditoRisco, tipoDaPerguntaDoMotor, orcamentoDeTeste } from './_fixtures/veredito';
 
 let passed = 0;
 let failed = 0;
@@ -268,7 +268,8 @@ console.log('\n=== S111.9 — RiskAnalyzer.analyze() end-to-end: send_document s
     // Mocka chatWithFallback (não mais getProviderWithModel().chat() direto) — D-08,
     // docs/ARCHITECTURE/INVENTARIO_DUPLICACAO_2026-08-24.md.
     const fakeProviderFactory = {
-        chatWithFallback: async () => ({ status: 'success', content: JSON.stringify({ risks: [], plan: newPlanFromLLM }), attempts: [] }),
+        chatWithFallback: async (msgs: Array<{ content?: unknown }>) => ({ status: 'success', content: tipoDaPerguntaDoMotor(msgs) === 'risco' ? vereditoRisco([], Array.isArray(newPlanFromLLM) && newPlanFromLLM.length > 0) : JSON.stringify({ risks: [], plan: newPlanFromLLM }), attempts: [] }),
+        getBudgetAuxiliar: orcamentoDeTeste,
     } as unknown as ProviderFactory;
 
     const fakeReflectionMemory = {
@@ -318,7 +319,8 @@ console.log('\n=== S111.10 — CR#3 não fica diluída: send_document consertado
         { id: 'step_read', description: 'Ler configuração', toolName: 'read', toolArgs: {} }, // sem 'path' — genuinamente inválido, nada conserta isso
     ];
     const fakeProviderFactory = {
-        chatWithFallback: async () => ({ status: 'success', content: JSON.stringify({ risks: [], plan: newPlanFromLLM }), attempts: [] }),
+        chatWithFallback: async (msgs: Array<{ content?: unknown }>) => ({ status: 'success', content: tipoDaPerguntaDoMotor(msgs) === 'risco' ? vereditoRisco([], Array.isArray(newPlanFromLLM) && newPlanFromLLM.length > 0) : JSON.stringify({ risks: [], plan: newPlanFromLLM }), attempts: [] }),
+        getBudgetAuxiliar: orcamentoDeTeste,
     } as unknown as ProviderFactory;
     const fakeReflectionMemory = { findHardConstraints: () => [], findToolFailures: () => undefined } as unknown as ReflectionMemory;
     const analyzer = new RiskAnalyzer(fakeProviderFactory, ToolRegistry, fakeReflectionMemory);
@@ -354,7 +356,8 @@ console.log('\n=== S111.11 — planAdjusted não dispara por ordem de chaves dif
         { id: 'step_1', description: 'Escrever nota', toolName: 'write', toolArgs: { content: 'ola mundo', path: 'nota.txt' } },
     ];
     const fakeProviderFactory = {
-        chatWithFallback: async () => ({ status: 'success', content: JSON.stringify({ risks: [], plan: newPlanFromLLM }), attempts: [] }),
+        chatWithFallback: async (msgs: Array<{ content?: unknown }>) => ({ status: 'success', content: tipoDaPerguntaDoMotor(msgs) === 'risco' ? vereditoRisco([], Array.isArray(newPlanFromLLM) && newPlanFromLLM.length > 0) : JSON.stringify({ risks: [], plan: newPlanFromLLM }), attempts: [] }),
+        getBudgetAuxiliar: orcamentoDeTeste,
     } as unknown as ProviderFactory;
     const fakeReflectionMemory = { findHardConstraints: () => [], findToolFailures: () => undefined } as unknown as ReflectionMemory;
     // Isola o teste do classificador de content-stub (que faria uma 2ª chamada LLM real via

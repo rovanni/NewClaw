@@ -20,7 +20,7 @@
 process.env.WORKSPACE_DIR = process.env.WORKSPACE_DIR || 'D:/IA/newclaw/workspace';
 
 import { ObserverValidator, EvidenceItem } from '../../loop/ObserverValidator';
-import './_fixtures/motorLegado';   // juízes simulados no formato antigo → formato do motor único (ADR-014)
+import { vereditoGrounding, trechoDaFonte } from './_fixtures/veredito';
 
 let passed = 0;
 let failed = 0;
@@ -29,7 +29,9 @@ function assert(c: boolean, m: string, d?: unknown): void {
 }
 
 const MAX_PROMPT = 60_000;
-const judgeJson = JSON.stringify({ claims: [{ claim: 'O pico de 127 V RMS é 179,6 V', evidence: ['E1'], verdict: 'SUPPORTED' }] });
+// Veredito do juiz de grounding (motor único, ADR-014), com a citação literal da fonte que ESTE prompt trouxe.
+const judgeJson = (messages: Array<{ content: string }>) =>
+    vereditoGrounding([{ afirmacao: 'O pico de 127 V RMS é 179,6 V', confere: 'sim', evidencia: 'E1', trecho: trechoDaFonte(messages) }]);
 
 /** Provedor falso que captura o prompt EXATO que o juiz receberia. */
 function capturingFactory(prompts: string[]): import('../../core/ProviderFactory').ProviderFactory {
@@ -38,7 +40,7 @@ function capturingFactory(prompts: string[]): import('../../core/ProviderFactory
     return {
         chatWithFallback: async (messages: Array<{ content: string }>) => {
             prompts.push(messages[0].content);
-            return { status: 'success', content: judgeJson, attempts: [] };
+            return { status: 'success', content: judgeJson(messages), attempts: [] };
         },
         getBudgetAuxiliar: (p: 'classificacao' | 'validacao') => getBudgetAuxiliar(p, null, null),
     } as unknown as import('../../core/ProviderFactory').ProviderFactory;
