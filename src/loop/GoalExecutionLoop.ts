@@ -1989,10 +1989,13 @@ export class GoalExecutionLoop {
                 // o hint e voltou irrelevante — retry adicional é inútil; escala imediatamente
                 // para 'blocked' para forçar replan com ferramenta diferente.
                 const alreadyHinted = (pendingStep.description ?? '').includes('[ATENÇÃO —');
-                const mismatchHint = ` [ATENÇÃO — tentativa anterior com ${pendingStep.toolName ?? 'agentloop'} retornou output irrelevante: ${(semanticValidation.reason ?? 'mismatch').slice(0, 120)}. Use abordagem diferente que retorne especificamente o que o objetivo pede.]`;
+                // O motivo do validador vai INTEIRO (Informação Completa para Decidir). Antes: motivo cortado em 120 chars
+                // ("…mas os fatos do sistema regist") e descrição+aviso cortados em 500 — num passo de descrição longa o
+                // aviso sumia por completo, e o retry repetia o erro sem saber qual era (15/10/2026).
+                const mismatchHint = ` [ATENÇÃO — tentativa anterior com ${pendingStep.toolName ?? 'agentloop'} retornou output irrelevante: ${semanticValidation.reason ?? 'mismatch'}. Use abordagem diferente que retorne especificamente o que o objetivo pede.]`;
                 const enrichedPlan = goal.currentPlan.map(s =>
                     s.id === pendingStep.id
-                        ? { ...s, description: (s.description + mismatchHint).slice(0, 500) }
+                        ? { ...s, description: s.description + mismatchHint }
                         : s
                 );
                 this.goalStore.update(goal.id, { currentPlan: enrichedPlan });
@@ -2515,7 +2518,10 @@ export class GoalExecutionLoop {
         });
         if (repete) {
             const enrichedPlan = goal.currentPlan.map(s =>
-                s.id === step.id ? { ...s, description: `${cleanDesc}${MARKER} ${fact}.]`.slice(0, 1200) } : s
+                // Sem corte do texto montado: cada parte já tem teto (5 afirmações, 160 chars cada). O antigo `.slice(0, 1200)`
+                // partia a dica no meio ("os dados coletados contradizem — na") e a mandava assim ao retry e ao juiz do passo,
+                // que reclamou: "a intenção do passo está truncada no meio da marcação [VERIFICAÇÃO]" (15/10/2026).
+                s.id === step.id ? { ...s, description: `${cleanDesc}${MARKER} ${fact}.]` } : s
             );
             this.goalStore.update(goal.id, { currentPlan: enrichedPlan });
             return { outcome: 'partial', confidence: 0.3, blocker };
