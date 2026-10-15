@@ -66,11 +66,7 @@ export class MultiLayerRetriever {
      * Terms shorter than MIN_TERM_LENGTH are ignored.
      */
     keywordSearch(query: string, limit: number = 8): LayerCandidate[] {
-        const terms = query
-            .toLowerCase()
-            .split(/\s+/)
-            .filter(t => t.length >= this.MIN_TERM_LENGTH)
-            .slice(0, 4); // cap to avoid very broad queries
+        const terms = this.termosDaBusca(query);
 
         if (terms.length === 0) return [];
 
@@ -107,6 +103,35 @@ export class MultiLayerRetriever {
         }
 
         return results;
+    }
+
+    /**
+     * Termos da busca por palavras. 14/10/2026 — "Alguma novidade no meu e-mail?" não achava nada na memória (que guarda
+     * "email"/"Gmail"), e o juiz de suficiência decidia às cegas. Três defeitos, nenhum ligado a idioma:
+     *   1. a pontuação ficava no termo ("e-mail?" nunca casava) — tirada das pontas;
+     *   2. o teto de 4 termos pegava os PRIMEIROS ("alguma", "novidade", "meu"…) — agora os mais longos, que carregam o assunto;
+     *   3. "e-mail" × "email" — palavra com hífen busca também a forma junta e as partes com 4+ letras ("email", "mail").
+     */
+    termosDaBusca(query: string): string[] {
+        const base = query
+            .toLowerCase()
+            .split(/\s+/)
+            .map(t => t.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, ''))
+            .filter(t => t.length >= this.MIN_TERM_LENGTH);
+        const principais = [...new Set(base)]
+            .map((t, i) => ({ t, i }))
+            .sort((a, b) => b.t.length - a.t.length || a.i - b.i)   // mais longos primeiro; empate: ordem da frase
+            .slice(0, 4) // cap to avoid very broad queries
+            .map(x => x.t);
+        const termos: string[] = [];
+        for (const t of principais) {
+            termos.push(t);
+            if (t.includes('-')) {
+                termos.push(t.replace(/-/g, ''));
+                for (const parte of t.split('-')) if (parte.length >= 4) termos.push(parte);
+            }
+        }
+        return [...new Set(termos)];
     }
 
     // ── Layer 3: Graph expansion ───────────────────────────────────────────

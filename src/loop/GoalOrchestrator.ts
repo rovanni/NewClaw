@@ -148,6 +148,12 @@ export class GoalOrchestrator {
         this.executionLoop.setWorkflowEngine(engine);
     }
 
+    /** Resumo das skills instaladas ("- nome: descrição" por linha), lido a cada pedido — skill nova vale na hora. */
+    private resumoDasSkills: () => string = () => '';
+    setResumoDasSkills(fonte: () => string): void {
+        this.resumoDasSkills = fonte;
+    }
+
     /**
      * Processa uma mensagem do usuário.
      *
@@ -736,8 +742,10 @@ export class GoalOrchestrator {
                 const exige = (schema?.required ?? []).map(r => `${r}${schema?.properties?.[r]?.description ? ` (${schema.properties[r].description})` : ''}`);
                 return `- ${t.name}: ${(t.description || '').replace(/\s+/g, ' ').slice(0, 200)}${exige.length ? ` | exige: ${exige.join('; ')}` : ''}`;
             }).join('\n');
+            let skills = '';
+            try { skills = this.resumoDasSkills(); } catch { /* sem skills: o juiz decide com o resto, como antes */ }
             const r = await this.motorDeValidacao.validar<DecisaoDeSuficiencia>(TIPO_SUFICIENCIA_DO_PEDIDO,
-                { pedido, preferencias, memoria, conversa, ferramentas }, { conversationId, phase: 'suficiencia', signal });
+                { pedido, preferencias, memoria, conversa, ferramentas, skills }, { conversationId, phase: 'suficiencia', signal });
             const d = r.adaptado;
             log.info(`[SUFICIENCIA] acao=${d.acao} faltando=[${d.faltando.join(' | ')}] resolvidos=[${d.resolvidos.map(x => `${x.dado}=${x.valor ?? '?'}`).join(' | ')}]${d.motivo ? ` motivo="${d.motivo.slice(0, 120)}"` : ''}`);
             return d;

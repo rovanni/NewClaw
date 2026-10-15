@@ -49,6 +49,10 @@ export const descritorSuficienciaDoPedido: DescritorDeValidacao<DecisaoDeSuficie
         { nome: 'memoria', rotulo: 'Memória do usuário próxima do pedido', papel: 'fonte_de_verdade', obrigatoria: false },
         { nome: 'conversa', rotulo: 'Conversa recente (antes deste pedido)', papel: 'fonte_de_verdade', obrigatoria: false },
         { nome: 'ferramentas', rotulo: 'Ferramentas disponíveis e os dados que cada uma exige', papel: 'contexto_da_execucao', obrigatoria: false },
+        // 14/10/2026: o mesmo pedido ("alguma novidade no meu e-mail?") foi reprovado no Windows e aprovado no Linux — mesmo
+        // modelo, memória vazia nas duas. A skill gmail-himalaya existia nas duas, mas o juiz não a via e precisou adivinhar
+        // se o acesso ao e-mail estava configurado (Informação Completa para Decidir).
+        { nome: 'skills', rotulo: 'Skills instaladas — procedimentos que o assistente já sabe executar (nome: descrição)', papel: 'contexto_da_execucao', obrigatoria: false },
     ],
     checklist: [
         'Liste como itens SOMENTE os dados específicos do usuário que a ação pedida exige e que nenhuma ferramenta descobre sozinha — por exemplo: a cidade de uma previsão do tempo, qual arquivo editar, para quem enviar. NÃO liste o que as ferramentas obtêm (cotação, notícias, a previsão em si, o conteúdo de um arquivo já indicado), nem preferências de formato ou estilo.',
@@ -56,6 +60,7 @@ export const descritorSuficienciaDoPedido: DescritorDeValidacao<DecisaoDeSuficie
         // Teste real 09/10: "a cidade da minha mãe" foi resolvida com a preferência "cidade padrão" — o trecho existia,
         // mas respondia a OUTRO dado.
         'O valor precisa responder EXATAMENTE ao dado pedido. Uma preferência genérica (ex.: "cidade padrão para a previsão do tempo") só vale quando o pedido não especifica outra coisa; se o pedido se refere a algo específico — a cidade de outra pessoa, um arquivo ou destinatário determinado — a preferência genérica NÃO responde, e o dado só conta como encontrado se esse valor específico estiver escrito.',
+        'Se uma skill instalada já descreve como o assistente acessa o recurso do pedido (ex.: ler o e-mail de uma conta configurada), a conta e o meio de acesso NÃO são dados faltantes do usuário — a skill os resolve na execução.',
         'Se a ação não exige nenhum dado do usuário além do que já está claro, devolva "itens": [] e estado "aprovado".',
     ],
     agregacao: 'itens',

@@ -319,6 +319,8 @@ export class AgentController {
         this.goalOrchestrator = new GoalOrchestrator(this.agentLoop, this.providerFactory, this.goalStore, this.memory);
         this.goalOrchestrator.setSessionManager(this.sessionManager);
         this.goalOrchestrator.setWorkflowEngine(this.workflowEngine);
+        // O juiz de suficiência vê as skills instaladas (ex.: gmail-himalaya) — sem isso, adivinhava se o acesso existia.
+        this.goalOrchestrator.setResumoDasSkills(() => this.skillLoader.getSkillSummaries());
         // ADR-017: skill aprendida com um goal concluído → aviso na mesma conversa (canal e chat saem da chave da sessão do goal).
         this.goalOrchestrator.setAprendizadoDeSkills({
             skillLearner: this.skillLearner,
