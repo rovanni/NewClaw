@@ -1,7 +1,7 @@
 import {
   listBackups, createSystemBackup, createDatabaseBackup, backupDownloadUrl,
   getBackupConfig, saveBackupConfig, getBackupSchedule, restoreBackup, uploadBackup,
-  createKnowledgeBackup, inspectKnowledgeBackup, restoreKnowledgeBackup,
+  createKnowledgeBackup, inspectKnowledgeBackup, restoreKnowledgeBackup, importKnowledgeBackup,
 } from '../api.js';
 import { showToast } from '../components/Toast.js';
 import { guideBox } from '../app.js';
@@ -171,6 +171,8 @@ export function render(container) {
                    style="font-size:.78rem;color:var(--accent);text-decoration:none;margin-right:12px">${t('backup_download')}</a>
                 <a href="#" data-restore="${esc(b.name)}"
                    style="font-size:.78rem;color:var(--warning,#f59e0b);text-decoration:none">${t('backup_restore_btn')}</a>
+                ${b.name.endsWith('.zip') ? `<a href="#" data-import="${esc(b.name)}" title="${esc(t('bkp_conh_import_hint'))}"
+                   style="font-size:.78rem;color:var(--accent);text-decoration:none;margin-left:12px">${t('bkp_conh_import_btn')}</a>` : ''}
               </td>
             </tr>`).join('')}
         </tbody>
@@ -183,6 +185,43 @@ export function render(container) {
   }
 
   // ── Restore ───────────────────────────────────────────────────────────────
+  // ── Importar (mesclar) — ADR-020 Sprint B ────────────────────────────────
+  listEl.addEventListener('click', async (e) => {
+    const link = e.target.closest('[data-import]');
+    if (!link) return;
+    e.preventDefault();
+    const name = link.dataset.import;
+    let info;
+    try { info = await inspectKnowledgeBackup(name); }
+    catch (err) { showToast('❌ ' + err.message, 'error'); return; }
+    const m = info.manifesto || {};
+    const c = m.contagens || {};
+    const resumo = t('bkp_conh_restore_summary', {
+      data: fmtDate(m.criadoEm), sistema: m.sistema || '?', app: m.app || '?',
+      memorias: c.memorias ?? 0, skills: c.skills ?? 0, conversas: c.conversas ?? 0, arquivos: c.arquivosDoWorkspace ?? 0,
+    });
+    const avisos = (info.avisos || []).map(a => '⚠️ ' + a).join('\n');
+    if (!confirm(`${resumo}${avisos ? '\n\n' + avisos : ''}\n\n${t('bkp_conh_import_confirm')}`)) return;
+    link.style.opacity = '0.4';
+    link.style.pointerEvents = 'none';
+    try {
+      const r = (await importKnowledgeBackup(name)).relatorio || {};
+      const mem = r.memorias || {};
+      const sk = r.skills || {};
+      showToast(t('bkp_conh_imported_toast', {
+        memorias: mem.importadas ?? 0, existiam: mem.jaExistiam ?? 0,
+        skills: sk.novas ?? 0, revisar: (mem.paraRevisar ?? 0) + (sk.paraRevisar || []).length,
+        conflitos: (mem.preferenciasEmConflito || []).length + (sk.comDiferenca || []).length,
+      }), 'success');
+      loadList();
+    } catch (err) {
+      showToast('❌ ' + err.message, 'error');
+    } finally {
+      link.style.opacity = '';
+      link.style.pointerEvents = '';
+    }
+  });
+
   listEl.addEventListener('click', async (e) => {
     const link = e.target.closest('[data-restore]');
     if (!link) return;

@@ -5,7 +5,7 @@ import { createLogger } from '../../shared/AppLogger';
 import fs from 'fs';
 import path from 'path';
 import Database from 'better-sqlite3';
-import { criarPacote, lerPacote, restaurarPacote } from '../../core/backupDoConhecimento';
+import { criarPacote, lerPacote, restaurarPacote, importarPacote } from '../../core/backupDoConhecimento';
 
 const log = createLogger('Maintenance');
 const DIR = process.cwd();
@@ -498,6 +498,21 @@ export function createMaintenanceRouter(): Router {
             log.info(`Conhecimento restaurado de ${safe}: skills=${relatorio.skills} revisar=${relatorio.skillsParaRevisar.length} banco=${relatorio.banco} — reiniciando`);
             res.json({ success: true, relatorio, message: 'Conhecimento restaurado. O NewClaw será reiniciado para carregar o banco.' });
             setTimeout(() => process.exit(0), 800);
+        } catch (err) {
+            res.status(422).json({ success: false, error: errorMessage(err) });
+        }
+    });
+
+    // POST /api/maintenance/backup/conhecimento/importar  { filename } — ADR-020 Sprint B: mescla, sem sobrescrever nada
+    // local. Escreve no banco em uso (como qualquer operação do app); sem reinício — skills novas carregam no próximo início.
+    router.post('/backup/conhecimento/importar', async (req: Request, res: Response) => {
+        try {
+            const safe = path.basename(String(req.body?.filename || ''));
+            const filePath = path.join(BACKUP_DIR, safe);
+            if (!safe.endsWith('.zip') || !fs.existsSync(filePath)) return res.status(404).json({ success: false, error: 'Arquivo não encontrado' });
+            const relatorio = await importarPacote(filePath);
+            log.info(`Conhecimento importado de ${safe}: memórias=${relatorio.memorias.importadas} (já existiam ${relatorio.memorias.jaExistiam}, revisar ${relatorio.memorias.paraRevisar}) skills novas=${relatorio.skills.novas}`);
+            res.json({ success: true, relatorio });
         } catch (err) {
             res.status(422).json({ success: false, error: errorMessage(err) });
         }

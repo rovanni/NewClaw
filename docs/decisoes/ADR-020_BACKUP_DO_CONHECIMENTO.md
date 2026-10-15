@@ -5,7 +5,13 @@ rotas `/api/maintenance/backup/conhecimento[/inspecionar|/restaurar]`, cartão n
 `newclaw restore <a.zip>`, `PRAGMA user_version` (`VERSAO_DO_ESQUEMA`), teste `S399`. Etapa 4: pacote dos dados reais da
 instalação Windows (95 memórias, 20 skills, 154 conversas, sem `.env` nem `.hermes`) restaurado numa instalação vazia e
 isolada — o boot aplicou o banco (esquema 0 → 1), a API listou as 20 skills e o banco tinha as 95 memórias; criação pelo
-painel conferida no navegador. Sprint B (importar mesclando) pendente.
+painel conferida no navegador. **Sprint B implementada e validada** — `importarPacote`, rota
+`/api/maintenance/backup/conhecimento/importar`, ação "🔀 importar (mesclar)" no painel, `newclaw import <a.zip>`, teste
+`S400`. Etapa 4: o conhecimento REAL da instalação Linux (107 memórias, 25 skills) importado numa cópia isolada da do
+Windows (95 memórias, 21 skills) → 123 memórias e 34 skills; 60 memórias já existiam, 19 nós estruturais ignorados,
+2 memórias com caminho do Linux ficaram para revisão, 107 arestas, `gmail-himalaya` e `gmail_access` diferentes →
+a do Windows ficou ativa e a do Linux em `SKILL.md.importada`; o boot rodou sem erros, as 34 skills carregaram e a
+busca por palavras achou a memória importada.
 Origem: pergunta da mantenedora ao comparar Windows × Linux — *"tem um jeito de toda essa inteligência, toda essa
 experiência salvar de alguma forma, fazer um backup, restaurar?"* — e a correção logo em seguida: *"o sistema é open
 source; não é só para mim, é para qualquer usuário"*.
@@ -72,12 +78,22 @@ arquivos soltos, sem descrição do conteúdo; não há caminho para levar o con
 - Esquema ganha `PRAGMA user_version` para detectar backup mais novo que o app.
 - CLI equivalente (`newclaw backup` / `newclaw restore <arquivo>`) para quem usa servidor sem painel.
 
-**Sprint B — importar mesclando (outra instalação).**
-- Skills: importa as ausentes; mesmo nome com conteúdo diferente → mantém a local e guarda a importada como proposta
-  para revisão; skill de outro sistema → importada desativada, com aviso.
-- Memória: importa nós ausentes (por id e por nome+conteúdo), sem sobrescrever os locais; preferências em conflito →
-  a local vence e a importada vira sugestão.
-- Relatório ao final: o que entrou, o que foi ignorado e por quê.
+**Sprint B — importar mesclando (outra instalação).** Nada local é sobrescrito nem apagado; antes de importar, o estado
+atual vira pacote de segurança.
+- Skills em arquivo: ausente → entra (com caminho de outro sistema → `SKILL.md.revisar`); igual → ignorada; mesmo nome
+  com conteúdo diferente → a local fica e a importada vai para `SKILL.md.importada`, para comparação.
+- Memória (`memory_nodes`): entra o nó cujo id não existe E que não repete nome+conteúdo de um local. Ficam de fora os nós
+  estruturais (identity, domain, `core_*`, `user_identity*`, `time_*` — cada instalação tem os seus). Preferência com o
+  mesmo nome de uma local → a local vence (relatado). Conteúdo com caminho de outro sistema → entra com
+  `lifecycle_state = 'REVISAR'`: guardado, mas FORA das buscas (as 17 consultas de recuperação só leem estado vazio ou
+  `ACTIVE`) até alguém revisar. Colunas: só as que existem nos dois bancos (versões diferentes convivem).
+- Arestas (`memory_edges`): entram as que ligam nós existentes depois da importação (`INSERT OR IGNORE` pela chave).
+- Skills aprendidas (`auto_skills`): entram as de id ausente.
+- Fica de fora: `.env` e cofre (configuração e segredos são de cada instalação) e o perfil dos juízes (mede os modelos
+  DESTA instalação). Histórico e workspace: só arquivos ausentes.
+- Índice de busca textual: `rebuildFtsIndex` ao final (o FTS não tem gatilhos — memorySchema.ts).
+- Painel: ação "🔀 importar (mesclar)" ao lado de "restaurar", com o conteúdo mostrado antes; CLI `newclaw import <a.zip>`.
+- Relatório ao final: o que entrou, o que já existia, o que ficou para revisar e os conflitos (a local venceu).
 
 ## Fase 5 — Validação (critérios)
 

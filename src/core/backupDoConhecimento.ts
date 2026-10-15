@@ -19,6 +19,7 @@ import path from 'path';
 import JSZip from 'jszip';
 import Database from 'better-sqlite3';
 import { VERSAO_DO_ESQUEMA } from '../memory/memorySchema';
+import { rebuildFtsIndex } from '../memory/graphRepository';
 
 export const VERSAO_DO_FORMATO = 1;
 /** Teto do pacote descompactado — protege contra "zip bomb". */
@@ -271,4 +272,152 @@ export async function restaurarPacote(arquivo: string, opcoes: { restaurarSegred
     }
     relatorio.skills = skillsRestauradas.size;
     return relatorio;
+}
+
+// ── Sprint B: importar mesclando (outra instalação) ─────────────────────────────────────────────────────────────────────
+
+/** Nós estruturais: cada instalação tem os seus — nunca importados. */
+const TIPOS_ESTRUTURAIS = new Set(['identity', 'domain', 'legacy_container']);
+const ID_ESTRUTURAL = /^(core_|domain_|user_identity|time_)/;
+
+export interface RelatorioDeImportacao {
+    memorias: { importadas: number; jaExistiam: number; preferenciasEmConflito: string[]; paraRevisar: number; estruturaisIgnoradas: number };
+    arestas: number;
+    skillsAprendidas: number;
+    skills: { novas: number; iguais: number; comDiferenca: string[]; paraRevisar: string[] };
+    conversas: number;
+    arquivosDoWorkspace: number;
+    pacoteDeSeguranca: string;
+}
+
+function colunas(db: Database.Database, tabela: string): string[] {
+    try { return (db.prepare(`PRAGMA table_info("${tabela}")`).all() as Array<{ name: string }>).map(c => c.name); } catch { return []; }
+}
+
+/**
+ * Importa o conhecimento de OUTRA instalação sem sobrescrever nem apagar nada local (ADR-020, Sprint B). `dbLocal`: a
+ * conexão do próprio app quando chamado pelo painel (escreve no banco em uso, como qualquer operação do app); sem ela,
+ * abre o arquivo do banco. O .env/cofre e o perfil dos juízes nunca entram — são desta instalação.
+ */
+export async function importarPacote(arquivo: string, c: Caminhos = caminhosDaInstalacao(), dbLocal?: Database.Database, pastaDeSeguranca?: string): Promise<RelatorioDeImportacao> {
+    const { manifesto, zip } = await lerPacote(arquivo);
+    const origem = manifesto.sistema;
+
+    // Banco do pacote: arquivo temporário, validado antes de qualquer escrita local.
+    const bancoNoPacote = zip.file('data/newclaw.db');
+    let bancoTmp = '';
+    if (bancoNoPacote) {
+        bancoTmp = path.join(os.tmpdir(), `nc-import-${process.pid}-${Date.now()}.db`);
+        fs.writeFileSync(bancoTmp, await bancoNoPacote.async('nodebuffer'));
+        const chk = new Database(bancoTmp, { readonly: true });
+        try {
+            const ok = (chk.prepare('PRAGMA integrity_check').get() as { integrity_check?: string } | undefined)?.integrity_check;
+            if (ok !== 'ok') throw new Error('o banco do backup está corrompido — importação cancelada');
+        } finally { chk.close(); }
+    }
+
+    const seguranca = await criarPacote(pastaDeSeguranca ?? path.join(c.dados, 'backups'), { historico: true, segredos: true }, c, 'pre-importacao');
+    const rel: RelatorioDeImportacao = {
+        memorias: { importadas: 0, jaExistiam: 0, preferenciasEmConflito: [], paraRevisar: 0, estruturaisIgnoradas: 0 },
+        arestas: 0, skillsAprendidas: 0,
+        skills: { novas: 0, iguais: 0, comDiferenca: [], paraRevisar: [] },
+        conversas: 0, arquivosDoWorkspace: 0, pacoteDeSeguranca: seguranca.arquivo,
+    };
+
+    // 1. Memória, arestas e skills aprendidas.
+    if (bancoTmp) {
+        const fonte = new Database(bancoTmp, { readonly: true });
+        const local = dbLocal ?? new Database(path.join(c.dados, 'newclaw.db'));
+        try {
+            if (!dbLocal) local.pragma('busy_timeout = 5000');
+            const nosFonte = colunas(fonte, 'memory_nodes');
+            const colsNos = colunas(local, 'memory_nodes').filter(k => nosFonte.includes(k));
+            const arestasFonte = colunas(fonte, 'memory_edges');
+            const colsArestas = colunas(local, 'memory_edges').filter(k => arestasFonte.includes(k));
+            const skillsFonte = colunas(fonte, 'auto_skills');
+            const colsSkills = colunas(local, 'auto_skills').filter(k => skillsFonte.includes(k));
+            const lista = (cs: string[]) => cs.map(k => `"${k}"`).join(',');
+            const marcas = (cs: string[]) => cs.map(() => '?').join(',');
+            const existeId = local.prepare('SELECT 1 FROM memory_nodes WHERE id = ?');
+            const repete = local.prepare('SELECT 1 FROM memory_nodes WHERE name = ? AND content = ?');
+            const prefLocal = local.prepare(`SELECT 1 FROM memory_nodes WHERE type = 'preference' AND name = ?`);
+            const transacao = local.transaction(() => {
+                if (colsNos.includes('id')) {
+                    const inserir = local.prepare(`INSERT INTO memory_nodes (${lista(colsNos)}) VALUES (${marcas(colsNos)})`);
+                    for (const no of fonte.prepare(`SELECT ${lista(colsNos)} FROM memory_nodes`).all() as Array<Record<string, unknown>>) {
+                        const id = String(no.id ?? '');
+                        const tipo = String(no.type ?? '');
+                        if (TIPOS_ESTRUTURAIS.has(tipo) || ID_ESTRUTURAL.test(id)) { rel.memorias.estruturaisIgnoradas++; continue; }
+                        if (existeId.get(id) || repete.get(no.name, no.content)) { rel.memorias.jaExistiam++; continue; }
+                        if (tipo === 'preference' && prefLocal.get(no.name)) { rel.memorias.preferenciasEmConflito.push(String(no.name)); continue; }
+                        if (colsNos.includes('lifecycle_state') && temCaminhoDeOutroSistema(String(no.content ?? ''), origem)) {
+                            no.lifecycle_state = 'REVISAR';   // guardada, mas fora das buscas até ser revisada
+                            rel.memorias.paraRevisar++;
+                        }
+                        inserir.run(...colsNos.map(k => no[k]));
+                        rel.memorias.importadas++;
+                    }
+                }
+                if (colsArestas.includes('from_node') && colsArestas.includes('to_node')) {
+                    const inserirAresta = local.prepare(`INSERT OR IGNORE INTO memory_edges (${lista(colsArestas)}) VALUES (${marcas(colsArestas)})`);
+                    for (const a of fonte.prepare(`SELECT ${lista(colsArestas)} FROM memory_edges`).all() as Array<Record<string, unknown>>) {
+                        if (!existeId.get(a.from_node) || !existeId.get(a.to_node)) continue;
+                        rel.arestas += inserirAresta.run(...colsArestas.map(k => a[k])).changes;
+                    }
+                }
+                if (colsSkills.includes('id')) {
+                    const inserirSkill = local.prepare(`INSERT OR IGNORE INTO auto_skills (${lista(colsSkills)}) VALUES (${marcas(colsSkills)})`);
+                    for (const s of fonte.prepare(`SELECT ${lista(colsSkills)} FROM auto_skills`).all() as Array<Record<string, unknown>>) {
+                        rel.skillsAprendidas += inserirSkill.run(...colsSkills.map(k => s[k])).changes;
+                    }
+                }
+            });
+            transacao();
+            if (rel.memorias.importadas > 0) rebuildFtsIndex(local);   // o FTS não tem gatilhos (memorySchema.ts)
+        } finally {
+            fonte.close();
+            if (!dbLocal) local.close();
+            try { fs.unlinkSync(bancoTmp); } catch { /* ok */ }
+        }
+    }
+
+    // 2. Arquivos: skills, histórico e workspace — só o que falta; nada local é sobrescrito.
+    const pastasDeSkill = new Map<string, { nova: boolean; igual: boolean; diferente: boolean; revisar: boolean }>();
+    for (const [nome, entrada] of Object.entries(zip.files)) {
+        if (entrada.dir) continue;
+        if (nome.startsWith('skills/')) {
+            const relativo = nome.slice('skills/'.length);
+            const pasta = relativo.split('/')[0];
+            const st = pastasDeSkill.get(pasta) ?? { nova: false, igual: false, diferente: false, revisar: false };
+            const conteudo = await entrada.async('nodebuffer');
+            let destino = path.join(c.skills, relativo);
+            if (fs.existsSync(destino)) {
+                if (fs.readFileSync(destino).equals(conteudo)) { st.igual = true; pastasDeSkill.set(pasta, st); continue; }
+                destino += '.importada';   // a local fica; a importada ao lado, para comparar
+                st.diferente = true;
+            } else {
+                st.nova = true;
+                if (relativo.endsWith('/SKILL.md') && temCaminhoDeOutroSistema(conteudo.toString('utf8'), origem)) { destino += '.revisar'; st.revisar = true; }
+            }
+            fs.mkdirSync(path.dirname(destino), { recursive: true });
+            fs.writeFileSync(destino, conteudo);
+            pastasDeSkill.set(pasta, st);
+        } else if (nome.startsWith('data/sessions/') || nome.startsWith('workspace/')) {
+            const destino = nome.startsWith('workspace/')
+                ? path.join(c.workspace, nome.slice('workspace/'.length))
+                : path.join(c.dados, 'sessions', nome.slice('data/sessions/'.length));
+            if (fs.existsSync(destino)) continue;
+            fs.mkdirSync(path.dirname(destino), { recursive: true });
+            fs.writeFileSync(destino, await entrada.async('nodebuffer'));
+            if (nome.startsWith('workspace/')) rel.arquivosDoWorkspace++; else rel.conversas++;
+        }
+        // .env, perfil dos juízes e o banco (tratado acima): nunca copiados numa importação.
+    }
+    for (const [pasta, st] of pastasDeSkill) {
+        if (st.revisar) rel.skills.paraRevisar.push(pasta);
+        else if (st.diferente) rel.skills.comDiferenca.push(pasta);
+        else if (st.nova) rel.skills.novas++;
+        else if (st.igual) rel.skills.iguais++;
+    }
+    return rel;
 }

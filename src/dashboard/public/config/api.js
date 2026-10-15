@@ -363,6 +363,15 @@ export async function restoreKnowledgeBackup(filename, restaurarSegredos) {
   }));
 }
 
+// ADR-020 Sprint B: traz o conhecimento de OUTRA instalação sem sobrescrever nada local.
+export async function importKnowledgeBackup(filename) {
+  return json(f('/api/maintenance/backup/conhecimento/importar', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ filename }),
+  }));
+}
+
 export async function uploadBackup(file) {
   return json(f('/api/maintenance/backup/upload', {
     method: 'POST',

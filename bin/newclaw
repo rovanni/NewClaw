@@ -613,7 +613,44 @@ async function restaurarConhecimento(arquivo, args) {
   console.log('   Reinicie para carregar o banco: newclaw restart');
 }
 
+/** ADR-020 Sprint B: `newclaw import <a.zip> [--sim]` — mescla o conhecimento de outra instalação, sem apagar nada local. */
+async function importarConhecimento(arquivo, args) {
+  const mod = carregarBackupDoConhecimento();
+  if (!mod) return;
+  const alvo = path.resolve(arquivo);
+  if (!fs.existsSync(alvo)) { console.error(`❌ Arquivo não encontrado: ${alvo}`); return; }
+  let lido;
+  try { lido = await mod.lerPacote(alvo); }
+  catch (e) { console.error(`❌ ${e.message}`); return; }
+  const m = lido.manifesto, c = m.contagens || {};
+  console.log(`🔀 Conhecimento de ${m.criadoEm} (sistema ${m.sistema}, NewClaw ${m.app})`);
+  console.log(`   ${c.memorias} memórias · ${c.skills} skills · ${c.conversas} conversas`);
+  for (const a of lido.avisos) console.log(`⚠️  ${a}`);
+  console.log('   Nada desta instalação será apagado ou trocado: entra só o que falta.');
+  if (!(args.includes('--sim') || args.includes('--yes'))) {
+    const resposta = await new Promise(resolve => {
+      const rl = require('readline').createInterface({ input: process.stdin, output: process.stdout });
+      rl.question('Importar? (s/N) ', r => { rl.close(); resolve(r); });
+    });
+    if (!/^(s|sim|y|yes)$/i.test(String(resposta).trim())) { console.log('Nada foi alterado.'); return; }
+  }
+  const r = await mod.importarPacote(alvo, caminhosParaBackup(mod));
+  console.log(`✅ Memórias: ${r.memorias.importadas} novas, ${r.memorias.jaExistiam} já existiam, ${r.memorias.paraRevisar} para revisar.`);
+  console.log(`   Skills: ${r.skills.novas} novas, ${r.skills.iguais} iguais, ${r.skillsAprendidas} aprendidas (banco).`);
+  if (r.skills.comDiferenca.length) console.log(`   Diferentes (a local ficou; a importada em SKILL.md.importada): ${r.skills.comDiferenca.join(', ')}`);
+  if (r.skills.paraRevisar.length) console.log(`   De outro sistema (SKILL.md.revisar): ${r.skills.paraRevisar.join(', ')}`);
+  if (r.memorias.preferenciasEmConflito.length) console.log(`   Preferências em conflito (a local foi mantida): ${r.memorias.preferenciasEmConflito.join(', ')}`);
+  console.log(`   Estado anterior guardado em: ${r.pacoteDeSeguranca}`);
+  console.log('   Skills novas carregam no próximo início: newclaw restart');
+}
+
 const commands = {
+  async import(args = []) {
+    const pacote = args.find(a => a.toLowerCase().endsWith('.zip'));
+    if (!pacote) { console.log('Use: newclaw import <arquivo.zip> — mescla o conhecimento de outra instalação.'); return; }
+    return importarConhecimento(pacote, args);
+  },
+
   start(args) {
     const debug = args.includes('--debug');
     const tail = args.includes('--tail');
@@ -1731,6 +1768,7 @@ newclaw update channel  Escolhe o canal de atualização (Stable/Preview/Develop
 newclaw backup          Salva tudo o que o NewClaw aprendeu num arquivo .zip
                         (opções: --historico --workspace --segredos)
 newclaw restore <a.zip> Restaura o conhecimento de um arquivo .zip
+newclaw import <a.zip>  Mescla o conhecimento de outra instalação (não apaga nada)
 newclaw restore         Abre o assistente de restauração de backups
 newclaw uninstall       Remove o NewClaw e limpa o sistema
 newclaw help            Mostra esta tela de ajuda
