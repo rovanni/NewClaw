@@ -21,6 +21,7 @@ import { createLogger } from '../shared/AppLogger';
 import { combinarSinais, sinalDoTurno } from '../shared/turnCancellation';
 import { PerfilDoJuiz } from './perfilDoJuiz';
 import { descreverAgora } from '../shared/dataEHora';
+import { descreverAmbienteDeExecucao } from '../shared/ambienteDeExecucao';
 import { gravarAvaliacao, novaAvaliacaoId, versaoDoPrompt, INSTRUCAO_FALTOU, INSTRUCAO_DIFICULDADE, type ContextoAvaliacao } from '../shared/evaluatorFlightRecorder';
 import {
     RegistroDeValidacoes, lerSaidaDoModelo, agregarPorItens, citacaoExiste,
@@ -84,6 +85,8 @@ export class ValidationEngine {
         private readonly perfil: PerfilDoJuiz = new PerfilDoJuiz(),
         /** O relógio do motor (injetável nos testes): a data de hoje entra no prompt de TODOS os tipos. */
         private readonly relogio: () => Date = () => new Date(),
+        /** Onde os comandos rodam de verdade (injetável nos testes): entra no prompt de TODOS os tipos, junto da data. */
+        private readonly ambiente: () => string = () => descreverAmbienteDeExecucao(),
     ) {}
 
     /** Modelo do juiz escolhido em tempo de execução (painel: `updateConfig`); vence a variável de ambiente. */
@@ -111,7 +114,8 @@ export class ValidationEngine {
         }
         // Uma pessoa sabe que dia é hoje; o juiz não sabia (relatado por ele no campo "faltou"). Só entra no prompt de verdade —
         // a versão do prompt (gravador de voo) é calculada sem a data, para não mudar todo dia.
-        if (agora) secoes.push(`CONTEXTO DO SISTEMA (não é evidência):\nData e hora atuais: ${descreverAgora(agora)}. Use só para julgar datas relativas ("hoje", "há 3 dias") e a plausibilidade de datas.`);
+        // O ambiente também (Telegram, 15/10/2026): sem ele, o juiz aprovava sintaxe de PowerShell que o exec_command roda no cmd.exe.
+        if (agora) secoes.push(`CONTEXTO DO SISTEMA (não é evidência):\nData e hora atuais: ${descreverAgora(agora)}. Use só para julgar datas relativas ("hoje", "há 3 dias") e a plausibilidade de datas.\n${this.ambiente()} Use para julgar se comandos, caminhos e instruções servem a esta máquina.`);
         secoes.push(`CHECKLIST — responda cada item:\n${d.checklist.map((c, i) => `${i + 1}. ${c}`).join('\n')}`);
         if (d.preVerificacoes?.includes('citacao_existe_na_fonte')) {
             // ADR-015: de onde a citação pode vir é declarado pelo tipo (padrão: só as fontes de verdade).
