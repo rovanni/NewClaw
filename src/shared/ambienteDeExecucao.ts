@@ -14,7 +14,8 @@ export function descreverAmbienteDeExecucao(plataforma: NodeJS.Platform = proces
     if (plataforma === 'win32') {
         return 'Sistema operacional: Windows. Os comandos do exec_command rodam no cmd.exe — exceto os que contêm um cmdlet do ' +
             'PowerShell (Verbo-Substantivo, ex.: Get-ChildItem) ou um comando típico de Linux (ls, cat, grep, rm…), que vão para o ' +
-            'powershell.exe (Windows PowerShell 5.1). No cmd.exe, ";" não separa comandos e "2>$null" não descarta erros. ' +
+            'powershell.exe (Windows PowerShell 5.1, que não aceita "&&" nem "||"). No cmd.exe, ";" não separa comandos e ' +
+            '"2>$null" não descarta erros. ' +
             'Instaladores de Linux (apt-get, yum) não existem aqui.';
     }
     if (plataforma === 'darwin') return 'Sistema operacional: macOS. Os comandos do exec_command rodam no /bin/sh.';

@@ -33,6 +33,8 @@ console.log('\n=== S409-1 — a descrição do ambiente bate com o roteamento RE
     assert(needsPowerShellWrap('Get-ChildItem -Path .'), 'cmdlet Verbo-Substantivo vai para o powershell.exe — como a descrição diz');
     assert(needsPowerShellWrap('ls -la tmp'), 'comando típico de Linux (ls) vai para o powershell.exe — como a descrição diz');
     assert(/";" não separa comandos/.test(win) && /apt-get/.test(win), 'avisa as duas armadilhas vistas ao vivo: ";"/2>$null no cmd.exe e apt-get no Windows');
+    // A versão só entra pela CONSEQUÊNCIA que muda o que é válido: o exec_command chama `powershell` (sempre o 5.1 no Windows).
+    assert(/PowerShell 5\.1, que não aceita "&&" nem "\|\|"/.test(win), 'PowerShell 5.1 com a consequência: sem "&&" nem "||"');
     assert(/Linux/.test(descreverAmbienteDeExecucao('linux')) && /\/bin\/sh/.test(descreverAmbienteDeExecucao('linux')), 'Linux: /bin/sh');
     assert(/macOS/.test(descreverAmbienteDeExecucao('darwin')), 'macOS reconhecido');
 }
