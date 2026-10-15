@@ -318,17 +318,6 @@ export class MessageBus {
     }
 
     /**
-     * Determinar ação de digitação baseada no tipo de mensagem
-     */
-    private getTypingAction(msg: NormalizedMessage): TypingAction {
-        if (msg.type === 'voice' || msg.type === 'audio') return 'record_voice';
-        if (msg.type === 'photo') return 'upload_photo';
-        if (msg.type === 'document') return 'upload_document';
-        if (msg.type === 'video') return 'record_video';
-        return 'typing';
-    }
-
-    /**
      * Portão de entrada: deduplica, envia ACK se necessário e enfileira.
      * Retorna imediatamente — o processamento real ocorre em background via ConversationQueueManager.
      */
@@ -526,10 +515,12 @@ export class MessageBus {
         const typingKey = composeSessionKey(sessionKey);
         const adapter = this.adapters.get(msg.channel);
 
-        // Typing indicator só começa quando a tarefa realmente inicia (não durante espera na fila)
+        // Typing indicator só começa quando a tarefa realmente inicia (não durante espera na fila).
+        // Sempre "digitando…" — o indicador diz o que o assistente está fazendo (trabalhando na resposta), não o tipo da
+        // mensagem que chegou. Antes, áudio recebido virava "gravando voz" (e foto, "enviando foto") pelo atendimento inteiro —
+        // 34 minutos de "gravando voz" enquanto ele pesquisava e montava slides (Telegram, 15/10/2026).
         if (adapter?.sendTypingIndicator) {
-            const action = this.getTypingAction(msg);
-            this.startTypingIndicator(adapter, msg.rawContext, action, typingKey);
+            this.startTypingIndicator(adapter, msg.rawContext, 'typing', typingKey);
         }
 
         try {
