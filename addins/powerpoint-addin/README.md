@@ -77,3 +77,13 @@ Com o servidor rodando em `https://localhost:3000`, sideload o suplemento:
   WebView2 usado pelo Office) tratam `localhost`/`127.0.0.1` como contexto
   seguro e não bloqueiam isso como conteúdo misto — mas se você apontar o
   servidor para um host remoto, sirva-o também via HTTPS.
+
+## Segurança das dependências
+
+As dependências deste suplemento são ferramentas de **desenvolvimento** (servidor de dev, depuração, geração do
+certificado HTTPS local). Versões com falha conhecida são fixadas em `overrides` no `package.json` — em 14/10/2026:
+`handlebars`, `shell-quote`, `proxy-addr`, `compression`, `source-map-js` e `@modelcontextprotocol/sdk`.
+
+**Risco aceito:** `node-forge` (≤ 1.4.0, sem versão corrigida publicada) vem de `office-addin-dev-certs` → `mkcert`, que
+o usa só para **gerar** o certificado local de desenvolvimento. A falha é na **verificação** de assinatura RSA PKCS#1
+v1.5, que esse uso não faz. Atualizar assim que houver versão corrigida.
