@@ -3,7 +3,7 @@
  *
  * Fallback chain:
  *   1. pdftotext (poppler-utils) — melhor para PDFs digitais
- *   2. python3 + pdfminer.six    — fallback para PDFs complexos
+ *   2. Python 3 + pdfminer.six   — fallback para PDFs complexos (o Python que funciona: py -3, python ou python3)
  *   3. tesseract (OCR)           — fallback para PDFs digitalizados/imagens
  *   4. strings + grep            — último recurso para extrair texto bruto
  */
@@ -16,12 +16,25 @@ import { promisify } from 'util';
 import { errorMessage } from '../shared/errors';
 import { createLogger } from '../shared/AppLogger';
 import { processVision } from '../core/agentMediaHandlers';
+import { resolvePython3Runtime, defaultPython3Candidates } from '../utils/crossPlatform';
 import type { ProviderFactory } from '../core/ProviderFactory';
 import type { ModelProfileRegistry } from '../loop/ModelProfileRegistry';
 
 const execAsync = promisify(exec);
 // execFile não passa pelo shell — elimina risco de injeção de comandos via args
 const execFileAsync = promisify(execFile);
+
+/**
+ * O erro REAL de uma tentativa (primeira linha do stderr, senão da mensagem), para a falha final relatar fatos — o que foi tentado
+ * e o que cada tentativa respondeu. Antes a falha dava uma receita fixa (apt-get), errada no Windows (15/10/2026); quem decide como
+ * instalar é o agente, que recebe o ambiente medido (shared/ambienteDeExecucao).
+ */
+function motivoDaFalha(e: unknown): string {
+    const err = e as { stderr?: unknown; message?: unknown };
+    const linhas = [String(err?.stderr ?? ''), String(err?.message ?? e ?? '')].join('\n').split(/\r?\n/).map(l => l.trim())
+        .filter(l => l && !/^Command failed:/i.test(l));
+    return (linhas[0] ?? 'falhou sem mensagem').slice(0, 160);
+}
 const log = createLogger('ReadDocumentTool');
 
 const WORKSPACE = process.env.WORKSPACE_DIR || './workspace';
@@ -150,6 +163,8 @@ export class ReadDocumentTool implements ToolExecutor {
             ? `-f ${safePages.split('-')[0]} -l ${safePages.split('-')[1] || safePages.split('-')[0]}`
             : '';
 
+        const tentativas: string[] = [];
+
         // 1. pdftotext (best for digital PDFs)
         try {
             const { stdout, stderr } = await execAsync(
@@ -161,14 +176,17 @@ export class ReadDocumentTool implements ToolExecutor {
                 log.info(`read_document: pdftotext OK (${text.length} chars)`);
                 return { success: true, output: this.formatOutput(text, filePath, 'pdftotext') };
             }
+            tentativas.push(`pdftotext — saída curta (${text.length} caracteres)`);
             if (stderr && !stderr.includes('pdftotext: command not found')) {
                 log.warn(`read_document: pdftotext produced short output (${text.length} chars), trying fallback`);
             }
         } catch (e) {
+            tentativas.push(`pdftotext — ${motivoDaFalha(e)}`);
             log.info(`read_document: pdftotext not available or failed: ${errorMessage(e)}`);
         }
 
-        // 2. python3 + pdfminer
+        // 2. Python 3 + pdfminer
+        let pythonUsado = '';
         // O filepath é passado como sys.argv[1] — nunca interpolado no código Python,
         // eliminando risco de injeção de comandos via nome de arquivo malicioso.
         try {
@@ -177,22 +195,31 @@ export class ReadDocumentTool implements ToolExecutor {
                 'from pdfminer.high_level import extract_text',
                 'print(extract_text(sys.argv[1]))',
             ].join('; ');
-            const { stdout } = await execFileAsync('python3', ['-c', script, filePath], { timeout: TIMEOUT_MS, windowsHide: true });
+            // O Python 3 que FUNCIONA nesta máquina (testado por execução): no Windows, "python3" costuma ser o atalho da
+            // Microsoft Store, que não roda Python — o pdfminer instalado no `py -3` nunca era alcançado (15/10/2026).
+            const candidatos = defaultPython3Candidates();
+            const py = await resolvePython3Runtime(candidatos);
+            if (!py) throw new Error(`nenhum Python 3 executável entre: ${candidatos.map(c => [c.command, ...c.argsPrefix].join(' ')).join(', ')}`);
+            pythonUsado = [py.command, ...py.argsPrefix].join(' ');
+            const { stdout } = await execFileAsync(py.command, [...py.argsPrefix, '-c', script, filePath], { timeout: TIMEOUT_MS, windowsHide: true });
             const text = stdout.trim();
             if (text.length > 50) {
                 log.info(`read_document: pdfminer OK (${text.length} chars)`);
                 return { success: true, output: this.formatOutput(text, filePath, 'pdfminer') };
             }
+            tentativas.push(`Python 3 (${pythonUsado}) + pdfminer — saída curta (${text.length} caracteres)`);
         } catch (e) {
+            tentativas.push(`Python 3${pythonUsado ? ` (${pythonUsado})` : ''} + pdfminer — ${motivoDaFalha(e)}`);
             log.info(`read_document: pdfminer not available: ${errorMessage(e)}`);
         }
 
         // 3. tesseract OCR (for scanned PDFs)
         const ocrResult = await this.pdfOcr(filePath);
         if (ocrResult.success) return ocrResult;
+        tentativas.push(`OCR (pdftoppm + tesseract) — ${ocrResult.error ?? 'falhou'}`);
 
         // 4. strings (raw binary text extraction as last resort)
-        return this.extractStrings(filePath);
+        return this.extractStrings(filePath, tentativas);
     }
 
     private async pdfOcr(filePath: string): Promise<ToolResult> {
@@ -227,8 +254,9 @@ export class ReadDocumentTool implements ToolExecutor {
             }
         } catch (e) {
             log.info(`read_document: OCR failed: ${errorMessage(e)}`);
+            return { success: false, output: '', error: motivoDaFalha(e) };
         }
-        return { success: false, output: '', error: 'OCR não disponível ou falhou' };
+        return { success: false, output: '', error: 'OCR não extraiu texto' };
     }
 
     private async extractOffice(filePath: string): Promise<ToolResult> {
@@ -269,10 +297,10 @@ export class ReadDocumentTool implements ToolExecutor {
         } catch (e) {
             log.info(`read_document: tesseract failed: ${errorMessage(e)}`);
         }
-        return { success: false, output: '', error: 'Tesseract não disponível. Instale com: apt-get install tesseract-ocr tesseract-ocr-por' };
+        return { success: false, output: '', error: 'Tesseract não disponível ou não extraiu texto (ver o log para o erro).' };
     }
 
-    private async extractStrings(filePath: string): Promise<ToolResult> {
+    private async extractStrings(filePath: string, tentativas: string[] = []): Promise<ToolResult> {
         try {
             const { stdout } = await execAsync(
                 `strings "${filePath}" | grep -E '.{20,}' | head -200`,
@@ -290,11 +318,8 @@ export class ReadDocumentTool implements ToolExecutor {
 
         return {
             success: false, output: '',
-            error: `Não foi possível extrair texto de "${path.basename(filePath)}". ` +
-                'Instale as ferramentas necessárias:\n' +
-                '  • PDF: apt-get install poppler-utils\n' +
-                '  • OCR: apt-get install tesseract-ocr tesseract-ocr-por\n' +
-                '  • DOCX: apt-get install pandoc'
+            error: `Não foi possível extrair texto de "${path.basename(filePath)}".` +
+                (tentativas.length ? ` Tentativas: ${tentativas.join('; ')}.` : ''),
         };
     }
 
