@@ -20,7 +20,7 @@ import { ProviderFactory, LLMMessage } from '../core/ProviderFactory';
 import { CapabilityRegistry } from '../core/CapabilityRegistry';
 import { permissionRegistry } from '../core/PermissionRegistry';
 import { Goal, PlanStep } from './GoalTypes';
-import { detectMissingRequiredArgs } from './GoalPlanner';
+import { detectMissingRequiredArgs, buildAttemptFactsBlock } from './GoalPlanner';
 import { makeContentStubClassifier, ContentStubClassifier } from '../shared/contentStubClassifier';
 import { sanitizePlanSteps } from './planning/sanitizePlanSteps';
 import { resolveToolAlias } from './planning/toolAliasResolver';
@@ -34,6 +34,9 @@ import { obterMotor } from '../validation/motorPadrao';
 import type { DecisaoDeRisco } from '../validation/tipos/demaisTipos';
 
 const log = createLogger('RiskAnalyzer');
+
+/** "O que já foi feito" para o juiz do plano: o goal inteiro (até 30 passos), cada saída resumida em início e fim — o rótulo declara. */
+const LIMITES_DO_JA_FEITO = { maxPassos: 30, maxPorPasso: 300, maxTotal: 8000 };
 
 // Modelo dedicado à revisão de riscos: gera JSON rápido e não entra em extended thinking.
 // kimi-k2.6 e outros thinking models são inadequados — raciocinam 150s+ sem produzir output.
@@ -718,6 +721,7 @@ export class RiskAnalyzer {
             const r = await obterMotor(this.providerFactory).validar<DecisaoDeRisco>('risco_do_plano', {
                 pedido: goal.userIntent, plano: stepsStr, objetivo: goal.objective,
                 ferramentas: this.toolRegistry.getEnabled().map(t => t.name).join(', '),
+                ja_feito: buildAttemptFactsBlock(goal.attempts ?? [], LIMITES_DO_JA_FEITO) || undefined,
             }, { goalId: goal.id, phase: shadow ? 'sombra' : 'plano' });
             if (r.semVeredito) {
                 log.warn(`${tag} juiz do plano sem veredito (${r.veredito.naoAvaliavelPorque ?? 'n/d'}) — using original plan`);

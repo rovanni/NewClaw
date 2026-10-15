@@ -115,10 +115,13 @@ export const descritorRiscoDoPlano: DescritorDeValidacao<DecisaoDeRisco> = {
         { nome: 'plano', rotulo: 'Plano (passos e ferramentas)', papel: 'objeto', obrigatoria: true },
         { nome: 'objetivo', rotulo: 'Objetivo extraído do pedido', papel: 'contexto_da_execucao', obrigatoria: false },
         { nome: 'ferramentas', rotulo: 'Ferramentas disponíveis', papel: 'contexto_da_execucao', obrigatoria: false },
+        // Num replanejamento, o plano novo se apoia no que já foi feito ("com base na pesquisa já concluída"). Sem isto o juiz
+        // não via essa pesquisa e apontava dependência faltando (comentário "dificuldade" do juiz, 15/10/2026).
+        { nome: 'ja_feito', rotulo: 'O que já foi feito neste objetivo (cada saída resumida em início e fim)', papel: 'contexto_da_execucao', obrigatoria: false },
     ],
     checklist: [
         'Falta algum passo? (ex.: criar arquivo → conferir → enviar; não pular o envio)',
-        'Algum passo depende do resultado do anterior sem capturá-lo explicitamente?',
+        'Algum passo depende do resultado do anterior sem capturá-lo explicitamente? (o resultado de algo listado em "o que já foi feito" já existe — usar isso não é dependência faltando)',
         'A ordem dos passos está correta?',
         'O resultado final será ENTREGUE ao usuário? (se o pedido pede envio de arquivo, deve haver um passo de envio)',
     ],
