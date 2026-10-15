@@ -297,6 +297,42 @@ export function createConfigRouter(ctx: DashboardContext): Router {
         });
     });
 
+    /**
+     * Busca por significado — POST /api/config/embeddings/reindex. Depois de escolher (ou trocar) o modelo de embedding, os
+     * vetores antigos não servem: apaga os de outro modelo e gera os que faltam, em segundo plano. Responde na hora com
+     * quantos ficaram pendentes; GET /api/config/embeddings/status acompanha. Sem modelo escolhido, diz isso.
+     */
+    let reindexando = false;
+    router.post('/embeddings/reindex', async (_req: Request, res: Response) => {
+        const mm = ctx.controller?.getMemory();
+        if (!mm) return res.status(500).json({ success: false, error: 'memória indisponível' });
+        const svc = mm.getEmbeddingService();
+        if (!svc.getModel()) return res.status(400).json({ success: false, error: 'Nenhum modelo de busca por significado escolhido.' });
+        if (!(await svc.isAvailable())) return res.status(422).json({ success: false, error: `O modelo "${svc.getModel()}" não foi encontrado no Ollama. Baixe-o primeiro (ollama pull ${svc.getModel()}).` });
+        if (reindexando) return res.json({ success: true, emAndamento: true, pendentes: svc.pendentes() });
+        const descartados = svc.descartarDeOutroModelo();
+        const pendentes = svc.pendentes();
+        reindexando = true;
+        (async () => {
+            try {
+                let feitos = 0;
+                let lote = 0;
+                do { lote = await svc.embedMissing(50); feitos += lote; } while (lote > 0);
+                log.info(`[EMBEDDINGS] reindexação concluída: ${feitos} vetores com ${svc.getModel()} (${descartados} de outro modelo descartados; ${svc.pendentes()} sem vetor)`);
+            } catch (e) {
+                log.error(`[EMBEDDINGS] reindexação falhou: ${errorMessage(e)}`);
+            } finally { reindexando = false; }
+        })();
+        res.json({ success: true, modelo: svc.getModel(), descartados, pendentes });
+    });
+
+    router.get('/embeddings/status', (_req: Request, res: Response) => {
+        const mm = ctx.controller?.getMemory();
+        if (!mm) return res.status(500).json({ success: false, error: 'memória indisponível' });
+        const svc = mm.getEmbeddingService();
+        res.json({ success: true, modelo: svc.getModel(), pendentes: svc.pendentes(), reindexando });
+    });
+
     router.get('/history', (_req: Request, res: Response) => {
         try {
             const mm = ctx.controller?.getMemory() ?? null;

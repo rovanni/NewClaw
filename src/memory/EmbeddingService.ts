@@ -186,4 +186,20 @@ export class EmbeddingService {
     getModel(): string {
         return this.model;
     }
+
+    /**
+     * Vetores feitos por OUTRO modelo não servem para o atual (dimensões e espaço diferentes — a busca já os pulava pela
+     * dimensão, mas mesmo de dimensão igual não são comparáveis). Apagados ao reindexar. Devolve quantos saíram.
+     */
+    descartarDeOutroModelo(): number {
+        if (!this.model) return 0;
+        return this.db.prepare('DELETE FROM memory_embeddings WHERE model != ?').run(this.model).changes;
+    }
+
+    /** Quantos nós ainda não têm vetor. */
+    pendentes(): number {
+        return (this.db.prepare(`
+            SELECT COUNT(*) AS n FROM memory_nodes n LEFT JOIN memory_embeddings e ON n.id = e.node_id WHERE e.node_id IS NULL
+        `).get() as { n: number }).n;
+    }
 }

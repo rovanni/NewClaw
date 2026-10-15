@@ -87,7 +87,9 @@ export class MemoryManager {
     }
 
     getEmbeddingService(): EmbeddingService {
-        if (!this.embeddingServiceInstance) this.embeddingServiceInstance = new EmbeddingService(this.db);
+        // Com o endereço do Ollama configurado — antes caía sempre no padrão do construtor (localhost:11434), e quem usa o
+        // Ollama em outra máquina nunca tinha embeddings, mesmo com o modelo escolhido.
+        if (!this.embeddingServiceInstance) this.embeddingServiceInstance = new EmbeddingService(this.db, this.ollamaUrl);
         return this.embeddingServiceInstance;
     }
 

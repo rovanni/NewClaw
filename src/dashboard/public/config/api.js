@@ -107,6 +107,11 @@ export async function getModelCatalog(refresh = false) {
   return d;
 }
 
+// Busca por significado: apaga vetores de outro modelo e gera os que faltam, em segundo plano (POST /api/config/embeddings/reindex).
+export async function reindexEmbeddings() {
+  return json(f('/api/config/embeddings/reindex', { method: 'POST' }));
+}
+
 export async function getCloudCatalog() {
   try {
     const d = await json(f('/api/models/cloud-catalog'));

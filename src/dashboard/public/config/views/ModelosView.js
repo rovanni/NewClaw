@@ -1,7 +1,7 @@
 import { configStore, providersStore, logAcaoUI, activeChatModel } from '../state.js';
 import { showToast } from '../components/Toast.js';
 import { updateDropdownModels } from '../components/ModelDropdown.js';
-import { addCustomProvider, removeCustomProvider, editCustomProvider, getCloudCatalog, getJudgeCandidates, medirJuiz, testCustomProvider, getLocalModels, serveLocalModel, stopLocalModel, previewLocalCommand } from '../api.js';
+import { addCustomProvider, removeCustomProvider, editCustomProvider, reindexEmbeddings, getCloudCatalog, getJudgeCandidates, medirJuiz, testCustomProvider, getLocalModels, serveLocalModel, stopLocalModel, previewLocalCommand } from '../api.js';
 import { loadProviders, doSave, guideBox } from '../app.js';
 import { mountLocalModelWizard } from '../components/LocalModelWizard.js';
 import { mountConfigWizard } from '../components/ConfigWizard.js';
@@ -490,6 +490,23 @@ export function render(container) {
           </div>
         </details>
 
+        <!-- Busca por significado (EMBED_MODEL) — opcional, escolha do usuário; vazio = busca só por palavras (ADR-018). -->
+        <details class="cfg-details">
+          <summary>🔎 ${t('ml_embed_title')}</summary>
+          <div class="cfg-details-body">
+            <div class="form-hint" style="margin-bottom:10px;">${t('ml_embed_desc')}</div>
+            <div class="form-group">
+              <label class="form-label" for="ml-embedModel">${t('ml_embed_label')}</label>
+              <input type="text" class="form-input" id="ml-embedModel" list="ml-embedModels" style="max-width:320px;" placeholder="${t('ml_embed_placeholder')}">
+              <datalist id="ml-embedModels"></datalist>
+              <div class="form-hint">${t('ml_embed_hint')}</div>
+            </div>
+            <button type="button" class="btn btn-ghost btn-sm" id="ml-embedReindex">${t('ml_embed_reindex_btn')}</button>
+            <span id="ml-embedStatus" class="form-hint" style="margin-left:8px;"></span>
+            <div class="form-hint" style="margin-top:6px;">${t('ml_embed_reindex_hint')}</div>
+          </div>
+        </details>
+
         <!-- Provider por perfil — relocado de "Escolher Modelo" (2026-07-25), mesmo motivo. -->
         <details class="cfg-details">
           <summary>${t('provider_per_profile_title')}</summary>
@@ -589,6 +606,32 @@ export function render(container) {
   updateProviderHints(s.defaultProvider);
   updateModelStatus(providersStore.get('models') || [], r);
   checkInternalModels();
+
+  // Busca por significado: sugere SÓ os modelos que o próprio Ollama declara como de embedding (fato do catálogo, não
+  // palpite pelo nome); o campo aceita qualquer nome. Grava pelo Salvar de sempre (embedModel → EMBED_MODEL).
+  if (el('ml-embedModel')) {
+    el('ml-embedModel').value = s.embedModel || '';
+    const deEmbedding = (providersStore.get('catalog') || []).filter(m => (m.capabilities || []).includes('embedding')).map(m => m.id);
+    el('ml-embedModels').innerHTML = deEmbedding.map(id => `<option value="${id.replace(/"/g, '&quot;')}">`).join('');
+    el('ml-embedModel').addEventListener('change', e => { cs.set('embedModel', e.target.value.trim()); });
+    el('ml-embedReindex').addEventListener('click', async () => {
+      const status = el('ml-embedStatus');
+      // Reindexa com o modelo SALVO (o que o servidor usa) — uma escolha ainda não salva seria ignorada em silêncio.
+      if ((cs.salvo('embedModel') || '') !== (cs.get('embedModel') || '')) {
+        status.textContent = t('ml_embed_save_first');
+        return;
+      }
+      el('ml-embedReindex').disabled = true;
+      try {
+        const r = await reindexEmbeddings();
+        status.textContent = t('ml_embed_reindex_started', { pendentes: r.pendentes ?? 0, descartados: r.descartados ?? 0 });
+      } catch (err) {
+        status.textContent = '❌ ' + err.message;
+      } finally {
+        el('ml-embedReindex').disabled = false;
+      }
+    });
+  }
 
   // Provider select
   el('ml-defaultProvider').addEventListener('change', e => {
