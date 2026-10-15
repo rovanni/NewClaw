@@ -42,7 +42,9 @@ const domainSrc = fs.readFileSync(path.join(__dirname, '../../shared/domainTypes
 console.log('\n=== S218-1 — o produtor grava o erro no trace ===');
 {
     const resultSteps = agentLoopSrc.match(/addStep\(trace, 'tool_result'[^)]*\)/g) ?? [];
-    assert(resultSteps.length === 4, 'quatro sítios de tool_result (fast path registra falha + sucesso, dois dispatches normais)', resultSteps.length);
+    // Atualizado DE PROPÓSITO em 15/10/2026 (S406): o 5º sítio é o envio adiado (send_document dentro de um goal), que entra
+    // no rastro como fato para o juiz de grounding. Ele não pode falhar (só registra) — por isso os sítios com `error` seguem 3.
+    assert(resultSteps.length === 5, 'cinco sítios de tool_result (fast path registra falha + sucesso, dois dispatches normais, envio adiado)', resultSteps.length);
 
     const comErro = resultSteps.filter(s => /error:\s*(?:result\.error|toolResult\.error)/.test(s));
     assert(comErro.length === 3, 'os três sítios que podem falhar gravam `error` (inclui fast path failure — ADR-011 §9)', comErro.length);
