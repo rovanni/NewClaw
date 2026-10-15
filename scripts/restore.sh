@@ -5,7 +5,7 @@
 #  Fontes de backup suportadas:
 #    1. <projeto>/data/backups/  ← backups gerados pelo Dashboard
 #    2. ~/newclaw-backups        ← backups gerados pelo instalador
-#    3. /home/venus/backups      ← caminho legado da VPS
+#    3. ~/backups                ← pasta do backup_db.sh (cron)
 # ============================================================
 
 set -e
@@ -24,7 +24,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 NEWCLAW_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 DASHBOARD_BACKUPS="$NEWCLAW_DIR/data/backups"
 BACKUP_ROOT="${HOME}/newclaw-backups"
-ALT_BACKUP_ROOT="/home/venus/backups"
+ALT_BACKUP_ROOT="${NEWCLAW_BACKUP_DIR:-$HOME/backups}"
 
 banner() {
   echo ""

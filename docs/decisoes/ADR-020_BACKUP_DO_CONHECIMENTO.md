@@ -1,6 +1,11 @@
 # ADR-020 — Backup e restauração do conhecimento (para qualquer usuário)
 
-Status: **proposta** (14/10/2026) — aguardando aprovação da mantenedora antes de implementar.
+Status: **aceita** (14/10/2026, "Pode rodar as sprints"). **Sprint A implementada e validada** — `src/core/backupDoConhecimento.ts`,
+rotas `/api/maintenance/backup/conhecimento[/inspecionar|/restaurar]`, cartão no painel (3 línguas), `newclaw backup` /
+`newclaw restore <a.zip>`, `PRAGMA user_version` (`VERSAO_DO_ESQUEMA`), teste `S399`. Etapa 4: pacote dos dados reais da
+instalação Windows (95 memórias, 20 skills, 154 conversas, sem `.env` nem `.hermes`) restaurado numa instalação vazia e
+isolada — o boot aplicou o banco (esquema 0 → 1), a API listou as 20 skills e o banco tinha as 95 memórias; criação pelo
+painel conferida no navegador. Sprint B (importar mesclando) pendente.
 Origem: pergunta da mantenedora ao comparar Windows × Linux — *"tem um jeito de toda essa inteligência, toda essa
 experiência salvar de alguma forma, fazer um backup, restaurar?"* — e a correção logo em seguida: *"o sistema é open
 source; não é só para mim, é para qualquer usuário"*.

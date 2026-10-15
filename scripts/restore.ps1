@@ -14,7 +14,7 @@ $ScriptDir       = Split-Path -Parent $MyInvocation.MyCommand.Path
 $NewClawDir      = Resolve-Path (Join-Path $ScriptDir "..")
 $DashboardBackups = Join-Path $NewClawDir "data\backups"
 $BackupRoot      = Join-Path $env:USERPROFILE "newclaw-backups"
-$AltBackupRoot   = "C:\home\venus\backups"
+$AltBackupRoot   = Join-Path $env:USERPROFILE "backups"
 
 function Write-Banner {
     Write-Host ""

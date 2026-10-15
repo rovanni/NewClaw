@@ -1,6 +1,7 @@
 import {
   listBackups, createSystemBackup, createDatabaseBackup, backupDownloadUrl,
   getBackupConfig, saveBackupConfig, getBackupSchedule, restoreBackup, uploadBackup,
+  createKnowledgeBackup, inspectKnowledgeBackup, restoreKnowledgeBackup,
 } from '../api.js';
 import { showToast } from '../components/Toast.js';
 import { guideBox } from '../app.js';
@@ -24,6 +25,20 @@ export function render(container) {
       </div>
 
       ${guideBox(t('bkp_page_guide'))}
+
+      <!-- ADR-020: o pacote único com tudo o que a instalação aprendeu — o caminho principal para leigos. -->
+      <details class="cfg-details" open>
+        <summary>🧠 ${t('bkp_conh_title')}</summary>
+        <div class="cfg-details-body">
+          <div class="form-hint" style="margin-bottom:10px">${t('bkp_conh_desc')}</div>
+          <label style="display:flex;gap:8px;align-items:center;font-size:.85rem;margin:4px 0"><input type="checkbox" id="bkp-conhHistorico"> ${t('bkp_conh_opt_history')}</label>
+          <label style="display:flex;gap:8px;align-items:center;font-size:.85rem;margin:4px 0"><input type="checkbox" id="bkp-conhWorkspace"> ${t('bkp_conh_opt_workspace')}</label>
+          <label style="display:flex;gap:8px;align-items:center;font-size:.85rem;margin:4px 0"><input type="checkbox" id="bkp-conhSegredos"> ${t('bkp_conh_opt_secrets')}</label>
+          <div class="form-hint" style="margin:2px 0 10px 26px;color:var(--warning,#f59e0b)">${t('bkp_conh_opt_secrets_hint')}</div>
+          <button class="btn btn-primary" id="bkp-conhBtn">${t('bkp_conh_btn')}</button>
+          <div class="form-hint" style="margin-top:10px">${t('bkp_conh_restore_hint')}</div>
+        </div>
+      </details>
 
       <details class="cfg-details" open>
         <summary>${t('backup_schedule_title')}</summary>
@@ -77,7 +92,7 @@ export function render(container) {
             <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
               <label class="btn btn-secondary" style="cursor:pointer">
                 ${t('backup_upload_btn')}
-                <input type="file" id="bkp-uploadInput" accept=".bak,.db" style="display:none">
+                <input type="file" id="bkp-uploadInput" accept=".bak,.db,.zip" style="display:none">
               </label>
               <span id="bkp-uploadName" style="font-size:.82rem;color:var(--text-soft)"></span>
             </div>
@@ -173,12 +188,34 @@ export function render(container) {
     if (!link) return;
     e.preventDefault();
     const name = link.dataset.restore;
-    if (!confirm(t('backup_restore_confirm', { name }))) return;
+    // ADR-020: o pacote de conhecimento mostra o que contém ANTES de restaurar.
+    let restaurarSegredos = false;
+    if (name.endsWith('.zip')) {
+      let info;
+      try { info = await inspectKnowledgeBackup(name); }
+      catch (err) { showToast('❌ ' + err.message, 'error'); return; }
+      const m = info.manifesto || {};
+      const c = m.contagens || {};
+      const resumo = t('bkp_conh_restore_summary', {
+        data: fmtDate(m.criadoEm), sistema: m.sistema || '?', app: m.app || '?',
+        memorias: c.memorias ?? 0, skills: c.skills ?? 0, conversas: c.conversas ?? 0, arquivos: c.arquivosDoWorkspace ?? 0,
+      });
+      const avisos = (info.avisos || []).map(a => '⚠️ ' + a).join('\n');
+      if (!confirm(`${resumo}${avisos ? '\n\n' + avisos : ''}\n\n${t('bkp_conh_restore_confirm')}`)) return;
+      if (m.conteudo?.segredos) restaurarSegredos = confirm(t('bkp_conh_restore_secrets_confirm'));
+    } else if (!confirm(t('backup_restore_confirm', { name }))) return;
     link.style.opacity = '0.4';
     link.style.pointerEvents = 'none';
     showToast(t('backup_restoring_toast'), 'success');
     try {
-      await restoreBackup(name);
+      if (name.endsWith('.zip')) {
+        const r = await restoreKnowledgeBackup(name, restaurarSegredos);
+        const rel = r.relatorio || {};
+        const revisar = (rel.skillsParaRevisar || []).length;
+        showToast(t('bkp_conh_restored_toast', { skills: rel.skills ?? 0, revisar }), 'success');
+      } else {
+        await restoreBackup(name);
+      }
       showToast(t('backup_restored_toast'), 'success');
     } catch (err) {
       link.style.opacity = '';
@@ -191,7 +228,7 @@ export function render(container) {
   uploadInput.addEventListener('change', async () => {
     const file = uploadInput.files?.[0];
     if (!file) return;
-    if (!file.name.endsWith('.bak') && !file.name.endsWith('.db')) {
+    if (!file.name.endsWith('.bak') && !file.name.endsWith('.db') && !file.name.endsWith('.zip')) {
       showToast(t('backup_upload_invalid'), 'error');
       uploadInput.value = '';
       return;
@@ -224,6 +261,15 @@ export function render(container) {
     }
   }
 
+  const conhBtn = document.getElementById('bkp-conhBtn');
+  conhBtn.addEventListener('click', () => doBackup(t('bkp_conh_label'), async () => {
+    const r = await createKnowledgeBackup({
+      historico: document.getElementById('bkp-conhHistorico').checked,
+      workspace: document.getElementById('bkp-conhWorkspace').checked,
+      segredos:  document.getElementById('bkp-conhSegredos').checked,
+    });
+    return r.backup;
+  }, conhBtn));
   sysBtn.addEventListener('click', () => doBackup(t('sidebar_backup') + ' sistema', createSystemBackup, sysBtn));
   dbBtn.addEventListener('click',  () => doBackup('banco de dados', createDatabaseBackup, dbBtn));
 

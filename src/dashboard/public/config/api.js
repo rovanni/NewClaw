@@ -338,6 +338,31 @@ export async function restoreBackup(filename) {
   }));
 }
 
+// ADR-020: pacote único com o conhecimento (banco, skills, perfil dos juízes; opcionais: histórico, workspace, segredos).
+export async function createKnowledgeBackup(opcoes) {
+  return json(f('/api/maintenance/backup/conhecimento', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(opcoes || {}),
+  }));
+}
+
+export async function inspectKnowledgeBackup(filename) {
+  return json(f('/api/maintenance/backup/conhecimento/inspecionar', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ filename }),
+  }));
+}
+
+export async function restoreKnowledgeBackup(filename, restaurarSegredos) {
+  return json(f('/api/maintenance/backup/conhecimento/restaurar', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ filename, restaurarSegredos: restaurarSegredos === true }),
+  }));
+}
+
 export async function uploadBackup(file) {
   return json(f('/api/maintenance/backup/upload', {
     method: 'POST',

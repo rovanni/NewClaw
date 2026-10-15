@@ -298,7 +298,21 @@ export function repairCorruptedNodeMetadata(db: Database.Database): void {
     }
 }
 
+/**
+ * Versão do esquema do banco (PRAGMA user_version). O esquema evolui só por acréscimo idempotente — um banco ANTIGO é
+ * completado no boot —, mas um banco NOVO aberto por uma versão antiga não era detectável. ADR-020: o backup de
+ * conhecimento recusa restaurar um banco com versão maior que esta. Suba o número quando o esquema mudar de forma que
+ * uma versão anterior do app não saiba ler.
+ */
+export const VERSAO_DO_ESQUEMA = 1;
+
 export function ensureMemorySchema(db: Database.Database): void {
+    try {
+        const atual = Number(db.pragma('user_version', { simple: true })) || 0;
+        if (atual < VERSAO_DO_ESQUEMA) db.pragma(`user_version = ${VERSAO_DO_ESQUEMA}`);
+    } catch (e) {
+        log.error('migration_failed', e, 'user_version não pôde ser gravado');
+    }
     safeAddColumn(db, 'memory_nodes', 'weight', 'REAL DEFAULT 1.0');
     safeAddColumn(db, 'memory_nodes', 'confidence', 'REAL DEFAULT 1.0');
     safeAddColumn(db, 'memory_nodes', 'last_updated', 'DATETIME DEFAULT CURRENT_TIMESTAMP');

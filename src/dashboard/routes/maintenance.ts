@@ -5,6 +5,7 @@ import { createLogger } from '../../shared/AppLogger';
 import fs from 'fs';
 import path from 'path';
 import Database from 'better-sqlite3';
+import { criarPacote, lerPacote, restaurarPacote } from '../../core/backupDoConhecimento';
 
 const log = createLogger('Maintenance');
 const DIR = process.cwd();
@@ -324,7 +325,7 @@ export function createMaintenanceRouter(): Router {
         try {
             ensureBackupDir();
             const files = fs.readdirSync(BACKUP_DIR)
-                .filter(f => f.endsWith('.bak') || f.endsWith('.db'))
+                .filter(f => f.endsWith('.bak') || f.endsWith('.db') || f.endsWith('.zip'))
                 .map(f => {
                     const stat = fs.statSync(path.join(BACKUP_DIR, f));
                     return { name: f, size: stat.size, sizeHuman: formatBytes(stat.size), createdAt: stat.mtime.toISOString() };
@@ -456,6 +457,52 @@ export function createMaintenanceRouter(): Router {
         }
     });
 
+    // ── ADR-020: backup do conhecimento (pacote único .zip) ─────────────────────────────────────────
+
+    // POST /api/maintenance/backup/conhecimento  { historico?, workspace?, segredos? }
+    router.post('/backup/conhecimento', async (req: Request, res: Response) => {
+        try {
+            const { historico, workspace, segredos } = req.body || {};
+            const { arquivo, manifesto } = await criarPacote(BACKUP_DIR, { historico: historico === true, workspace: workspace === true, segredos: segredos === true });
+            const { retentionCount } = loadBackupConfig();
+            enforceRetention('conhecimento-', retentionCount);
+            const stat = fs.statSync(arquivo);
+            const name = path.basename(arquivo);
+            log.info(`Backup do conhecimento criado: ${name} (${formatBytes(stat.size)}; memórias=${manifesto.contagens.memorias}, skills=${manifesto.contagens.skills})`);
+            res.json({ success: true, backup: { name, size: stat.size, sizeHuman: formatBytes(stat.size), createdAt: stat.mtime.toISOString() }, manifesto });
+        } catch (err) {
+            res.status(500).json({ success: false, error: errorMessage(err) });
+        }
+    });
+
+    // POST /api/maintenance/backup/conhecimento/inspecionar  { filename } — o que o pacote contém, antes de restaurar
+    router.post('/backup/conhecimento/inspecionar', async (req: Request, res: Response) => {
+        try {
+            const safe = path.basename(String(req.body?.filename || ''));
+            const filePath = path.join(BACKUP_DIR, safe);
+            if (!safe.endsWith('.zip') || !fs.existsSync(filePath)) return res.status(404).json({ success: false, error: 'Arquivo não encontrado' });
+            const { manifesto, avisos } = await lerPacote(filePath);
+            res.json({ success: true, manifesto, avisos });
+        } catch (err) {
+            res.status(422).json({ success: false, error: errorMessage(err) });
+        }
+    });
+
+    // POST /api/maintenance/backup/conhecimento/restaurar  { filename, restaurarSegredos? }
+    router.post('/backup/conhecimento/restaurar', async (req: Request, res: Response) => {
+        try {
+            const safe = path.basename(String(req.body?.filename || ''));
+            const filePath = path.join(BACKUP_DIR, safe);
+            if (!safe.endsWith('.zip') || !fs.existsSync(filePath)) return res.status(404).json({ success: false, error: 'Arquivo não encontrado' });
+            const relatorio = await restaurarPacote(filePath, { restaurarSegredos: req.body?.restaurarSegredos === true });
+            log.info(`Conhecimento restaurado de ${safe}: skills=${relatorio.skills} revisar=${relatorio.skillsParaRevisar.length} banco=${relatorio.banco} — reiniciando`);
+            res.json({ success: true, relatorio, message: 'Conhecimento restaurado. O NewClaw será reiniciado para carregar o banco.' });
+            setTimeout(() => process.exit(0), 800);
+        } catch (err) {
+            res.status(422).json({ success: false, error: errorMessage(err) });
+        }
+    });
+
     // POST /api/maintenance/backup/upload
     router.post('/backup/upload',
         (req: Request, res: Response, next) => {
@@ -463,12 +510,12 @@ export function createMaintenanceRouter(): Router {
             // express.raw is applied only for this route to avoid interfering with json body parser
             express.raw({ type: 'application/octet-stream', limit: '100mb' })(req, res, next);
         },
-        (req: Request, res: Response) => {
+        async (req: Request, res: Response) => {
             try {
                 const rawName = String(req.headers['x-filename'] || '');
                 const safe = path.basename(rawName).replace(/[^a-zA-Z0-9._-]/g, '_');
-                if (!safe || (!safe.endsWith('.bak') && !safe.endsWith('.db'))) {
-                    return res.status(400).json({ success: false, error: 'Arquivo deve ter extensão .bak ou .db' });
+                if (!safe || (!safe.endsWith('.bak') && !safe.endsWith('.db') && !safe.endsWith('.zip'))) {
+                    return res.status(400).json({ success: false, error: 'Arquivo deve ter extensão .bak, .db ou .zip' });
                 }
                 if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
                     return res.status(400).json({ success: false, error: 'Corpo da requisição vazio' });
@@ -485,6 +532,16 @@ export function createMaintenanceRouter(): Router {
                     } catch (validationErr) {
                         fs.unlinkSync(tmp);
                         return res.status(422).json({ success: false, error: `Arquivo SQLite inválido ou corrompido — upload rejeitado. ${errorMessage(validationErr)}` });
+                    }
+                }
+
+                // Pacote de conhecimento (ADR-020): valida formato, nomes e versões antes de aceitar.
+                if (safe.endsWith('.zip')) {
+                    try {
+                        await lerPacote(tmp);
+                    } catch (validationErr) {
+                        fs.unlinkSync(tmp);
+                        return res.status(422).json({ success: false, error: `Backup de conhecimento inválido — envio rejeitado: ${errorMessage(validationErr)}` });
                     }
                 }
 

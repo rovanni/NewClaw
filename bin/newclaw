@@ -567,6 +567,52 @@ function updateChannelFlow(args) {
   });
 }
 
+// ── ADR-020: backup do conhecimento ─────────────────────────────────────────────────────────────────────────────────────
+// O módulo vive no código compilado (dist/), o mesmo que o painel usa — um só formato de pacote para os dois caminhos.
+function carregarBackupDoConhecimento() {
+  const modPath = path.join(DIR, 'dist', 'core', 'backupDoConhecimento.js');
+  if (!fs.existsSync(modPath)) {
+    console.error('❌ O NewClaw ainda não foi compilado nesta pasta. Rode: npm run build');
+    return null;
+  }
+  return require(modPath);
+}
+
+/** Caminhos da instalação, respeitando SKILLS_DIR/WORKSPACE_DIR do .env (a CLI não carrega o .env no process.env). */
+function caminhosParaBackup(mod) {
+  const env = readEnv();
+  for (const k of ['SKILLS_DIR', 'WORKSPACE_DIR']) if (env[k] && !process.env[k]) process.env[k] = env[k];
+  return mod.caminhosDaInstalacao(DIR);
+}
+
+async function restaurarConhecimento(arquivo, args) {
+  const mod = carregarBackupDoConhecimento();
+  if (!mod) return;
+  const alvo = path.resolve(arquivo);
+  if (!fs.existsSync(alvo)) { console.error(`❌ Arquivo não encontrado: ${alvo}`); return; }
+  let lido;
+  try { lido = await mod.lerPacote(alvo); }
+  catch (e) { console.error(`❌ ${e.message}`); return; }
+  const m = lido.manifesto, c = m.contagens || {};
+  console.log(`🧠 Backup de ${m.criadoEm} (sistema ${m.sistema}, NewClaw ${m.app})`);
+  console.log(`   ${c.memorias} memórias · ${c.skills} skills · ${c.conversas} conversas · ${c.arquivosDoWorkspace} arquivos de trabalho`);
+  for (const a of lido.avisos) console.log(`⚠️  ${a}`);
+  const sim = args.includes('--sim') || args.includes('--yes');
+  if (!sim) {
+    const resposta = await new Promise(resolve => {
+      const rl = require('readline').createInterface({ input: process.stdin, output: process.stdout });
+      rl.question('Restaurar este conhecimento? O estado atual será guardado antes. (s/N) ', r => { rl.close(); resolve(r); });
+    });
+    if (!/^(s|sim|y|yes)$/i.test(String(resposta).trim())) { console.log('Nada foi alterado.'); return; }
+  }
+  const restaurarSegredos = args.includes('--segredos') || args.includes('--secrets');
+  const r = await mod.restaurarPacote(alvo, { restaurarSegredos }, caminhosParaBackup(mod));
+  console.log(`✅ Restaurado: ${r.skills} skills${r.banco ? ', banco (aplicado no próximo início)' : ''}${r.env ? ', .env' : ''}.`);
+  if (r.skillsParaRevisar.length) console.log(`⚠️  ${r.skillsParaRevisar.length} skill(s) de outro sistema ficaram para revisão (SKILL.md.revisar): ${r.skillsParaRevisar.join(', ')}`);
+  console.log(`   Estado anterior guardado em: ${r.pacoteDeSeguranca}`);
+  console.log('   Reinicie para carregar o banco: newclaw restart');
+}
+
 const commands = {
   start(args) {
     const debug = args.includes('--debug');
@@ -1222,7 +1268,26 @@ const commands = {
     }
   },
 
-  restore() {
+  /** ADR-020: `newclaw backup [--historico] [--workspace] [--segredos]` — pacote único com o conhecimento. */
+  async backup(args = []) {
+    const mod = carregarBackupDoConhecimento();
+    if (!mod) return;
+    const opcoes = {
+      historico: args.includes('--historico') || args.includes('--history'),
+      workspace: args.includes('--workspace'),
+      segredos: args.includes('--segredos') || args.includes('--secrets'),
+    };
+    const { arquivo, manifesto } = await mod.criarPacote(path.join(DIR, 'data', 'backups'), opcoes, caminhosParaBackup(mod));
+    const c = manifesto.contagens;
+    console.log(`🧠 Conhecimento salvo em: ${arquivo}`);
+    console.log(`   ${c.memorias} memórias · ${c.skills} skills · ${c.conversas} conversas · ${c.arquivosDoWorkspace} arquivos de trabalho`);
+    if (opcoes.segredos) console.log('⚠️  O arquivo contém senhas e chaves — guarde-o só com você.');
+    console.log('   Para restaurar: newclaw restore "<arquivo.zip>"');
+  },
+
+  restore(args = []) {
+    const pacote = args.find(a => a.toLowerCase().endsWith('.zip'));
+    if (pacote) return restaurarConhecimento(pacote, args);
     const isWin = process.platform === 'win32';
     const script = isWin ? 'restore.ps1' : 'restore.sh';
     const scriptPath = path.join(DIR, 'scripts', script);
@@ -1663,6 +1728,9 @@ newclaw logs -f         Visualiza os logs em tempo real
 newclaw update          Atualiza o código do GitHub e recompila o projeto
 newclaw update restart  Atualiza e reinicia automaticamente
 newclaw update channel  Escolhe o canal de atualização (Stable/Preview/Development)
+newclaw backup          Salva tudo o que o NewClaw aprendeu num arquivo .zip
+                        (opções: --historico --workspace --segredos)
+newclaw restore <a.zip> Restaura o conhecimento de um arquivo .zip
 newclaw restore         Abre o assistente de restauração de backups
 newclaw uninstall       Remove o NewClaw e limpa o sistema
 newclaw help            Mostra esta tela de ajuda
@@ -1822,7 +1890,8 @@ if (require.main === module) {
   const rest = args.slice(1);
 
   if (commands[command]) {
-    commands[command](rest);
+    // Comandos assíncronos (update, backup, restore <a.zip>): erro vira mensagem e código de saída, não rejeição solta.
+    Promise.resolve(commands[command](rest)).catch(e => { console.error(`❌ ${e && e.message ? e.message : e}`); process.exitCode = 1; });
   } else {
     console.log(`❌ Unknown command: ${command}`);
     commands.help();

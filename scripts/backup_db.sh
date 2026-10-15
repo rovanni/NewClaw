@@ -1,8 +1,10 @@
 #!/bin/bash
 # NewClaw Database Backup — every 6h via crontab
 
-DB_FILE="/home/venus/newclaw/data/newclaw.db"
-BACKUP_DIR="/home/venus/backups"
+# Caminhos relativos à instalação e ao usuário (antes: caminho fixo de uma instalação). NEWCLAW_BACKUP_DIR permite escolher a pasta.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+DB_FILE="$SCRIPT_DIR/../data/newclaw.db"
+BACKUP_DIR="${NEWCLAW_BACKUP_DIR:-$HOME/backups}"
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 MAX_BACKUPS=30
 BACKUP_FILE="$BACKUP_DIR/newclaw_$TIMESTAMP.db"
