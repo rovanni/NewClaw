@@ -298,21 +298,25 @@ export function createConfigRouter(ctx: DashboardContext): Router {
     });
 
     /**
-     * Busca por significado — POST /api/config/embeddings/reindex. Depois de escolher (ou trocar) o modelo de embedding, os
-     * vetores antigos não servem: apaga os de outro modelo e gera os que faltam, em segundo plano. Responde na hora com
-     * quantos ficaram pendentes; GET /api/config/embeddings/status acompanha. Sem modelo escolhido, diz isso.
+     * Busca por significado (EMBED_MODEL). Um usuário leigo não sabe se o modelo que digitou existe, está baixado ou serve
+     * para isso — por isso a escolha só vale depois de um TESTE de verdade (`verificar`: lista do Ollama + um vetor gerado):
+     *   POST /embeddings/testar    { modelo } — só testa, não muda nada;
+     *   POST /embeddings/ativar    { modelo } — testa; passando, grava a escolha e prepara a memória (gera os vetores);
+     *   POST /embeddings/desativar           — volta à busca só por palavras;
+     *   POST /embeddings/reindex             — prepara de novo com o modelo atual (apaga vetores de outro modelo);
+     *   GET  /embeddings/status              — situação: modelo, lembranças prontas/total, preparando, última falha.
      */
+    const servicoDeEmbedding = () => ctx.controller?.getMemory()?.getEmbeddingService() ?? null;
     let reindexando = false;
-    router.post('/embeddings/reindex', async (_req: Request, res: Response) => {
-        const mm = ctx.controller?.getMemory();
-        if (!mm) return res.status(500).json({ success: false, error: 'memória indisponível' });
-        const svc = mm.getEmbeddingService();
-        if (!svc.getModel()) return res.status(400).json({ success: false, error: 'Nenhum modelo de busca por significado escolhido.' });
-        if (!(await svc.isAvailable())) return res.status(422).json({ success: false, error: `O modelo "${svc.getModel()}" não foi encontrado no Ollama. Baixe-o primeiro (ollama pull ${svc.getModel()}).` });
-        if (reindexando) return res.json({ success: true, emAndamento: true, pendentes: svc.pendentes() });
+    let ultimaFalha = '';
+
+    /** Gera, em segundo plano, os vetores que faltam com o modelo atual. Devolve na hora quantos ficaram na fila. */
+    const prepararMemoria = (svc: NonNullable<ReturnType<typeof servicoDeEmbedding>>) => {
+        if (reindexando) return { emAndamento: true, descartados: 0, pendentes: svc.pendentes() };
         const descartados = svc.descartarDeOutroModelo();
         const pendentes = svc.pendentes();
         reindexando = true;
+        ultimaFalha = '';
         (async () => {
             try {
                 let feitos = 0;
@@ -320,17 +324,62 @@ export function createConfigRouter(ctx: DashboardContext): Router {
                 do { lote = await svc.embedMissing(50); feitos += lote; } while (lote > 0);
                 log.info(`[EMBEDDINGS] reindexação concluída: ${feitos} vetores com ${svc.getModel()} (${descartados} de outro modelo descartados; ${svc.pendentes()} sem vetor)`);
             } catch (e) {
-                log.error(`[EMBEDDINGS] reindexação falhou: ${errorMessage(e)}`);
+                ultimaFalha = errorMessage(e);
+                log.error(`[EMBEDDINGS] reindexação falhou: ${ultimaFalha}`);
             } finally { reindexando = false; }
         })();
-        res.json({ success: true, modelo: svc.getModel(), descartados, pendentes });
+        return { emAndamento: false, descartados, pendentes };
+    };
+
+    const gravarModelo = (modelo: string) => {
+        ctx.config.embedModel = modelo;
+        process.env.EMBED_MODEL = modelo;   // lido a cada uso (modeloDeEmbedding)
+        const rejeitados = persistConfigToEnv(ctx);
+        return rejeitados === null ? { envError: 'Falha ao gravar .env — a escolha vale até reiniciar. Ver logs do servidor.' } : {};
+    };
+
+    router.post('/embeddings/testar', async (req: Request, res: Response) => {
+        const svc = servicoDeEmbedding();
+        if (!svc) return res.status(500).json({ success: false, error: 'memória indisponível' });
+        const modelo = typeof req.body?.modelo === 'string' ? req.body.modelo : '';
+        res.json({ success: true, verificacao: await svc.verificar(modelo), modelosDeBusca: await svc.modelosDeBuscaBaixados() });
     });
 
-    router.get('/embeddings/status', (_req: Request, res: Response) => {
-        const mm = ctx.controller?.getMemory();
-        if (!mm) return res.status(500).json({ success: false, error: 'memória indisponível' });
-        const svc = mm.getEmbeddingService();
-        res.json({ success: true, modelo: svc.getModel(), pendentes: svc.pendentes(), reindexando });
+    router.post('/embeddings/ativar', async (req: Request, res: Response) => {
+        const svc = servicoDeEmbedding();
+        if (!svc) return res.status(500).json({ success: false, error: 'memória indisponível' });
+        const modelo = typeof req.body?.modelo === 'string' ? req.body.modelo.trim() : '';
+        const verificacao = await svc.verificar(modelo);
+        if (!verificacao.ok) {
+            return res.json({ success: false, error: 'o teste do modelo não passou', verificacao, modelosDeBusca: await svc.modelosDeBuscaBaixados() });
+        }
+        const gravacao = gravarModelo(modelo);
+        log.info(`[EMBEDDINGS] busca por significado ativada com "${modelo}" (${verificacao.dimensoes} dimensões)`);
+        res.json({ success: true, verificacao, ...prepararMemoria(svc), ...gravacao });
+    });
+
+    router.post('/embeddings/desativar', (_req: Request, res: Response) => {
+        const gravacao = gravarModelo('');
+        log.info('[EMBEDDINGS] busca por significado desligada — a memória segue com busca por palavras');
+        res.json({ success: true, ...gravacao });
+    });
+
+    router.post('/embeddings/reindex', async (_req: Request, res: Response) => {
+        const svc = servicoDeEmbedding();
+        if (!svc) return res.status(500).json({ success: false, error: 'memória indisponível' });
+        if (!svc.getModel()) return res.status(400).json({ success: false, error: 'Nenhum modelo de busca por significado escolhido.' });
+        const verificacao = await svc.verificar();
+        if (!verificacao.ok) return res.json({ success: false, error: 'o teste do modelo não passou', verificacao });
+        res.json({ success: true, modelo: svc.getModel(), ...prepararMemoria(svc) });
+    });
+
+    router.get('/embeddings/status', async (_req: Request, res: Response) => {
+        const svc = servicoDeEmbedding();
+        if (!svc) return res.status(500).json({ success: false, error: 'memória indisponível' });
+        res.json({
+            success: true, modelo: svc.getModel(), ...svc.contagem(), pendentes: svc.pendentes(), reindexando, ultimaFalha,
+            modelosDeBusca: await svc.modelosDeBuscaBaixados(),
+        });
     });
 
     router.get('/history', (_req: Request, res: Response) => {

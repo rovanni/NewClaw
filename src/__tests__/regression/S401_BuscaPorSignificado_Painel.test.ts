@@ -53,15 +53,16 @@ console.log('\n=== S401-2 — o Ollama configurado chega ao serviço de embeddin
     assert(/new EmbeddingService\(this\.db, this\.ollamaUrl\)/.test(mm), 'MemoryManager passa o OLLAMA_URL (antes: sempre localhost:11434)');
 }
 
-console.log('\n=== S401-3 — painel: campo, sugestões por fato do catálogo, reindexar ===');
+console.log('\n=== S401-3 — painel: campo, sugestões por fato do Ollama, reindexar ===');
 {
+    // Atualizado DE PROPÓSITO em 15/10/2026 (S403): a escolha deixou de passar pelo Salvar geral — agora só vale depois de
+    // um teste real do modelo (Ativar), e as sugestões vêm das capacidades que o Ollama declara em /api/tags.
     const rota = ler('src', 'dashboard', 'routes', 'config.ts');
     assert(/router\.post\('\/embeddings\/reindex'/.test(rota) && /router\.get\('\/embeddings\/status'/.test(rota), 'rotas de reindexar e de acompanhar');
-    assert(/descartarDeOutroModelo\(\)/.test(rota) && /isAvailable\(\)/.test(rota), 'reindexar confere se o modelo existe no Ollama e descarta os vetores antigos');
+    assert(/descartarDeOutroModelo\(\)/.test(rota) && /svc\.verificar\(\)/.test(rota), 'reindexar testa o modelo de verdade e descarta os vetores antigos');
     const tela = ler('src', 'dashboard', 'public', 'config', 'views', 'ModelosView.js');
-    assert(/id="ml-embedModel"/.test(tela) && /\.includes\('embedding'\)/.test(tela), 'campo do modelo, com sugestões dos modelos que o Ollama DECLARA como de embedding (não pelo nome)');
-    assert(/cs\.set\('embedModel'/.test(tela) && /reindexEmbeddings\(\)/.test(tela), 'grava pelo Salvar de sempre e reindexa pelo botão');
-    assert(/cs\.salvo\('embedModel'\)/.test(tela), 'só reindexa o que já foi salvo (escolha não salva seria ignorada em silêncio)');
+    assert(/id="ml-embedModel"/.test(tela) && /s\.modelosDeBusca/.test(tela), 'campo do modelo, com sugestões dos modelos que o Ollama DECLARA como de busca (não pelo nome)');
+    assert(!/cs\.set\('embedModel'/.test(tela) && /reindexEmbeddings\(\)/.test(tela), 'não grava pelo Salvar geral (nome não testado não vira configuração); prepara de novo pelo botão');
     const textos = ler('src', 'dashboard', 'public', 'shared.js');
     for (const k of ['ml_embed_title', 'ml_embed_desc', 'ml_embed_hint', 'ml_embed_reindex_btn', 'ml_embed_reindex_started']) {
         assert((textos.match(new RegExp(`\\b${k}:`, 'g')) || []).length === 3, `texto "${k}" nas 3 línguas`);

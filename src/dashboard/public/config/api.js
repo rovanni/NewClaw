@@ -107,9 +107,21 @@ export async function getModelCatalog(refresh = false) {
   return d;
 }
 
-// Busca por significado: apaga vetores de outro modelo e gera os que faltam, em segundo plano (POST /api/config/embeddings/reindex).
+// Busca por significado. testar/ativar/reindex devolvem `verificacao` (o teste real do modelo) mesmo quando ele não passa —
+// por isso NÃO passam por json(), que lançaria e perderia o motivo que a tela precisa explicar.
+const postEmbedding = async (acao, corpo) => (await f(`/api/config/embeddings/${acao}`, {
+  method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(corpo || {}),
+})).json();
+export const testarModeloDeBusca = (modelo) => postEmbedding('testar', { modelo });
+export const ativarBuscaPorSignificado = (modelo) => postEmbedding('ativar', { modelo });
+export const desativarBuscaPorSignificado = () => postEmbedding('desativar');
+export async function situacaoDaBuscaPorSignificado() {
+  return json(f('/api/config/embeddings/status'));
+}
+
+// Prepara a memória de novo: apaga vetores de outro modelo e gera os que faltam, em segundo plano.
 export async function reindexEmbeddings() {
-  return json(f('/api/config/embeddings/reindex', { method: 'POST' }));
+  return postEmbedding('reindex');
 }
 
 export async function getCloudCatalog() {

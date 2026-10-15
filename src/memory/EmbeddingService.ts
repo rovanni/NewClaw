@@ -1,7 +1,7 @@
 /**
  * EmbeddingService — Geração e busca de embeddings via Ollama
  *
- * Usa nomic-embed-text (768 dim) por padrão.
+ * Usa o modelo que o usuário escolher (EMBED_MODEL) — nenhum por padrão.
  * Fallback automático para FTS5 se embeddings não disponíveis.
  */
 import { Database } from 'better-sqlite3';
@@ -27,6 +27,28 @@ import { Database } from 'better-sqlite3';
 export function modeloDeEmbedding(): string {
     return (process.env.EMBED_MODEL || '').trim();
 }
+
+/** O Ollama resolve um nome sem etiqueta como `:latest` — `nomic-embed-text` é `nomic-embed-text:latest`, não `:v1.5`. */
+export function nomeNoOllama(modelo: string): string {
+    return modelo.includes(':') ? modelo : `${modelo}:latest`;
+}
+
+/**
+ * Resultado de testar um modelo de busca por significado DE VERDADE (lista do Ollama + um vetor gerado), para o painel
+ * explicar ao usuário o que fazer. Cada motivo é um fato observado, nunca palpite pelo nome do modelo:
+ * - `sem_ollama`: o Ollama configurado não respondeu (a busca por significado sempre usa ele, qualquer que seja o provedor);
+ * - `nao_baixado`: não há modelo com esse nome exato no Ollama;
+ * - `nao_serve`: o Ollama declara o modelo sem a capacidade `embedding`, ou ele não devolveu um vetor;
+ * - `erro`: a geração do vetor falhou por outro motivo (o detalhe traz o que o Ollama disse).
+ */
+export type VerificacaoDeEmbedding =
+    | { ok: true; modelo: string; dimensoes: number }
+    | { ok: false; modelo: string; motivo: 'sem_modelo' | 'sem_ollama' | 'nao_baixado' | 'nao_serve' | 'erro'; detalhe?: string };
+
+type ModeloNoOllama = { name: string; capabilities?: string[] };
+
+const PRAZO_DA_LISTA_MS = 10_000;     // o usuário está esperando na tela
+const PRAZO_DO_VETOR_MS = 120_000;    // a 1ª geração carrega o modelo na memória (ex.: 274 MB do nomic-embed-text)
 
 export class EmbeddingService {
     private ollamaUrl: string;
@@ -173,13 +195,59 @@ export class EmbeddingService {
      */
     async isAvailable(): Promise<boolean> {
         if (!this.model) return false;   // nenhum modelo escolhido: não está disponível, sem adivinhar
+        // Nome EXATO (com a etiqueta que o Ollama assume). Antes: "algum modelo contém o nome sem etiqueta" — um erro de
+        // digitação como `nomic-embed-tex` passava por disponível (é pedaço de `nomic-embed-text:v1.5`) e todo vetor falhava.
+        const modelos = await this.modelosNoOllama().catch(() => null);
+        return !!modelos && modelos.some(m => m.name === nomeNoOllama(this.model));
+    }
+
+    /** O que o Ollama tem baixado, com as capacidades que ELE declara de cada modelo. Lança se o Ollama não responder. */
+    private async modelosNoOllama(): Promise<ModeloNoOllama[]> {
+        const res = await fetch(`${this.ollamaUrl}/api/tags`, { signal: AbortSignal.timeout(PRAZO_DA_LISTA_MS) });
+        if (!res.ok) throw new Error(`o Ollama respondeu HTTP ${res.status}`);
+        const data = await res.json() as { models?: ModeloNoOllama[] };
+        return data.models || [];
+    }
+
+    /** Modelos baixados que o próprio Ollama declara servirem para busca por significado — para sugerir na tela. */
+    async modelosDeBuscaBaixados(): Promise<string[]> {
+        const modelos = await this.modelosNoOllama().catch(() => []);
+        return modelos.filter(m => (m.capabilities || []).includes('embedding')).map(m => m.name);
+    }
+
+    /**
+     * Testa um modelo (por padrão, o escolhido) do jeito que ele será usado: confere que está baixado com esse nome exato,
+     * que o Ollama o declara de embedding (quando o Ollama informa capacidades) e gera um vetor de uma frase curta.
+     */
+    async verificar(modelo: string = this.model): Promise<VerificacaoDeEmbedding> {
+        const m = modelo.trim();
+        if (!m) return { ok: false, modelo: m, motivo: 'sem_modelo' };
+        let modelos: ModeloNoOllama[];
         try {
-            const res = await fetch(`${this.ollamaUrl}/api/tags`);
-            if (!res.ok) return false;
-            const data = await res.json() as { models?: Array<{ name: string }> };
-            return (data.models || []).some(m => m.name.includes(this.model.split(':')[0]));
-        } catch {
-            return false;
+            modelos = await this.modelosNoOllama();
+        } catch (e) {
+            return { ok: false, modelo: m, motivo: 'sem_ollama', detalhe: e instanceof Error ? e.message : String(e) };
+        }
+        const baixado = modelos.find(x => x.name === nomeNoOllama(m));
+        if (!baixado) return { ok: false, modelo: m, motivo: 'nao_baixado' };
+        if (Array.isArray(baixado.capabilities) && !baixado.capabilities.includes('embedding')) {
+            return { ok: false, modelo: m, motivo: 'nao_serve', detalhe: `o Ollama declara: ${baixado.capabilities.join(', ')}` };
+        }
+        try {
+            const res = await fetch(`${this.ollamaUrl}/api/embeddings`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ model: m, prompt: 'teste da busca por significado' }),
+                signal: AbortSignal.timeout(PRAZO_DO_VETOR_MS),
+            });
+            if (!res.ok) return { ok: false, modelo: m, motivo: 'erro', detalhe: (await res.text()).slice(0, 300) };
+            const data = await res.json() as { embedding?: unknown };
+            if (!Array.isArray(data.embedding) || data.embedding.length === 0) {
+                return { ok: false, modelo: m, motivo: 'nao_serve', detalhe: 'o modelo não devolveu um vetor' };
+            }
+            return { ok: true, modelo: m, dimensoes: data.embedding.length };
+        } catch (e) {
+            return { ok: false, modelo: m, motivo: 'erro', detalhe: e instanceof Error ? e.message : String(e) };
         }
     }
 
@@ -194,6 +262,15 @@ export class EmbeddingService {
     descartarDeOutroModelo(): number {
         if (!this.model) return 0;
         return this.db.prepare('DELETE FROM memory_embeddings WHERE model != ?').run(this.model).changes;
+    }
+
+    /** Quantas lembranças existem, e quantas já têm vetor do modelo ATUAL (as de outro modelo não servem para a busca). */
+    contagem(): { total: number; prontas: number } {
+        const total = (this.db.prepare('SELECT COUNT(*) AS n FROM memory_nodes').get() as { n: number }).n;
+        const prontas = this.model ? (this.db.prepare(`
+            SELECT COUNT(*) AS n FROM memory_embeddings e JOIN memory_nodes n ON n.id = e.node_id WHERE e.model = ?
+        `).get(this.model) as { n: number }).n : 0;
+        return { total, prontas };
     }
 
     /** Quantos nós ainda não têm vetor. */

@@ -297,7 +297,10 @@ body { display:flex; flex-direction:column; height:100vh; overflow:hidden; }
   content:'▼'; margin-left:auto; font-size:.58rem;
   transition:transform .2s; opacity:.6;
 }
-.cfg-details[open] summary::after { transform:rotate(180deg); }
+/* Só o PRÓPRIO summary gira: um <details> aninhado (ex.: "Mais opções" da busca por significado) fechado mostrava ▲ só
+   porque o de fora estava aberto. */
+.cfg-details[open] > summary::after,
+.cfg-details details[open] > summary::after { transform:rotate(180deg); }
 .cfg-details-body { padding:18px 20px 22px; border-top:1px solid var(--border-color); }
 
 /* Card estático (sem colapsar) — mesma linguagem visual do .cfg-details, pra agrupar blocos que

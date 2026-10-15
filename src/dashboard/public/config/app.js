@@ -19,7 +19,9 @@ window.__configStore = configStore;
 let configLoaded = false;
 let configDirty  = false;
 
-configStore.on('*', () => { if (configLoaded && !configDirty) setConfigDirty(true); });
+// "Alterações não salvas" = o que a tela tem e o servidor ainda não (camposPendentes), não "qualquer mudança no estado":
+// um valor que o próprio servidor acabou de gravar (ex.: Ativar a busca por significado, via patch) não é pendência.
+configStore.on('*', () => { if (configLoaded) setConfigDirty(configStore.camposPendentes().length > 0); });
 
 function setConfigDirty(v) {
   configDirty = v;

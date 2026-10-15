@@ -1,7 +1,7 @@
 import { configStore, providersStore, logAcaoUI, activeChatModel } from '../state.js';
 import { showToast } from '../components/Toast.js';
 import { updateDropdownModels } from '../components/ModelDropdown.js';
-import { addCustomProvider, removeCustomProvider, editCustomProvider, reindexEmbeddings, getCloudCatalog, getJudgeCandidates, medirJuiz, testCustomProvider, getLocalModels, serveLocalModel, stopLocalModel, previewLocalCommand } from '../api.js';
+import { addCustomProvider, removeCustomProvider, editCustomProvider, reindexEmbeddings, testarModeloDeBusca, ativarBuscaPorSignificado, desativarBuscaPorSignificado, situacaoDaBuscaPorSignificado, getCloudCatalog, getJudgeCandidates, medirJuiz, testCustomProvider, getLocalModels, serveLocalModel, stopLocalModel, previewLocalCommand } from '../api.js';
 import { loadProviders, doSave, guideBox } from '../app.js';
 import { mountLocalModelWizard } from '../components/LocalModelWizard.js';
 import { mountConfigWizard } from '../components/ConfigWizard.js';
@@ -490,20 +490,33 @@ export function render(container) {
           </div>
         </details>
 
-        <!-- Busca por significado (EMBED_MODEL) — opcional, escolha do usuário; vazio = busca só por palavras (ADR-018). -->
-        <details class="cfg-details">
-          <summary>🔎 ${t('ml_embed_title')}</summary>
+        <!-- Busca por significado (EMBED_MODEL) — opcional, escolha do usuário; vazio = busca só por palavras (ADR-018).
+             A escolha só vale depois de um TESTE real do modelo (rotas /api/config/embeddings/*), e grava na hora:
+             não passa pelo Salvar geral, para um nome digitado e nunca testado não virar configuração. -->
+        <details class="cfg-details" id="ml-embedDetails">
+          <summary>🔎 ${t('ml_embed_title')} <span id="ml-embedResumo" class="form-hint"></span></summary>
           <div class="cfg-details-body">
             <div class="form-hint" style="margin-bottom:10px;">${t('ml_embed_desc')}</div>
+            <div id="ml-embedSituacao" style="margin-bottom:12px;font-weight:500;" aria-live="polite"></div>
             <div class="form-group">
               <label class="form-label" for="ml-embedModel">${t('ml_embed_label')}</label>
               <input type="text" class="form-input" id="ml-embedModel" list="ml-embedModels" style="max-width:320px;" placeholder="${t('ml_embed_placeholder')}">
               <datalist id="ml-embedModels"></datalist>
               <div class="form-hint">${t('ml_embed_hint')}</div>
             </div>
-            <button type="button" class="btn btn-ghost btn-sm" id="ml-embedReindex">${t('ml_embed_reindex_btn')}</button>
-            <span id="ml-embedStatus" class="form-hint" style="margin-left:8px;"></span>
-            <div class="form-hint" style="margin-top:6px;">${t('ml_embed_reindex_hint')}</div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;">
+              <button type="button" class="btn btn-ghost btn-sm" id="ml-embedTestar">${t('ml_embed_test_btn')}</button>
+              <button type="button" class="btn btn-primary btn-sm" id="ml-embedAtivar">${t('ml_embed_activate_btn')}</button>
+              <button type="button" class="btn btn-ghost btn-sm" id="ml-embedDesligar" style="display:none;">${t('ml_embed_off_btn')}</button>
+            </div>
+            <div id="ml-embedResultado" style="margin-top:10px;" aria-live="polite"></div>
+            <details style="margin-top:12px;">
+              <summary class="form-hint">${t('ml_embed_more')}</summary>
+              <div style="margin-top:8px;">
+                <button type="button" class="btn btn-ghost btn-sm" id="ml-embedReindex">${t('ml_embed_reindex_btn')}</button>
+                <div class="form-hint" style="margin-top:6px;">${t('ml_embed_reindex_hint')}</div>
+              </div>
+            </details>
           </div>
         </details>
 
@@ -607,31 +620,7 @@ export function render(container) {
   updateModelStatus(providersStore.get('models') || [], r);
   checkInternalModels();
 
-  // Busca por significado: sugere SÓ os modelos que o próprio Ollama declara como de embedding (fato do catálogo, não
-  // palpite pelo nome); o campo aceita qualquer nome. Grava pelo Salvar de sempre (embedModel → EMBED_MODEL).
-  if (el('ml-embedModel')) {
-    el('ml-embedModel').value = s.embedModel || '';
-    const deEmbedding = (providersStore.get('catalog') || []).filter(m => (m.capabilities || []).includes('embedding')).map(m => m.id);
-    el('ml-embedModels').innerHTML = deEmbedding.map(id => `<option value="${id.replace(/"/g, '&quot;')}">`).join('');
-    el('ml-embedModel').addEventListener('change', e => { cs.set('embedModel', e.target.value.trim()); });
-    el('ml-embedReindex').addEventListener('click', async () => {
-      const status = el('ml-embedStatus');
-      // Reindexa com o modelo SALVO (o que o servidor usa) — uma escolha ainda não salva seria ignorada em silêncio.
-      if ((cs.salvo('embedModel') || '') !== (cs.get('embedModel') || '')) {
-        status.textContent = t('ml_embed_save_first');
-        return;
-      }
-      el('ml-embedReindex').disabled = true;
-      try {
-        const r = await reindexEmbeddings();
-        status.textContent = t('ml_embed_reindex_started', { pendentes: r.pendentes ?? 0, descartados: r.descartados ?? 0 });
-      } catch (err) {
-        status.textContent = '❌ ' + err.message;
-      } finally {
-        el('ml-embedReindex').disabled = false;
-      }
-    });
-  }
+  montarBuscaPorSignificado();
 
   // Provider select
   el('ml-defaultProvider').addEventListener('change', e => {
@@ -2769,6 +2758,135 @@ function updatePipeline(r) {
   el('ml-pr-light')       && (el('ml-pr-light').textContent       = short(s.light));
   el('ml-pr-analysis')    && (el('ml-pr-analysis').textContent    = short(s.analysis));
   el('ml-pr-execution')   && (el('ml-pr-execution').textContent   = short(s.execution));
+}
+
+/**
+ * Busca por significado (EMBED_MODEL), para quem não sabe o que é "embedding": a situação fica sempre à vista (ligada,
+ * preparando, desligada — com quantas lembranças estão prontas), e a escolha só vale depois de um teste DE VERDADE no
+ * servidor (modelo baixado com esse nome exato? o Ollama o declara de busca? gerou um vetor?). Cada falha vira uma frase
+ * com o que fazer — inclusive baixar o modelo ali mesmo. Ativar grava na hora (sem o Salvar geral) e prepara a memória.
+ */
+function montarBuscaPorSignificado() {
+  const el = id => document.getElementById(id);
+  if (!el('ml-embedModel')) return;
+  const campo = el('ml-embedModel');
+  const resultado = el('ml-embedResultado');
+  const botoes = ['ml-embedTestar', 'ml-embedAtivar', 'ml-embedDesligar', 'ml-embedReindex'].map(el);
+  const ocupado = (sim) => botoes.forEach(b => { if (b) b.disabled = sim; });
+  campo.value = configStore.salvo('embedModel') || '';
+  let proximaConsulta = null;
+
+  const atualizarSituacao = async () => {
+    clearTimeout(proximaConsulta);
+    if (!document.body.contains(campo)) return;   // a aba foi trocada: para de consultar
+    let s;
+    try { s = await situacaoDaBuscaPorSignificado(); } catch { return; }
+    const numeros = { modelo: s.modelo, prontas: s.prontas ?? 0, total: s.total ?? 0 };
+    let texto;
+    if (!s.modelo) { texto = t('ml_embed_state_off'); el('ml-embedResumo').textContent = t('ml_embed_summary_off'); }
+    else if (s.reindexando) { texto = t('ml_embed_state_preparing', numeros); el('ml-embedResumo').textContent = t('ml_embed_summary_preparing'); }
+    else { texto = t('ml_embed_state_on', numeros); el('ml-embedResumo').textContent = t('ml_embed_summary_on'); }
+    el('ml-embedSituacao').textContent = texto + (s.ultimaFalha ? ' ' + t('ml_embed_state_failed', { erro: s.ultimaFalha }) : '');
+    el('ml-embedDesligar').style.display = s.modelo ? '' : 'none';
+    el('ml-embedModels').innerHTML = (s.modelosDeBusca || []).map(id => `<option value="${esc(id)}">`).join('');
+    if (s.reindexando) proximaConsulta = setTimeout(atualizarSituacao, 3000);
+  };
+
+  /** Explica o resultado do teste em linguagem simples, com a ação que resolve (baixar, escolher um que já existe). */
+  const explicar = (v, modelosDeBusca = []) => {
+    if (v.ok) { resultado.textContent = t('ml_embed_ok', { modelo: v.modelo }); return; }
+    const detalhe = v.detalhe ? `<div class="form-hint" style="margin-top:4px;">${esc(v.detalhe)}</div>` : '';
+    const jaTem = modelosDeBusca.length
+      ? `<div style="margin-top:8px;">${t('ml_embed_you_have')} ${modelosDeBusca.map(id =>
+          `<button type="button" class="btn btn-ghost btn-sm" data-usar-modelo="${esc(id)}">${esc(id)}</button>`).join(' ')}</div>`
+      : '';
+    const frases = {
+      sem_modelo: esc(t('ml_embed_err_empty')),
+      sem_ollama: esc(t('ml_embed_err_no_ollama', { url: configStore.salvo('ollamaUrl') || 'http://localhost:11434' })) + detalhe,
+      nao_baixado: esc(t('ml_embed_err_not_downloaded', { modelo: v.modelo }))
+        + ` <button type="button" class="btn btn-primary btn-sm" data-baixar-modelo="${esc(v.modelo)}">${t('ml_embed_download_btn')}</button>`,
+      nao_serve: esc(t('ml_embed_err_not_embedding', { modelo: v.modelo })) + detalhe,
+      erro: esc(t('ml_embed_err_other', { detalhe: v.detalhe || '' })),
+    };
+    resultado.innerHTML = (frases[v.motivo] || frases.erro) + jaTem;
+  };
+
+  const testar = async () => {
+    const modelo = campo.value.trim();
+    if (!modelo) { resultado.textContent = t('ml_embed_err_empty'); return; }
+    ocupado(true);
+    resultado.textContent = t('ml_embed_testing');
+    try {
+      const r = await testarModeloDeBusca(modelo);
+      if (r.verificacao) explicar(r.verificacao, r.modelosDeBusca); else resultado.textContent = '❌ ' + (r.error || 'error');
+      logAcaoUI('embedding:testar', r.verificacao?.ok ? 'ok' : (r.verificacao?.motivo || 'erro'));
+    } catch (err) { resultado.textContent = '❌ ' + err.message; } finally { ocupado(false); }
+  };
+
+  el('ml-embedTestar').addEventListener('click', testar);
+
+  el('ml-embedAtivar').addEventListener('click', async () => {
+    const modelo = campo.value.trim();
+    if (!modelo) { resultado.textContent = t('ml_embed_err_empty'); return; }
+    ocupado(true);
+    resultado.textContent = t('ml_embed_testing');
+    try {
+      const r = await ativarBuscaPorSignificado(modelo);
+      if (r.success) {
+        configStore.patch({ embedModel: modelo });   // o servidor já gravou: rascunho e espelho batem
+        resultado.textContent = t('ml_embed_activated', { modelo, pendentes: r.pendentes ?? 0 }) + (r.envError ? ' ⚠️ ' + r.envError : '');
+      } else if (r.verificacao) {
+        explicar(r.verificacao, r.modelosDeBusca);
+      } else {
+        resultado.textContent = '❌ ' + (r.error || 'error');
+      }
+      logAcaoUI('embedding:ativar', r.success ? 'ok' : (r.verificacao?.motivo || 'erro'));
+    } catch (err) { resultado.textContent = '❌ ' + err.message; } finally { ocupado(false); atualizarSituacao(); }
+  });
+
+  el('ml-embedDesligar').addEventListener('click', async () => {
+    ocupado(true);
+    try {
+      const r = await desativarBuscaPorSignificado();
+      if (r.success) {
+        configStore.patch({ embedModel: '' });
+        campo.value = '';
+        resultado.textContent = t('ml_embed_off_done') + (r.envError ? ' ⚠️ ' + r.envError : '');
+      } else resultado.textContent = '❌ ' + (r.error || 'error');
+      logAcaoUI('embedding:desligar', r.success ? 'ok' : 'erro');
+    } catch (err) { resultado.textContent = '❌ ' + err.message; } finally { ocupado(false); atualizarSituacao(); }
+  });
+
+  el('ml-embedReindex').addEventListener('click', async () => {
+    ocupado(true);
+    try {
+      const r = await reindexEmbeddings();
+      if (r.success) resultado.textContent = t('ml_embed_reindex_started', { pendentes: r.pendentes ?? 0 });
+      else if (r.verificacao) explicar(r.verificacao);
+      else resultado.textContent = '❌ ' + (r.error || 'error');
+    } catch (err) { resultado.textContent = '❌ ' + err.message; } finally { ocupado(false); atualizarSituacao(); }
+  });
+
+  // Ações dentro da explicação: baixar o modelo que faltou (e testar sozinho ao terminar) ou usar um que já está baixado.
+  resultado.addEventListener('click', async (e) => {
+    const usar = e.target.closest('[data-usar-modelo]');
+    if (usar) { campo.value = usar.dataset.usarModelo; testar(); return; }
+    const baixar = e.target.closest('[data-baixar-modelo]');
+    if (!baixar) return;
+    const modelo = baixar.dataset.baixarModelo;
+    ocupado(true);
+    resultado.textContent = t('ml_embed_downloading', { modelo });
+    try {
+      const r = await pullOllamaModel(modelo);
+      logAcaoUI('embedding:baixar', r.success ? 'ok' : 'erro');
+      if (!r.success) { resultado.textContent = '❌ ' + (r.error || 'error'); return; }
+      campo.value = modelo;
+      ocupado(false);
+      await testar();
+    } catch (err) { resultado.textContent = '❌ ' + err.message; } finally { ocupado(false); }
+  });
+
+  atualizarSituacao();
 }
 
 /** POST /api/ollama/pull cru — único ponto de chamada desse endpoint nesta view. */
