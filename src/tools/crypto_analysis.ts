@@ -14,6 +14,14 @@ interface CacheEntry {
     timestamp: number;
 }
 
+/** "$1,234" ou "N/A" — o símbolo vai DENTRO do valor (antes: "ATH: $N/A", "1h: N/A%"). */
+function usd(v: number | null | undefined): string {
+    return typeof v === 'number' && Number.isFinite(v) ? `$${v.toLocaleString()}` : 'N/A';
+}
+function pct(v: number | null | undefined): string {
+    return typeof v === 'number' && Number.isFinite(v) ? `${v.toFixed(2)}%` : 'N/A';
+}
+
 const cache = new Map<string, CacheEntry>();
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
@@ -164,7 +172,7 @@ export class CryptoAnalysisTool implements ToolExecutor {
 
         for (const coin of opportunities) {
             report += `**#${coin.rank} ${coin.symbol}** (${coin.name})\n`;
-            report += `   Preço: $${coin.price?.toLocaleString() || 'N/A'} | 24h: ${coin.change24h}% | 7d: ${coin.change7d}%\n`;
+            report += `   Preço: ${usd(coin.price)} | 24h: ${coin.change24h}% | 7d: ${coin.change7d}%\n`;
             report += `   Vol/MCap: ${coin.volToMcap} | Score: ${coin.recoveryScore} | ${coin.signal}\n\n`;
         }
 
@@ -283,12 +291,12 @@ export class CryptoAnalysisTool implements ToolExecutor {
         report += `Market Cap: ${this.formatCurrency(md.market_cap?.usd)}\n`;
         report += `Volume 24h: ${this.formatCurrency(md.total_volume?.usd)}\n\n`;
         report += `Variações:\n`;
-        report += `  1h:  ${md.price_change_percentage_1h_in_currency?.usd?.toFixed(2) || 'N/A'}%\n`;
-        report += `  24h: ${md.price_change_percentage_24h?.toFixed(2) || 'N/A'}%\n`;
-        report += `  7d:  ${md.price_change_percentage_7d?.toFixed(2) || 'N/A'}%\n`;
-        report += `  30d: ${md.price_change_percentage_30d?.toFixed(2) || 'N/A'}%\n\n`;
-        report += `ATH: $${md.ath?.usd?.toLocaleString() || 'N/A'} (${md.ath_date?.usd ? new Date(md.ath_date.usd).toLocaleDateString('pt-BR') : 'N/A'})\n`;
-        report += `ATL: $${md.atl?.usd?.toLocaleString() || 'N/A'}\n`;
+        report += `  1h:  ${pct(md.price_change_percentage_1h_in_currency?.usd)}\n`;
+        report += `  24h: ${pct(md.price_change_percentage_24h)}\n`;
+        report += `  7d:  ${pct(md.price_change_percentage_7d)}\n`;
+        report += `  30d: ${pct(md.price_change_percentage_30d)}\n\n`;
+        report += `ATH: ${usd(md.ath?.usd)}${md.ath_date?.usd ? ` (${new Date(md.ath_date.usd).toLocaleDateString('pt-BR')})` : ''}\n`;
+        report += `ATL: ${usd(md.atl?.usd)}\n`;
 
         return { success: true, output: report };
     }
