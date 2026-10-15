@@ -36,6 +36,9 @@ interface ParsedCapabilities {
     osShell:       string;
     osArch:        string;
     osPkg:         string;
+    /** Versão do sistema e respostas das consultas de shared/sondasDoAmbiente.json — medidas, nunca escritas no código. */
+    osVersao:      string;
+    osMedido:      string;
     cpuCores:      number;
     ramFreeMB:     number;
     diskFreeMB:    number;
@@ -173,6 +176,8 @@ export class PromptComposer {
         let osShell       = '';
         let osArch        = '';
         let osPkg         = '';
+        let osVersao      = '';
+        let osMedido      = '';
         let cpuCores      = 0;
         let ramFreeMB     = 0;
         let diskFreeMB    = 0;
@@ -215,6 +220,10 @@ export class PromptComposer {
                 if (archM) osArch = archM[1];
                 const pkgM = line.match(/pkg:\s*([^\s|]+)/i);
                 if (pkgM) osPkg = pkgM[1];
+                const versaoM = line.match(/versão:\s*([^|]+)/i);
+                if (versaoM) osVersao = versaoM[1].trim();
+                const medidoM = line.match(/medido:\s*([^|]+)/i);
+                if (medidoM) osMedido = medidoM[1].trim();
             } else if (/^[•\-]?\s*Hardware:/i.test(line)) {
                 // • Hardware: cpu:4 cores | ram:2048MB total / 512MB livre | disk:20000MB livre | gpu:nenhuma
                 const cpuM = line.match(/cpu:(\d+)/i);
@@ -240,7 +249,7 @@ export class PromptComposer {
             workspaceRead, workspaceWrite,
             networkInternet, networkLocalhost,
             pip, npm, sudo,
-            osPlatform, osShell, osArch, osPkg,
+            osPlatform, osShell, osArch, osPkg, osVersao, osMedido,
             cpuCores, ramFreeMB, diskFreeMB, gpuAvailable, gpuLabel,
             nodeVersion, containerized, validatedCommands,
         };
@@ -305,7 +314,9 @@ export class PromptComposer {
             const pkgStr  = caps.osPkg      ? `, pkg:${caps.osPkg}`   : '';
             const shellStr = caps.osShell   ? `, shell:${caps.osShell}` : '';
             const archStr  = caps.osArch    ? `, arch:${caps.osArch}`   : '';
-            parts.push(`os: {platform:${caps.osPlatform}${shellStr}${archStr}${pkgStr}}`);
+            const versaoStr = caps.osVersao ? `, versão:${caps.osVersao}` : '';
+            const medidoStr = caps.osMedido ? `, medido:{${caps.osMedido}}` : '';
+            parts.push(`os: {platform:${caps.osPlatform}${shellStr}${archStr}${pkgStr}${versaoStr}${medidoStr}}`);
         }
 
         // ── Hardware (apenas para camadas que consomem recursos) ──────────────

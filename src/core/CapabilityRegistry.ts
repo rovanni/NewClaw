@@ -27,6 +27,7 @@ import dns from 'dns';
 import os from 'os';
 import { promisify } from 'util';
 import { createLogger } from '../shared/AppLogger';
+import { fatosBasicos, registrarAmbiente, medirSondas } from '../shared/ambienteDeExecucao';
 import { EnvironmentProbe } from './EnvironmentProbe';
 import { which, probeCommand, CommandProbe, isWindows, linuxDistro, resolvePython3Runtime, defaultPython3Candidates, Python3Runtime } from '../utils/crossPlatform';
 
@@ -92,6 +93,10 @@ export interface OSCapabilities {
     executableExtension: string;
     distro?: string;
     packageManager?: string;
+    /** Nome e versão do sistema como ele próprio informa (medido). */
+    versao?: string;
+    /** Respostas das consultas de shared/sondasDoAmbiente.json (fato → resposta), preenchidas no refreshOS. */
+    medidos?: Record<string, string>;
     checkedAt: number;
 }
 
@@ -129,6 +134,11 @@ export interface EnvironmentCapabilities {
 }
 
 // ── Seção 2: Sondas do ambiente (ex-CapabilityProbe) ────────────────────────
+
+/** /bin/sh é quase sempre um link (dash, bash…): o nome real é o fato útil. Sem conseguir resolver, fica o caminho como está. */
+function shellResolvido(caminho: string): string {
+    try { return fs.realpathSync(caminho); } catch { return caminho; }
+}
 
 function runSafe(cmd: string, timeoutMs = 3000): string | null {
     try {
@@ -347,9 +357,14 @@ class CapabilityProbe {
         let distro: string | undefined;
         let packageManager: string | undefined;
 
+        // O shell em que o exec_command REALMENTE roda (o do child_process), medido — antes: 'powershell' fixo no Windows e o $SHELL
+        // de login no Unix, nenhum dos dois o que roda os comandos (Telegram, 15/10/2026: o agente escrevia PowerShell e o cmd.exe rodava).
+        const basicos = fatosBasicos(plat);
+        const versao = basicos.versao;
+
         if (plat === 'win32') {
             platform = 'windows';
-            shell = 'powershell';
+            shell = basicos.shell;
             tempDirectory = process.env['TEMP'] ?? process.env['TMP'] ?? 'C:\\Windows\\Temp';
             pathSeparator = '\\';
             executableExtension = '.exe';
@@ -359,14 +374,14 @@ class CapabilityProbe {
             );
         } else if (plat === 'darwin') {
             platform = 'macos';
-            shell = process.env['SHELL'] ?? '/bin/zsh';
+            shell = shellResolvido(basicos.shell);
             tempDirectory = '/tmp';
             pathSeparator = '/';
             executableExtension = '';
             packageManager = which('brew') ? 'brew' : undefined;
         } else {
             platform = 'linux';
-            shell = process.env['SHELL'] ?? '/bin/bash';
+            shell = shellResolvido(basicos.shell);
             tempDirectory = '/tmp';
             pathSeparator = '/';
             executableExtension = '';
@@ -391,7 +406,7 @@ class CapabilityProbe {
             );
         }
 
-        return { platform, architecture, shell, tempDirectory, pathSeparator, executableExtension, distro, packageManager, checkedAt: now };
+        return { platform, architecture, shell, tempDirectory, pathSeparator, executableExtension, distro, packageManager, versao, checkedAt: now };
     }
 
     probeHardware(): HardwareCapabilities {
@@ -576,6 +591,10 @@ export class CapabilityRegistry {
     private async refreshOS(): Promise<void> {
         try {
             const data = this.probe.probeOS();
+            // As consultas de sondasDoAmbiente.json (versão do PowerShell, distribuição, Python…) — executor genérico, sem LLM.
+            data.medidos = await medirSondas();
+            // Agente (describeEnvironment) e juízes (motor único) leem a MESMA medição.
+            registrarAmbiente({ plataforma: process.platform, versao: data.versao, arquitetura: data.architecture, shell: data.shell, medidos: data.medidos, gerenciadorDePacotes: data.packageManager });
             this.cache.os = { data, ts: Date.now() };
             log.debug(`[Registry] os refreshed: ${data.platform} ${data.architecture}`);
         } catch (err) {
@@ -698,7 +717,9 @@ export class CapabilityRegistry {
         if (osData) {
             const distroStr = osData.distro ? ` (${osData.distro})` : '';
             const pkgStr    = osData.packageManager ? ` | pkg: ${osData.packageManager}` : '';
-            lines.push(`• OS: ${osData.platform}${distroStr} | shell: ${osData.shell} | arch: ${osData.architecture}${pkgStr}`);
+            const versaoStr = osData.versao ? ` | versão: ${osData.versao}` : '';
+            const psStr     = osData.medidos ? ` | medido: ${Object.entries(osData.medidos).map(([k, v]) => `${k}=${v}`).join(', ')}` : '';
+            lines.push(`• OS: ${osData.platform}${distroStr} | shell: ${osData.shell} | arch: ${osData.architecture}${pkgStr}${versaoStr}${psStr}`);
         }
 
         const hw = this.cache.hardware?.data;

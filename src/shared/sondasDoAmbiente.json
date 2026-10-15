@@ -1,0 +1,19 @@
+{
+  "_sobre": "Consultas que o NewClaw roda no início para MEDIR o ambiente (sem LLM). Cada item: o nome do fato e o comando que pergunta ao sistema. O resultado (primeira linha da resposta, ou 'não disponível') vai para o agente e para os juízes. Para medir algo novo, acrescente um item aqui — nada de regra no código.",
+  "win32": [
+    { "fato": "powershell", "comando": "powershell", "argumentos": ["-NoProfile", "-NonInteractive", "-Command", "$PSVersionTable.PSVersion.ToString()"] },
+    { "fato": "pwsh", "comando": "pwsh", "argumentos": ["-NoProfile", "-NonInteractive", "-Command", "$PSVersionTable.PSVersion.ToString()"] },
+    { "fato": "python", "comando": "py", "argumentos": ["-3", "--version"] },
+    { "fato": "winget", "comando": "winget", "argumentos": ["--version"] }
+  ],
+  "linux": [
+    { "fato": "distribuicao", "comando": "sh", "argumentos": ["-c", ". /etc/os-release && echo \"$PRETTY_NAME\""] },
+    { "fato": "python", "comando": "python3", "argumentos": ["--version"] },
+    { "fato": "bash", "comando": "bash", "argumentos": ["-c", "echo $BASH_VERSION"] }
+  ],
+  "darwin": [
+    { "fato": "macos", "comando": "sw_vers", "argumentos": ["-productVersion"] },
+    { "fato": "python", "comando": "python3", "argumentos": ["--version"] },
+    { "fato": "zsh", "comando": "zsh", "argumentos": ["--version"] }
+  ]
+}
