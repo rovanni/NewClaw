@@ -3304,9 +3304,20 @@ export class AgentLoop {
             }
             // Mensagem semanticamente neutra: não instrui o LLM a "continuar trabalhando"
             // pois isso causava loop de re-chamadas ao send_document.
+            // O envio acontece DEPOIS desta resposta (após a validação do objetivo) — a resposta não pode dizer "enviei".
+            // Juízes de grounding, 15/10/2026 (5 comentários em 2 goals): "criados e enviados!" sem nenhum envio nas
+            // evidências → não avaliável/reprovado → o passo era refeito.
+            const comoDizer = 'Na resposta ao usuário, diga que o arquivo será enviado em seguida — ele ainda NÃO foi enviado.';
             const deferMsg = alreadyRegistered
-                ? `[DIFERIDO-DEDUP] O documento "${filePath}" já foi registrado para entrega. Não reenvie este artefato. Se não há outras tarefas pendentes, conclua com uma resposta final ao usuário.`
-                : `[DIFERIDO] Documento "${filePath}" registrado para entrega após validação. Não reenvie este artefato. Continue apenas se ainda existirem tarefas pendentes não relacionadas à entrega deste arquivo.`;
+                ? `[DIFERIDO-DEDUP] O documento "${filePath}" já foi registrado para entrega. Não reenvie este artefato. ${comoDizer} Se não há outras tarefas pendentes, conclua com uma resposta final ao usuário.`
+                : `[DIFERIDO] Documento "${filePath}" registrado para entrega após validação. Não reenvie este artefato. ${comoDizer} Continue apenas se ainda existirem tarefas pendentes não relacionadas à entrega deste arquivo.`;
+            // O registro do envio é um FATO desta execução — entra no rastro como resultado de ferramenta, e por ele chega ao
+            // juiz de grounding como evidência (evidencesFromTrace). Antes, só o agente sabia: o juiz não via envio nenhum.
+            traceManager.addStep(trace, 'tool_call', { tool: 'send_document', input: toolCall.arguments ?? {} });
+            traceManager.addStep(trace, 'tool_result', {
+                tool: 'send_document', success: true,
+                output: `Envio de "${filePath}" registrado: o arquivo será entregue ao usuário logo após a validação do objetivo (ainda não enviado).`,
+            });
             loopMessages.push({
                 role: 'tool',
                 content: deferMsg,
