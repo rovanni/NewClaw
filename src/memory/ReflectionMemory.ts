@@ -13,6 +13,7 @@
 import { createLogger } from '../shared/AppLogger';
 import { errorMessage } from '../shared/errors';
 import { permissionRegistry } from '../core/PermissionRegistry';
+import { ToolRegistry } from '../core/ToolRegistry';
 import type { MemoryManager } from './MemoryManager';
 import type { AttemptOutcome, BlockerKind, IntentCategory } from '../shared/domainTypes';
 
@@ -148,6 +149,15 @@ export class ReflectionMemory {
         tryAddColumn('outcome');
         tryAddColumn('category');
         tryAddColumn('failure_type');
+        // ADR-022: a versão MEDIDA do código da ferramenta quando o registro foi feito (ToolRegistry.versao). As perguntas
+        // "esta ferramenta costuma falhar?" contam só os registros da versão que está rodando — a ferramenta consertada não
+        // herda as falhas da anterior. Registros antigos (sem versão) e ferramentas sem versão conhecida: como antes.
+        tryAddColumn('tool_version');
+    }
+
+    /** Versão atual da ferramenta, ou `null` quando não há versão medida (aí nada é filtrado — comportamento anterior). */
+    private versaoAtual(tool: string): string | null {
+        try { return ToolRegistry.versao(tool) ?? null; } catch { return null; }
     }
 
     // ── Write ──────────────────────────────────────────────────────────
@@ -174,8 +184,8 @@ export class ReflectionMemory {
                 INSERT INTO reflection_annotations
                     (id, trace_id, conversation_id, user_input, intent, tool_used,
                      tool_output, final_response, approved, reason, confidence, suggested_fix, pattern,
-                     outcome, category, failure_type)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     outcome, category, failure_type, tool_version)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `).run(
                 id,
                 params.traceId ?? null,
@@ -192,7 +202,8 @@ export class ReflectionMemory {
                 pattern,
                 params.outcome ?? null,
                 params.category ?? null,
-                params.failureType ?? null
+                params.failureType ?? null,
+                this.versaoAtual(params.toolUsed)
             );
 
             if (!params.approved) {
@@ -330,15 +341,18 @@ export class ReflectionMemory {
      */
     findToolFailures(tool: string): string {
         try {
+            const versao = this.versaoAtual(tool);
             const row = this.db.prepare(`
                 SELECT tool_used, COUNT(*) AS total,
                        SUM(CASE WHEN approved = 0 THEN 1 ELSE 0 END) AS failures,
                        CAST(SUM(CASE WHEN approved = 0 THEN 1 ELSE 0 END) AS REAL) / COUNT(*) AS failure_rate,
                        (SELECT suggested_fix FROM reflection_annotations r2
                         WHERE r2.tool_used = r1.tool_used AND r2.approved = 0 AND r2.suggested_fix IS NOT NULL
+                          AND (@versao IS NULL OR r2.tool_version = @versao)
                         ORDER BY r2.created_at DESC LIMIT 1) AS top_fix
                 FROM reflection_annotations r1
-                WHERE tool_used = ?
+                WHERE tool_used = @tool
+                  AND (@versao IS NULL OR r1.tool_version = @versao)
                   AND created_at > datetime('now', '-7 days')
                 GROUP BY tool_used
                 HAVING total >= 2 AND failure_rate >= 0.30
@@ -347,7 +361,7 @@ export class ReflectionMemory {
                     WHERE r3.tool_used = r1.tool_used
                       AND r3.approved = 1 AND r3.outcome IS NOT 'partial' AND r3.created_at > datetime('now', '-3 hours')
                   ) = 0
-            `).get(tool) as { tool_used: string; total: number; failures: number; failure_rate: number; top_fix: string | null } | undefined;
+            `).get({ versao, tool }) as { tool_used: string; total: number; failures: number; failure_rate: number; top_fix: string | null } | undefined;
             if (!row) return '';
             return this.formatHintRow(row.tool_used, tool, row.total, row.failures, row.failure_rate, row.top_fix);
         } catch { return ''; }
@@ -365,20 +379,25 @@ export class ReflectionMemory {
         try {
             const constraints: string[] = [];
             for (const tool of tools) {
+                const versao = this.versaoAtual(tool);
                 const row = this.db.prepare(`
                     SELECT tool_used, COUNT(*) AS total,
                            CAST(SUM(CASE WHEN approved = 0 THEN 1 ELSE 0 END) AS REAL) / COUNT(*) AS failure_rate,
                            (SELECT suggested_fix FROM reflection_annotations r2
                             WHERE r2.tool_used = r1.tool_used AND r2.approved = 0 AND r2.suggested_fix IS NOT NULL
+                              AND (@versao IS NULL OR r2.tool_version = @versao)
                             ORDER BY r2.created_at DESC LIMIT 1) AS top_fix,
                            (SELECT failure_type FROM reflection_annotations r4
                             WHERE r4.tool_used = r1.tool_used AND r4.failure_type IS NOT NULL
+                              AND (@versao IS NULL OR r4.tool_version = @versao)
                             ORDER BY r4.created_at DESC LIMIT 1) AS recent_failure_type,
                            (SELECT pattern FROM reflection_annotations r5
                             WHERE r5.tool_used = r1.tool_used
+                              AND (@versao IS NULL OR r5.tool_version = @versao)
                             ORDER BY r5.created_at DESC LIMIT 1) AS recent_pattern
                     FROM reflection_annotations r1
-                    WHERE tool_used = ?
+                    WHERE tool_used = @tool
+                      AND (@versao IS NULL OR r1.tool_version = @versao)
                       AND created_at > datetime('now', '-7 days')
                     GROUP BY tool_used
                     HAVING total >= 2 AND failure_rate >= 0.90
@@ -387,7 +406,7 @@ export class ReflectionMemory {
                         WHERE r3.tool_used = r1.tool_used
                           AND r3.approved = 1 AND r3.outcome IS NOT 'partial' AND r3.created_at > datetime('now', '-3 hours')
                       ) = 0
-                `).get(tool) as { tool_used: string; total: number; failure_rate: number; top_fix: string | null; recent_failure_type: string | null; recent_pattern: string | null } | undefined;
+                `).get({ versao, tool }) as { tool_used: string; total: number; failure_rate: number; top_fix: string | null; recent_failure_type: string | null; recent_pattern: string | null } | undefined;
                 if (!row) continue;
                 // patternToConstraint() já casa a string literal 'environment_limit' (e
                 // variações) via regex — passar failure_type real (quando disponível) ou o

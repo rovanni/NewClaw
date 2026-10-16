@@ -7,6 +7,8 @@ import { createLogger } from '../shared/AppLogger';
 import { resolverMarcadores, mascararProfundo } from '../shared/segredos';
 import { permissionRegistry } from './PermissionRegistry';
 import { isReadOnlyExecCommand } from '../tools/exec_command';
+import { createHash } from 'crypto';
+import * as fs from 'fs';
 const log = createLogger('Toolregistry');
 
 /**
@@ -147,8 +149,41 @@ export function comSegredos(tool: ToolExecutor): ToolExecutor {
     return proxy;
 }
 
+/**
+ * A versão de uma ferramenta é o CÓDIGO que a implementa, medido — nunca um número escrito à mão que alguém esquece de
+ * subir. O hash do arquivo do módulo que exporta a classe da ferramenta (o carregado de fato: .ts no desenvolvimento,
+ * .js compilado em produção); sem achar o módulo, o hash do texto da própria classe/função. Mudou o código, mudou a
+ * versão — é o que a ReflectionMemory usa para não atribuir à ferramenta consertada as falhas da anterior (ADR-022).
+ */
+function medirVersao(tool: ToolExecutor): string {
+    const hash = (texto: string) => createHash('sha256').update(texto).digest('hex').slice(0, 12);
+    const construtor = (tool as object).constructor;
+    if (construtor && construtor !== Object) {
+        for (const mod of Object.values(require.cache)) {
+            if (!mod?.filename || !mod.exports) continue;
+            const exportados = typeof mod.exports === 'object' || typeof mod.exports === 'function' ? Object.values(mod.exports as object) : [];
+            if (mod.exports === construtor || exportados.includes(construtor)) {
+                try { return hash(fs.readFileSync(mod.filename, 'utf-8')); } catch { break; }
+            }
+        }
+        return hash(String(construtor));
+    }
+    return hash(`${String(tool.execute)}
+${JSON.stringify(tool.parameters ?? {})}`);
+}
+
 export class ToolRegistryClass {
     private tools: Map<string, ToolEntry> = new Map();
+    private versoes = new Map<string, string>();
+
+    /** Versão MEDIDA do código da ferramenta (hash, memorizado por processo); `undefined` se a ferramenta não existe aqui. */
+    versao(name: string): string | undefined {
+        const entry = this.tools.get(name);
+        if (!entry) return undefined;
+        let v = this.versoes.get(name);
+        if (!v) { v = medirVersao(entry.tool); this.versoes.set(name, v); }
+        return v;
+    }
 
     register(tool: ToolExecutor, options?: { dangerous?: boolean }): void {
         if (this.tools.has(tool.name)) {
@@ -260,6 +295,7 @@ export class ToolRegistryClass {
     }
 
     unregister(name: string): boolean {
+        this.versoes.delete(name);
         return this.tools.delete(name);
     }
 
