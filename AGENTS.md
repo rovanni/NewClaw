@@ -35,3 +35,10 @@
     6. Não tome decisões arquiteturais sem evidências. Se uma decisão depender do julgamento do usuário, conclua as análises possíveis, registre evidências, alternativas e riscos, marque-a como **pendente** e apresente-a na conclusão consolidada.
 
     O objetivo é investigar profundamente o problema inteiro, organizar e executar o trabalho em etapas internas sem fragmentar a campanha nem substituir decisões desconhecidas por hipóteses, e entregar uma única conclusão consolidada.
+
+11. **Medir o ambiente; nunca escrever receitas no código.** Conhecimento sobre o ambiente de execução — sistema operacional, versões (PowerShell, Python, distribuição…), shell, programas instalados, janela de contexto do modelo, comandos de instalação — não entra no código como regra ou dica fixa ("o PowerShell 5.1 não aceita &&", "instale com apt-get", "use pdftotext"). A receita envelhece quando as versões mudam, fica errada em outra máquina e engana duas vezes: o agente a segue e o juiz a toma como verdade.
+
+    - **Medir em vez de supor.** O código só sabe perguntar ao sistema: consultas guardadas como dados (ex.: `src/shared/sondasDoAmbiente.json`), executadas por um executor genérico, sem LLM; as respostas vão para o agente e para os juízes, que deduzem o que cada versão aceita. Limites também derivam de medição (ex.: o teto do prompt do juiz e o contexto do agente vêm da janela real do modelo); um padrão conservador só vale quando não há medição, e é declarado como tal.
+    - **Mensagens de erro relatam fatos.** Dizem o que foi tentado e o que cada tentativa respondeu; não prescrevem como instalar ou contornar. Se apontarem um caminho, que seja uma ferramenta do próprio NewClaw (ex.: `read_document`), nunca um programa externo que pode não existir na máquina.
+
+    Evidência (15/10/2026): o erro da ferramenta `read` para PDF dizia "use exec_command com pdftotext ou pandoc". Num Windows sem `pdftotext`, o agente não leu o calendário — e o juiz de qualidade, ao reprovar a resposta, repetiu a mesma dica errada como se fosse fato.
