@@ -128,6 +128,10 @@ export class GoalOrchestrator {
 
     /** Propaga mudanças de modelo interno do dashboard sem precisar reiniciar. */
     /** ADR-017: aprendizado de skills com o que funcionou + aviso ao usuário no canal da conversa. */
+    setAvisoAoUsuario(avisar: Parameters<GoalExecutionLoop['setAvisoAoUsuario']>[0]): void {
+        this.executionLoop.setAvisoAoUsuario(avisar);
+    }
+
     setAprendizadoDeSkills(aprendizado: Parameters<GoalExecutionLoop['setAprendizadoDeSkills']>[0]): void {
         this.executionLoop.setAprendizadoDeSkills(aprendizado);
     }

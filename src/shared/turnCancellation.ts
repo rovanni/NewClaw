@@ -12,7 +12,7 @@
  */
 import { AsyncLocalStorage } from 'async_hooks';
 
-const contexto = new AsyncLocalStorage<{ signal?: AbortSignal; prazoFinal?: number }>();
+const contexto = new AsyncLocalStorage<{ signal?: AbortSignal; prazoFinal?: number | (() => number) }>();
 
 /** Roda `fn` dentro do turno: toda chamada ao modelo feita por ela (e pelo que ela dispara) enxerga o sinal. */
 export function executarNoTurno<T>(signal: AbortSignal, fn: () => Promise<T>): Promise<T> {
@@ -20,10 +20,10 @@ export function executarNoTurno<T>(signal: AbortSignal, fn: () => Promise<T>): P
 }
 
 /**
- * Roda `fn` sabendo o PRAZO FINAL do objetivo (epoch ms): quem executa algo demorado lá dentro (ex.: exec_command) usa o que
+ * Roda `fn` sabendo o PRAZO FINAL do objetivo (epoch ms, ou uma função que o devolve atualizado): quem executa algo demorado lá dentro (ex.: exec_command) usa o que
  * resta dele como teto, em vez de um número próprio (ADR-023). Preserva o sinal do turno já em vigor.
  */
-export function executarComPrazo<T>(prazoFinal: number, fn: () => Promise<T>): Promise<T> {
+export function executarComPrazo<T>(prazoFinal: number | (() => number), fn: () => Promise<T>): Promise<T> {
     return contexto.run({ ...contexto.getStore(), prazoFinal }, fn);
 }
 
@@ -34,7 +34,9 @@ export function sinalDoTurno(): AbortSignal | undefined {
 
 /** O prazo final (epoch ms) do objetivo em que o código atual roda; `undefined` fora de um objetivo. */
 export function prazoDoTurno(): number | undefined {
-    return contexto.getStore()?.prazoFinal;
+    const p = contexto.getStore()?.prazoFinal;
+    // Uma função = o prazo ATUAL (o objetivo pode ser prorrogado no modo de aviso — ADR-024 etapa 6).
+    return typeof p === 'function' ? p() : p;
 }
 
 /** Um sinal que dispara quando QUALQUER um dos dois dispara. Sem dependência de `AbortSignal.any` (Node mais antigo). */

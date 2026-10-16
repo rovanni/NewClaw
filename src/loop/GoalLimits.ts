@@ -7,6 +7,22 @@
  * Princípio: autonomia limitada ao objetivo, nada mais.
  */
 
+/** Minutos de uma variável de ambiente; valor ausente ou inválido = o padrão. */
+function minutosDoAmbiente(nome: string, padrao: number): number {
+    const v = Number(process.env[nome]);
+    return Number.isFinite(v) && v > 0 ? v : padrao;
+}
+
+/**
+ * ADR-024 etapa 6 (EXPERIMENTAL, desligado por padrão): com LIMITE_DO_OBJETIVO_COMO_AVISO=1, chegar ao limite do objetivo
+ * não corta mais o trabalho — avisa o usuário e continua, até o LIMITE DURO (proteção configurável:
+ * LIMITE_DURO_DO_OBJETIVO_MIN, padrão 3× o limite). O cancelamento continua pelo "Parar" e pelo /cancelar.
+ */
+export function limiteDoObjetivoComoAviso(): boolean { return process.env.LIMITE_DO_OBJETIVO_COMO_AVISO === '1'; }
+export function limiteDuroDoObjetivoMs(): number {
+    return minutosDoAmbiente('LIMITE_DURO_DO_OBJETIVO_MIN', 3 * GOAL_LIMITS.MAX_GOAL_TTL_MS / 60_000) * 60 * 1000;
+}
+
 export const GOAL_LIMITS = {
     // ── Orçamentos por goal ──────────────────────────────────────────────────
     /** Tentativas por step antes de considerar bloqueado */
@@ -19,8 +35,11 @@ export const GOAL_LIMITS = {
     MAX_TOOLS_PER_GOAL: 10,
 
     // ── TTL ──────────────────────────────────────────────────────────────────
-    /** Goal expira após 30 minutos sem conclusão */
-    MAX_GOAL_TTL_MS: 30 * 60 * 1000,
+    /**
+     * Goal expira após este tempo sem conclusão. Padrão 30 min; configurável (LIMITE_DO_OBJETIVO_MIN) — ADR-024 etapa 6.
+     * Lido a cada uso (o .env pode ser carregado depois deste módulo).
+     */
+    get MAX_GOAL_TTL_MS(): number { return minutosDoAmbiente('LIMITE_DO_OBJETIVO_MIN', 30) * 60 * 1000; },
     /** Auth pendente expira em 5 minutos (alinhado com WorkflowEngine) */
     MAX_GOAL_AUTH_TTL_MS: 5 * 60 * 1000,
 

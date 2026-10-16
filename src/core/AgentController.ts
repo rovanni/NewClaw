@@ -334,6 +334,12 @@ export class AgentController {
                 await this.messageBus.sendToChat(channel as import('../channels/ChannelAdapter').ChannelType, userId, { text: texto, format: 'markdown' });
             },
         });
+        // ADR-024 etapa 6: aviso no meio do pedido (modo experimental do limite do objetivo) — mesmo caminho do aviso de skill.
+        this.goalOrchestrator.setAvisoAoUsuario(async (sessionKey, texto) => {
+            const { channel, userId } = parseSessionKey(sessionKey);
+            if (!channel || !userId) return;
+            await this.messageBus.sendToChat(channel as import('../channels/ChannelAdapter').ChannelType, userId, { text: texto, format: 'markdown' });
+        });
         this.messageBus.setGoalOrchestrator(this.goalOrchestrator);
         this.agentLoop.setGoalOrchestrator(this.goalOrchestrator);
 

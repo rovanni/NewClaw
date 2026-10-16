@@ -349,6 +349,8 @@ export class GoalStore {
         // com valor undefined" (limpar para NULL).
         if ('pendingTxnId' in patch)                { sets.push('pending_txn_id = ?');     values.push(patch.pendingTxnId ?? null); }
         if (patch.completedAt !== undefined)       { sets.push('completed_at = ?');       values.push(patch.completedAt); }
+        // ADR-024 etapa 6: prorrogação do prazo no modo experimental de aviso.
+        if (patch.expiresAt !== undefined)         { sets.push('expires_at = ?');         values.push(patch.expiresAt); }
 
         values.push(id);
         this.db.prepare(`UPDATE goals SET ${sets.join(', ')} WHERE id = ?`).run(...values);

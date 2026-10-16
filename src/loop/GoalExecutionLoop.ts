@@ -57,7 +57,7 @@ import type { IntentCategory } from '../shared/domainTypes';
 import { resolveInstallCommand } from './planning/resolveInstallCommand';
 import { inferExpectedExtensions, isExpectedDeliverableFile } from './planning/inferExpectedExtensions';
 import { MIN_DELIVERABLE_SIZE, resolveArtifactPathFromEvidence } from './planning/artifactContract';
-import { GOAL_LIMITS } from './GoalLimits';
+import { GOAL_LIMITS, limiteDoObjetivoComoAviso, limiteDuroDoObjetivoMs } from './GoalLimits';
 import { ChannelContext, ContextAwareTool, GroundingBlock, ProviderFailure } from './agentLoopTypes';
 import type { EvidenceItem } from './ObserverValidator';
 import type { SessionManager } from '../session/SessionManager';
@@ -261,6 +261,37 @@ export class GoalExecutionLoop {
 
     setAprendizadoDeSkills(aprendizado: { skillLearner: SkillLearner; avisar: (sessionKey: string, texto: string) => Promise<void>; diretivaDeIdioma?: string }): void {
         this.aprendizado = aprendizado;
+    }
+
+    /** Entrega uma mensagem ao usuário no canal/conversa do pedido (ligado pelo AgentController ao MessageBus). */
+    private avisarUsuario?: (sessionKey: string, texto: string) => Promise<void>;
+    setAvisoAoUsuario(avisar: (sessionKey: string, texto: string) => Promise<void>): void {
+        this.avisarUsuario = avisar;
+    }
+
+    /**
+     * ADR-024 etapa 6 (EXPERIMENTAL — LIMITE_DO_OBJETIVO_COMO_AVISO=1): ao chegar ao limite do objetivo, em vez de cortar o
+     * trabalho, prorroga por mais uma janela (nunca além do LIMITE DURO configurável) e AVISA o usuário de que continua e de
+     * como interromper. Devolve `true` se prorrogou (o loop segue); `false` = comportamento de sempre (expira).
+     */
+    private prorrogarPorAviso(goal: Goal): boolean {
+        if (!limiteDoObjetivoComoAviso()) return false;
+        const agora = Date.now();
+        const limiteDuro = goal.createdAt + limiteDuroDoObjetivoMs();
+        if (agora >= limiteDuro) {
+            log.warn(`[OBJETIVO-AVISO] goal=${goal.id} chegou ao LIMITE DURO (${Math.round(limiteDuroDoObjetivoMs() / 60_000)} min) — expira como sempre`);
+            return false;
+        }
+        const novoPrazo = Math.min(limiteDuro, agora + GOAL_LIMITS.MAX_GOAL_TTL_MS);
+        this.goalStore.update(goal.id, { expiresAt: novoPrazo });
+        goal.expiresAt = novoPrazo;
+        const decorridos = Math.round((agora - goal.createdAt) / 60_000);
+        const duroMin = Math.round(limiteDuroDoObjetivoMs() / 60_000);
+        log.warn(`[OBJETIVO-AVISO] goal=${goal.id} passou do limite (${decorridos} min) — continua até ${new Date(novoPrazo).toISOString()} (limite duro ${duroMin} min); usuário avisado`);
+        this.avisarUsuario?.(goal.sessionKey,
+            `⏳ Ainda estou trabalhando no seu pedido (há ${decorridos} min). Vou continuar por até ${duroMin} min no total; ` +
+            `para interromper, envie /cancelar.`).catch(() => { /* aviso nunca derruba o trabalho */ });
+        return true;
     }
 
     /**
@@ -863,7 +894,7 @@ export class GoalExecutionLoop {
     ): Promise<GoalResult> {
         // ADR-023: tudo o que o objetivo executa enxerga o prazo final dele — um comando nunca dura mais que o objetivo que o
         // pediu (o exec_command usa o que resta como teto, em vez de um número próprio).
-        return executarComPrazo(goal.expiresAt, () => this.runLoopNoPrazo(goal, channelContext, onProgress, initialCycles, initialReplans, initialFeedback));
+        return executarComPrazo(() => this.goalStore.getById(goal.id)?.expiresAt ?? goal.expiresAt, () => this.runLoopNoPrazo(goal, channelContext, onProgress, initialCycles, initialReplans, initialFeedback));
     }
 
     private async runLoopNoPrazo(
@@ -1858,7 +1889,7 @@ export class GoalExecutionLoop {
         goal = await this.planWithSpiral(goal, blocker, priorFeedback, totalReplans + 1, state, true);
         totalReplans++;
 
-        if (Date.now() > goal.expiresAt) {
+        if (Date.now() > goal.expiresAt && !this.prorrogarPorAviso(goal)) {
             this.goalStore.setStatus(goal.id, 'abandoned');
             // issue 028: mesma autoridade única das saídas genéricas de falha (issue 020) — o
             // motivo ("expirou") é um fato de entrada, não substitui o resumo do que já foi obtido.
@@ -2294,7 +2325,7 @@ export class GoalExecutionLoop {
             }
 
             // Verificar TTL após cada ciclo
-            if (Date.now() > currentGoal.expiresAt) {
+            if (Date.now() > currentGoal.expiresAt && !this.prorrogarPorAviso(currentGoal)) {
                 this.goalStore.setStatus(currentGoal.id, 'abandoned');
                 // issue 028: mesma autoridade única (ver o outro ponto de expiração acima).
                 const explanation = this.gracefulDelivery.buildFailureMessage(currentGoal, state.cognitiveContext, 'Objetivo expirou por tempo limite.');

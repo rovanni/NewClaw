@@ -63,7 +63,7 @@ async function main(): Promise<void> {
 
     console.log('\n=== S421-5 — o goal passa o prazo adiante ===');
     const src = fs.readFileSync(path.join(process.cwd(), 'src', 'loop', 'GoalExecutionLoop.ts'), 'utf-8');
-    assert(/return executarComPrazo\(goal\.expiresAt, \(\) => this\.runLoopNoPrazo\(/.test(src), 'runLoop roda o objetivo dentro de executarComPrazo(goal.expiresAt)');
+    assert(/return executarComPrazo\(\(\) => this\.goalStore\.getById\(goal\.id\)\?\.expiresAt \?\? goal\.expiresAt, \(\) => this\.runLoopNoPrazo\(/.test(src), 'runLoop roda o objetivo dentro de executarComPrazo(prazo ATUAL do objetivo — acompanha a prorrogação, S426)');
 
     try { fs.rmSync(pasta, { recursive: true, force: true }); } catch { /* temporário */ }
     console.log(`\n=== S421: ${passed} passaram, ${failed} falharam ===`);
