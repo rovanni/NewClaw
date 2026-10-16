@@ -1672,8 +1672,21 @@ export class AgentLoop {
     // ── LLM call with fallback ─────────────────────────────────────────────────
 
     private async callLLMWithFallback(messages: LLMMessage[], toolDefs: ToolDefinition[], chatProfile: ModelProfile, signal?: AbortSignal, phase: string = 'loop'): Promise<LLMResult> {
-        const { timeoutMs, approxTokens, totalChars, scaleMs } = computeDynamicTimeout(messages);
+        const dinamico = computeDynamicTimeout(messages);
+        const { approxTokens, totalChars, scaleMs } = dinamico;
+        let timeoutMs = dinamico.timeoutMs;
         log.info(`[${this.ts()}] [TIMEOUT] Dynamic: ${Math.round(timeoutMs / 1000)}s (tokens≈${approxTokens}, chars=${totalChars}, scale=${Math.round(scaleMs / 1000)}s, clamp=[45-420]s)`);
+        // ADR-024 (etapa 5): o prazo também respeita o TRABALHO medido deste modelo neste tipo de chamada (tokens ÷ velocidade
+        // medida) — só ESTENDE: um modelo local lento (~38 tokens/s) não é cortado pelo prazo calibrado na nuvem. Sem limite de
+        // tokens aqui: a resposta do agente varia demais (metade < 750 tokens, 5% > 13 mil — escrever um arquivo grande é
+        // legítimo); contra travamento seguem a inatividade da conexão e o prazo do objetivo.
+        const medido = typeof this.providerFactory.orcamentoPeloTrabalho === 'function'
+            ? this.providerFactory.orcamentoPeloTrabalho(chatProfile?.model, undefined, `AgentLoop:${phase}`, totalChars)
+            : null;
+        if (medido && medido.prazoMs > timeoutMs) {
+            log.info(`[${this.ts()}] [TIMEOUT] pelo trabalho medido: ${medido.tokens} tokens a ${medido.geracao.toFixed(1)} tok/s (n=${medido.amostras}, modelo=${medido.modelo}) → ${Math.round(medido.prazoMs / 1000)}s (era ${Math.round(timeoutMs / 1000)}s)`);
+            timeoutMs = medido.prazoMs;
+        }
 
         const callStart = Date.now();
         try {
