@@ -1,7 +1,7 @@
 # ADR-023 — O comando continua enquanto trabalha (sem prazo fixo)
 
-Data: 16/10/2026. Status: **proposta**. Fase de medição concluída; implementação aguardando duas decisões da operadora
-(ver "Decisões em aberto").
+Data: 16/10/2026. Status: **aceita** pela operadora (T = 30 s; ao chegar em T, encerrar e dizer o fato — opção (i)). Implementação
+em 3 partes: entrada fechada (S419), progresso pelos três sinais (S420), teto pelo prazo do objetivo e "Parar" (parte 3).
 
 ## Fase 1 — Compreensão
 
@@ -123,7 +123,12 @@ Separa os três conceitos sugeridos na revisão.
   - pausa legítima maior que T é cortada (mitigação: o fato no resultado e o parâmetro do agente);
   - macOS não medido;
   - `Read-Host` e `read` seguem com resposta vazia quando a entrada está fechada;
-  - processo que sai da árvore (serviço iniciado à parte) não é observado.
+  - processo que sai da árvore (serviço iniciado à parte) não é observado;
+  - `ssh://`: o trabalho calado na máquina REMOTA não aparece nos sinais locais (o `ssh` local fica ocioso) — mitigação: o
+    fato no resultado e o parâmetro `tolerancia_sem_atividade`.
+- **Achado na implementação (S420):** no Windows o amostrador leva alguns segundos para ficar pronto (compila as funções
+  nativas uma vez); a contagem de "parado" começa na primeira medição, não no início do comando — senão um cálculo calado
+  era cortado antes de haver com o que comparar.
 - **Testes planejados:** os cenários desta tabela viram teste de regressão nos dois sistemas (CI Ubuntu e Windows):
   - trabalho calado não é cortado;
   - travado é cortado em ~T;

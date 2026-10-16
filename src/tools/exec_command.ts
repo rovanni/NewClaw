@@ -15,14 +15,30 @@ import { errorMessage } from '../shared/errors';
 import { createLogger } from '../shared/AppLogger';
 import { resolvePath } from '../utils/crossPlatform';
 import { extractVerifiedArtifacts } from '../loop/planning/artifactContract';
+import { GOAL_LIMITS } from '../loop/GoalLimits';
+import { amostradorDaPlataforma, AmostraDeAtividade } from './atividadeDoProcesso';
 
 const log = createLogger('ExecCommandTool');
 
 /** Teto da saída guardada de um comando (o mesmo `maxBuffer` padrão que o `exec` usava). */
 const MAX_SAIDA_BYTES = 1024 * 1024;
 
-/** Limite de tempo de um comando quando o chamador não informa outro. */
-export const PRAZO_PADRAO_MS = 60000;
+/**
+ * Teto de um comando quando o chamador não informa outro: o MESMO limite do objetivo (GOAL_LIMITS.MAX_GOAL_TTL_MS) — um
+ * comando nunca dura mais que o objetivo que o pediu, e nenhum número novo é criado (ADR-023). Não é a regra do dia a dia:
+ * quem encerra um comando parado é a tolerância sem atividade, abaixo.
+ */
+export const PRAZO_PADRAO_MS = GOAL_LIMITS.MAX_GOAL_TTL_MS;
+
+/**
+ * Segundos SEM NENHUM sinal (saída, CPU, disco/rede) até o comando ser considerado parado (ADR-023, escolha da operadora em
+ * 16/10/2026). Medido: trabalho real nunca ficou mais de 2 s sem sinal; travado fica sem sinal o tempo todo.
+ */
+export const TOLERANCIA_PADRAO_S = 30;
+
+/** Abaixo disto, numa amostra de 1 s, CPU e E/S são ruído de processo ocioso (medido: shell e processo parado ficam abaixo). */
+const CPU_MINIMA_MS = 50;
+const IO_MINIMA_BYTES = 16 * 1024;
 
 /**
  * Encerra o processo E tudo o que ele abriu. Matar só o shell deixa os filhos rodando sem dono (medido no Windows:
@@ -494,12 +510,13 @@ function applyFixup(stepName: string, command: string, ctx: FixupContext): strin
 
 export class ExecCommandTool implements ToolExecutor {
     name = 'exec_command';
-    description = 'Execute shell commands. Workspace como cwd padrão. Suporta ssh://host/command para remoto. Timeout padrão: 30s.';
+    description = 'Execute shell commands. Workspace como cwd padrão. Suporta ssh://host/command para remoto. O comando roda enquanto trabalha (saída, CPU ou disco/rede); é encerrado se ficar parado, sem nenhum sinal, pela tolerância (padrão 30 s). A entrada do teclado é fechada.';
     parameters = {
         type: 'object',
         properties: {
             command: { type: 'string', description: 'Shell command. Use ssh://HOST/cmd para execução remota' },
-            timeout: { type: 'number', description: `Limite de tempo em ms (padrão: ${PRAZO_PADRAO_MS}). Ao passar dele, o comando é encerrado junto com os processos que abriu.` },
+            tolerancia_sem_atividade: { type: 'number', description: `Segundos SEM NENHUM sinal de atividade (saída, CPU, disco/rede) até o comando ser considerado parado e encerrado (padrão: ${TOLERANCIA_PADRAO_S}). Aumente quando souber que haverá espera longa sem atividade.` },
+            timeout: { type: 'number', description: `Teto opcional em ms, mesmo com o comando trabalhando (sem ele: ${PRAZO_PADRAO_MS} ms, o limite do objetivo). Ao passar dele, o comando é encerrado junto com os processos que abriu.` },
             workdir: { type: 'string', description: 'Diretório de trabalho (padrão: workspace)' }
         },
         required: ['command']
@@ -508,6 +525,7 @@ export class ExecCommandTool implements ToolExecutor {
     async execute(args: Record<string, any>): Promise<ToolResult> {
         let command = args.command as string;
         const timeout = (args.timeout as number) || PRAZO_PADRAO_MS;
+        const toleranciaS = Number(args.tolerancia_sem_atividade) > 0 ? Number(args.tolerancia_sem_atividade) : TOLERANCIA_PADRAO_S;
         const workdir = args.workdir as string;
 
         if (!command) {
@@ -679,6 +697,8 @@ export class ExecCommandTool implements ToolExecutor {
 
                 let encerrado = false;
                 let estourouPrazo = false;
+                let parado = false;
+                let fonteDaAtividade = '';
                 // Fato, não palpite: quem interrompeu foi o NewClaw, por tempo — a saída é só o que saiu até ali. Sem isto a
                 // falha aparecia só com os avisos do programa e o planejador concluía "aviso tomado por erro" (teste real
                 // 16/10/2026: npm install cortado em 60 s, saída = avisos de "deprecated" + "[exit code: unknown]").
@@ -686,7 +706,7 @@ export class ExecCommandTool implements ToolExecutor {
                 const rejeitarComFato = (fato: string) => {
                     if (encerrado) return;
                     encerrado = true;
-                    clearTimeout(relogio);
+                    pararRelogios();
                     const saida = saidaAteAgora().trim();
                     reject(Object.assign(new Error(fato), {
                         combinedOutput: saida ? `${fato}
@@ -704,15 +724,20 @@ ${saida.slice(-12000)}` : fato,
                     // Falha ao criar o processo (ex.: ENOENT do shell): mesma forma de antes — mensagem do erro, sem código de saída.
                     if (encerrado) return;
                     encerrado = true;
-                    clearTimeout(relogio);
+                    pararRelogios();
                     reject(Object.assign(err, { combinedOutput: (saidaAteAgora().trim() || err.message) }));
                 });
+                const fatoParado = () => `[interrompido pelo NewClaw: o comando ficou ${toleranciaS} s SEM NENHUM sinal de atividade ` +
+                    `(${fonteDaAtividade}) e foi encerrado junto com os processos que abriu; o comando NÃO terminou ` +
+                    `(${Math.round((Date.now() - t0) / 1000)} s no total). Se ele precisa esperar sem atividade, aumente o parâmetro ` +
+                    `"tolerancia_sem_atividade" do exec_command.]`;
                 filho.on('close', (code, signal) => {
                     if (estourouPrazo) { rejeitarComFato(fatoDoPrazo()); return; }
+                    if (parado) { rejeitarComFato(fatoParado()); return; }
                     if (estourouSaida) { rejeitarComFato(fatoDaSaida); return; }
                     if (encerrado) return;
                     encerrado = true;
-                    clearTimeout(relogio);
+                    pararRelogios();
                     const combined = saidaAteAgora();
                     if (code === 0) { resolve(combined); return; }
                     const exitCode: number | string = code ?? (signal ? `sinal ${signal}` : 'unknown');
@@ -740,6 +765,40 @@ ${saida.slice(-12000)}` : fato,
                     // Se algo da árvore escapou e segura a saída aberta, o retorno não fica preso esperando por ela.
                     setTimeout(() => rejeitarComFato(fatoDoPrazo()), 5000).unref();
                 }, timeout);
+
+                // "Ainda está trabalhando?" (ADR-023): a cada segundo, a árvore do comando produziu saída, OU usou CPU, OU leu/
+                // escreveu (disco, rede)? Qualquer um é progresso. Só depois de `toleranciaS` seguidos sem NENHUM, ele é tido
+                // como parado. Sem amostrador na plataforma (ou falha dele), só a saída conta — e o fato diz isso.
+                const amostrador = amostradorDaPlataforma();
+                let ultimoSinal = Date.now();
+                let bytesVistos = 0;
+                let anterior: AmostraDeAtividade | null = null;
+                let amostrando = false;
+                const vigia = setInterval(async () => {
+                    if (encerrado || estourouPrazo || parado || amostrando || !filho.pid) return;
+                    amostrando = true;
+                    try {
+                        const agora = Date.now();
+                        let sinal = bytes !== bytesVistos;
+                        bytesVistos = bytes;
+                        const a = await amostrador.amostrar(filho.pid);
+                        fonteDaAtividade = a ? `saída e ${amostrador.fonte}` : 'só a saída do comando pôde ser observada nesta plataforma';
+                        // Primeira medição: ainda não há com o que comparar — a contagem de "parado" começa AQUI, não no início do
+                        // comando (no Windows o amostrador leva alguns segundos para ficar pronto; sem isto, um cálculo calado era
+                        // cortado antes da primeira comparação — achado pelo S420).
+                        if (a && !anterior) { anterior = a; ultimoSinal = agora; return; }
+                        if (a && anterior && (a.cpuMs - anterior.cpuMs >= CPU_MINIMA_MS || a.ioBytes - anterior.ioBytes >= IO_MINIMA_BYTES)) sinal = true;
+                        if (a) anterior = a;
+                        if (sinal) { ultimoSinal = agora; return; }
+                        if (agora - ultimoSinal >= toleranciaS * 1000 && !encerrado) {
+                            parado = true;
+                            log.warn(`[EXEC-PARADO] ${toleranciaS} s sem nenhum sinal (${fonteDaAtividade}) — encerrando a árvore do processo pid=${filho.pid} após ${Math.round((agora - t0) / 1000)} s`);
+                            encerrarArvore(filho.pid);
+                            setTimeout(() => rejeitarComFato(fatoParado()), 5000).unref();
+                        }
+                    } finally { amostrando = false; }
+                }, 1000);
+                function pararRelogios(): void { clearTimeout(relogio); clearInterval(vigia); }
             });
 
             // Contrato de artefato (docs/sprints-r1-r7-2026-07-13/REVISAO_ARQUITETURAL_SPRINT_R7_2026-07-13.md): scripts
