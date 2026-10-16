@@ -182,9 +182,15 @@ export class ValidationEngine {
 
         // 2–3. Prompt por seções e teto.
         prompt = this.montarPrompt(d, entradas, this.relogio());
-        if (prompt.length > DECISION_PROMPT_MAX_CHARS) {
-            log.info(`[VALIDACAO] tipo=${d.tipo} prompt de ${prompt.length} chars excede ${DECISION_PROMPT_MAX_CHARS} — não avaliável`);
-            return naoAvaliavel(`prompt de ${prompt.length} chars excede o teto de ${DECISION_PROMPT_MAX_CHARS}`, 'acima_do_teto');
+        // O teto vem da janela REAL do modelo do juiz (medida pelo provedor); sem medição, o número conservador de sempre.
+        // Antes era sempre 60 mil — um juiz de nuvem com janela de 1 milhão de tokens ficava "não avaliável" com 93–119 mil
+        // caracteres e a resposta passava sem conferência (Windows, 15/10/2026).
+        const teto = typeof this.providerFactory.tetoDeEntrada === 'function'
+            ? await this.providerFactory.tetoDeEntrada(modelo || undefined).catch(() => ({ chars: DECISION_PROMPT_MAX_CHARS, origem: 'padrão (falha ao medir)' }))
+            : { chars: DECISION_PROMPT_MAX_CHARS, origem: 'padrão' };
+        if (prompt.length > teto.chars) {
+            log.info(`[VALIDACAO] tipo=${d.tipo} prompt de ${prompt.length} chars excede ${teto.chars} (${teto.origem}) — não avaliável`);
+            return naoAvaliavel(`prompt de ${prompt.length} chars excede o teto de ${teto.chars} (${teto.origem})`, 'acima_do_teto');
         }
 
         // 4. O modelo do juiz — chamado do jeito que FUNCIONA para ele (ADR-016): capacidade declarada pelo provedor + perfil

@@ -106,6 +106,30 @@ export class OllamaProvider implements ILLMProvider {
     setModel(model: string): void { this.model = model; }
     setBaseUrl(url: string): void { this.baseUrl = url; }
 
+    private janelasCache?: { em: number; porModelo: Map<string, ModelInfo> };
+
+    /**
+     * Quantos tokens de contexto o modelo REALMENTE recebe numa chamada deste provedor — medido no /api/tags, nunca suposto.
+     * Modelo de nuvem (`remote_host`): a janela informada; o servidor ignora o num_ctx (medido em 15/10/2026: com num_ctx=32768,
+     * glm-5.3-flash:cloud e glm-5.3:cloud processaram 108.294 tokens e acharam o código do início). Modelo local: o menor entre a
+     * janela e o num_ctx que enviamos (o Ollama local corta no num_ctx). Sem a informação: undefined (quem chama decide o padrão).
+     */
+    async janelaEfetiva(modelo: string = this.model): Promise<{ tokens: number; origem: string } | undefined> {
+        try {
+            if (!this.janelasCache || Date.now() - this.janelasCache.em > 5 * 60_000) {
+                const modelos = await this.discoverModels();
+                this.janelasCache = { em: Date.now(), porModelo: new Map(modelos.map(m => [m.id, m])) };
+            }
+            const m = this.janelasCache.porModelo.get(modelo) ?? this.janelasCache.porModelo.get(`${modelo}:latest`);
+            if (!m?.contextWindow) return undefined;
+            if (m.remoteHost) return { tokens: m.contextWindow, origem: `janela do modelo de nuvem (${m.contextWindow} tokens, /api/tags)` };
+            const tokens = Math.min(m.contextWindow, this.numCtx);
+            return { tokens, origem: `modelo local: menor entre a janela (${m.contextWindow}) e o num_ctx enviado (${this.numCtx})` };
+        } catch {
+            return undefined;
+        }
+    }
+
     /**
      * Lista os modelos instalados no servidor Ollama (local ou cloud) via /api/tags.
      * Único ponto de leitura desse endpoint — antes duplicado inline em routes/providers.ts.
@@ -120,6 +144,7 @@ export class OllamaProvider implements ILLMProvider {
             models?: Array<{
                 name: string;
                 capabilities?: string[];
+                remote_host?: string;
                 details?: { family?: string; context_length?: number };
             }>
         };
@@ -129,6 +154,7 @@ export class OllamaProvider implements ILLMProvider {
             label: m.name,
             family: m.details?.family,
             contextWindow: m.details?.context_length,
+            remoteHost: m.remote_host,
             // Ollama devolve capabilities reais em /api/tags — só cai pra heurística por nome
             // inteira (guessCapabilities) se, por algum motivo, o campo vier ausente (versão
             // antiga do servidor). Quando o campo vem preenchido, mapOllamaCapabilities ainda

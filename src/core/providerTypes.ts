@@ -157,8 +157,19 @@ export interface ModelInfo {
     label: string;
     family?: string;
     contextWindow?: number;
+    /** Ollama: servidor remoto que roda o modelo (modelo de nuvem). Ausente = roda nesta máquina. */
+    remoteHost?: string;
     capabilities: ModelCapability[];
     status: 'available';
+}
+
+/**
+ * Quantos caracteres de ENTRADA cabem numa janela de `tokens`, com folga para a resposta. Mesma conversão do guarda de contexto do
+ * agente (AgentLoop.contextCapacityChars): 3 caracteres por token (medido em pt-BR: 3,55 — 3 é a margem segura) e 25% da janela
+ * reservados para a saída.
+ */
+export function caracteresQueCabem(tokens: number): number {
+    return Math.floor(tokens * 3 * 0.75);
 }
 
 /** Endpoint OpenAI-Compatible configurado pelo usuário (LM Studio, vLLM, OpenAI oficial, custom,

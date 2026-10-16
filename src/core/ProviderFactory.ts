@@ -8,7 +8,7 @@ import { createLogger } from '../shared/AppLogger';
 import { errorMessage } from '../shared/errors';
 import { circuitRegistry } from './CircuitBreaker';
 import { getLocalRuntimeLifecycle } from './localRuntimeState';
-import { LLMMessage, LLMResponse, ToolDefinition, LLMResult, AttemptInfo, FallbackReason, ToolCall, ILLMProvider, ChatOptions, CustomProviderConfig, ChatFallbackOptions, LlmCallDiag, REASONING_INTENSIVE_TIMEOUT_FLOOR_MS, AttemptTelemetry, ehModeloDaNuvemDoOllama, mensagemSemModeloEscolhido } from './providerTypes';
+import { LLMMessage, LLMResponse, ToolDefinition, LLMResult, AttemptInfo, FallbackReason, ToolCall, ILLMProvider, ChatOptions, CustomProviderConfig, ChatFallbackOptions, LlmCallDiag, REASONING_INTENSIVE_TIMEOUT_FLOOR_MS, AttemptTelemetry, ehModeloDaNuvemDoOllama, mensagemSemModeloEscolhido, caracteresQueCabem, DECISION_PROMPT_MAX_CHARS } from './providerTypes';
 import { GeminiProvider } from './GeminiProvider';
 import { DeepSeekProvider } from './DeepSeekProvider';
 import { GroqProvider } from './GroqProvider';
@@ -287,6 +287,19 @@ export class ProviderFactory {
      * provedor será tentado primeiro e quanto ele tem levado. Assim o ponto de chamada declara
      * só a intenção ("isto é uma classificação") e não precisa conhecer o registro de circuitos.
      */
+    /**
+     * Teto de ENTRADA (caracteres) de uma decisão do LLM com este modelo, derivado da janela REAL dele (OllamaProvider.janelaEfetiva:
+     * medida no /api/tags). Antes era um número fixo (DECISION_PROMPT_MAX_CHARS, 60 mil) calculado para um modelo local de 32.768
+     * tokens — o juiz de nuvem (janela de 1 milhão) ficava "não avaliável" com 93–119 mil chars (Windows, 15/10/2026). Sem a janela
+     * medida (outro provedor, servidor fora): o número conservador de sempre, declarado como padrão.
+     */
+    async tetoDeEntrada(modelo?: string): Promise<{ chars: number; origem: string }> {
+        const ollama = this.defaultProvider === 'ollama' ? this.getOllamaProvider() : undefined;
+        const janela = ollama ? await ollama.janelaEfetiva(modelo || ollama.getModel()) : undefined;
+        if (janela) return { chars: caracteresQueCabem(janela.tokens), origem: janela.origem };
+        return { chars: DECISION_PROMPT_MAX_CHARS, origem: 'padrão (janela do modelo não medida)' };
+    }
+
     getBudgetAuxiliar(perfil: PerfilAuxiliar, tamanhoDoTrabalhoChars?: number): OrcamentoAuxiliar {
         return getBudgetAuxiliar(perfil, this.defaultProvider, {
             getLatenciaTipicaMs: (provedor: string) =>
