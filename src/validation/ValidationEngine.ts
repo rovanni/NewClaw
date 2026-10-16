@@ -195,17 +195,17 @@ export class ValidationEngine {
 
         // 4. O modelo do juiz — chamado do jeito que FUNCIONA para ele (ADR-016): capacidade declarada pelo provedor + perfil
         //    aprendido pelo uso. Cada modo (raciocínio do provedor / desligado) tem um PRAZO REAL, dentro do orçamento do juiz: o
-        //    juiz nunca passa do orçamento declarado. Modelo que vem falhando como juiz em todos os modos: o motor nem chama.
+        //    juiz nunca passa do orçamento declarado. Modelo que vem falhando como juiz DESTE TIPO em todos os modos: o motor nem chama.
         //    O orçamento acompanha o TAMANHO do trabalho: prompt grande = mais a conferir = mais tempo (ver auxTimeout).
         const orcamento = this.providerFactory.getBudgetAuxiliar('validacao', prompt.length);
         orcamentoMs = orcamento.timeoutMs;
         orcamentoEscalado = orcamento.escaladoPeloTrabalho === true;
         const chaveDoModelo = modelo || '(padrão do provedor)';
-        const disjuntor = this.perfil.estadoDoDisjuntor(chaveDoModelo);
+        const disjuntor = this.perfil.estadoDoDisjuntor(chaveDoModelo, d.tipo);
         if (disjuntor.aberto) {
             const seg = Math.ceil(disjuntor.reabreEmMs / 1000);
-            log.warn(`[VALIDACAO] tipo=${d.tipo} modelo=${chaveDoModelo} vem falhando como juiz em todos os modos — não chamado por mais ${seg} s (disjuntor)`);
-            return naoAvaliavel(`o modelo vem falhando como juiz em todos os modos (nova sondagem em ${seg} s)`, 'juiz_indisponivel');
+            log.warn(`[VALIDACAO] tipo=${d.tipo} modelo=${chaveDoModelo} vem falhando como juiz deste tipo em todos os modos — não chamado por mais ${seg} s (disjuntor do tipo)`);
+            return naoAvaliavel(`o modelo vem falhando como juiz deste tipo (${d.tipo}) em todos os modos (nova sondagem em ${seg} s)`, 'juiz_indisponivel');
         }
         const modos = await this.perfil.modosParaTentar(chaveDoModelo, d.raciocinio);
         const limite = t0 + orcamento.timeoutMs;
@@ -243,7 +243,7 @@ export class ValidationEngine {
                 saidaBruta = resultado.content;
                 const diagnosticoLeitura: { motivo?: string } = {};
                 lido = lerSaidaDoModelo(saidaBruta || '', (d.camposExtras ?? []).map(c => c.nome), diagnosticoLeitura);
-                this.perfil.registrar(chaveDoModelo, modos[i], !!lido, ms);
+                this.perfil.registrar(chaveDoModelo, modos[i], !!lido, ms, d.tipo);
                 log.info(`[VALIDACAO] tipo=${d.tipo} modelo=${chaveDoModelo} modo=${modos[i]} ${lido ? 'veredito' : 'saída sem estrutura'} em ${ms} ms${lido || ultimo ? '' : ' — tentando o outro modo'}`);
                 if (lido) break;
                 falha = { porque: diagnosticoLeitura.motivo ?? 'saída do modelo sem a estrutura do contrato', desfecho: 'saida_invalida' };
@@ -251,7 +251,7 @@ export class ValidationEngine {
             }
             if (resultado.status === 'timeout' || resultado.status === 'cancelled') {
                 // O modelo não concluiu NA FATIA deste modo (nem sinal do usuário): este modo é lento demais para este modelo.
-                this.perfil.registrar(chaveDoModelo, modos[i], false, ms);
+                this.perfil.registrar(chaveDoModelo, modos[i], false, ms, d.tipo);
                 log.info(`[VALIDACAO] tipo=${d.tipo} modelo=${chaveDoModelo} modo=${modos[i]} sem veredito em ${ms} ms (fatia ${fatia} ms)${ultimo ? '' : ' — tentando o outro modo'}`);
                 falha = { porque: `modelo não concluiu (${resultado.status === 'cancelled' ? 'timeout' : resultado.status})`, desfecho: 'llm_timeout' };
                 continue;

@@ -39,8 +39,13 @@ export interface Sondagem {
     em: number;
 }
 
+/** Falhas seguidas de UM tipo de validação com este modelo, por modo — o que o disjuntor de um tipo consulta. */
+type FalhasDoTipo = Record<ModoDoJuiz, { falhasSeguidas: number; ultimaFalha?: number }>;
+
 interface PerfilDoModelo extends Record<ModoDoJuiz, EstatisticaDoModo> {
     sondagem?: Sondagem;
+    /** Por tipo de validação: o disjuntor de cada tipo olha só as falhas DELE (ver estadoDoDisjuntor). */
+    porTipo?: Record<string, FalhasDoTipo>;
 }
 
 /** Acima disto, para um caso pequeno e padronizado, o modelo é lento demais para ser juiz (cada resposta passa por ele). */
@@ -101,6 +106,7 @@ export class PerfilDoJuiz {
                 const perfil = novoPerfil();
                 for (const m of MODOS) if (p?.[m]) perfil[m] = { ...novoModo(), ...p[m] };
                 if (p?.sondagem && typeof p.sondagem.ms === 'number') perfil.sondagem = p.sondagem;
+                if (p?.porTipo && typeof p.porTipo === 'object') perfil.porTipo = p.porTipo;
                 this.porModelo.set(chave, perfil);
             }
         } catch { /* arquivo ilegível: começa do zero */ }
@@ -139,18 +145,27 @@ export class PerfilDoJuiz {
     /**
      * Disjuntor: este modelo vem falhando como juiz em TODOS os modos? Enquanto aberto, o motor nem chama (o usuário não
      * espera minutos por um veredito que não vem); passado o tempo, deixa passar uma sondagem.
+     *
+     * Com `tipo`, a pergunta é sobre AQUELE tipo de validação: um modelo que se perde raciocinando na revisão de risco não
+     * está, por isso, indisponível para conferir a conclusão. Antes o disjuntor era só por modelo — no teste real de
+     * 16/10/2026 (Windows), duas revisões pesadas que não concluíram fecharam TODOS os juízes por 5 min, enquanto o mesmo
+     * modelo dava veredito em 4–10 s nos outros tipos; a conclusão nem foi conferida e o objetivo, já feito, foi replanejado.
+     * Sem `tipo` (tela do juiz), vale o histórico do modelo inteiro.
      */
-    estadoDoDisjuntor(chave: string): { aberto: boolean; reabreEmMs: number } {
+    estadoDoDisjuntor(chave: string, tipo?: string): { aberto: boolean; reabreEmMs: number } {
         const p = this.perfil(chave);
-        const todosFalhando = MODOS.every(m => p[m].falhasSeguidas >= FALHAS_PARA_DISJUNTOR);
+        const falhas: Record<ModoDoJuiz, { falhasSeguidas: number; ultimaFalha?: number }> | undefined = tipo ? p.porTipo?.[tipo] : p;
+        if (!falhas) return { aberto: false, reabreEmMs: 0 };
+        const todosFalhando = MODOS.every(m => (falhas[m]?.falhasSeguidas ?? 0) >= FALHAS_PARA_DISJUNTOR);
         if (!todosFalhando) return { aberto: false, reabreEmMs: 0 };
-        const ultima = Math.max(...MODOS.map(m => p[m].ultimaFalha ?? 0));
+        const ultima = Math.max(...MODOS.map(m => falhas[m]?.ultimaFalha ?? 0));
         const resta = DISJUNTOR_MS - (this.agora() - ultima);
         return resta > 0 ? { aberto: true, reabreEmMs: resta } : { aberto: false, reabreEmMs: 0 };
     }
 
-    registrar(chave: string, modo: ModoDoJuiz, ok: boolean, ms: number): void {
-        const s = this.perfil(chave)[modo];
+    registrar(chave: string, modo: ModoDoJuiz, ok: boolean, ms: number, tipo?: string): void {
+        const p = this.perfil(chave);
+        const s = p[modo];
         s.n++;
         if (ok) {
             s.ok++;
@@ -159,6 +174,12 @@ export class PerfilDoJuiz {
         } else {
             s.falhasSeguidas++;
             s.ultimaFalha = this.agora();
+        }
+        if (tipo) {
+            const porTipo = (p.porTipo ??= {});
+            const t = (porTipo[tipo] ??= { livre: { falhasSeguidas: 0 }, desligado: { falhasSeguidas: 0 } });
+            if (ok) t[modo] = { falhasSeguidas: 0 };
+            else t[modo] = { falhasSeguidas: (t[modo]?.falhasSeguidas ?? 0) + 1, ultimaFalha: this.agora() };
         }
         this.salvar();
     }

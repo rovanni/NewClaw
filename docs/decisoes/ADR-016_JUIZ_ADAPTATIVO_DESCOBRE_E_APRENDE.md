@@ -185,3 +185,38 @@ EXTENSO, agrupados pelo que é fato (qual juiz, qual campo, quando) com filtro d
 - **sem agrupar por tema por regra:** agrupar por tema é interpretar o texto, e isso é do modelo ("Determinismo valida / LLM
   interpreta"). Verificação de sanidade: o filtro "truncad" devolve os 7 relatos que o agrupamento manual por tema havia listado.
   Agrupar por tema com o modelo (botão sob demanda) fica como opção, por ser um uso novo do LLM — decisão do operador.
+
+## Adendo 5 (16/10/2026) — o disjuntor é por tipo de validação (S416)
+
+**Fase 1 — Compreensão (evidência).** Teste real no Windows ("Consegue instalar no meu Pc", goal
+`goal_1792128547107_ogo6t`, `glm-5.3-flash:cloud`). A revisão de risco (02:33) e a conferência saída × evidência (02:41)
+pensaram 32 mil e 48 mil caracteres sem concluir, nos dois modos. Com 2 falhas seguidas em cada modo, o disjuntor — que era
+**por modelo** — abriu para **todos** os tipos por 5 min. No mesmo dia, o mesmo modelo deu 81 vereditos em 4–10 s nos outros
+tipos. Às 02:41:53 os 3 passos tinham terminado, mas a conclusão "não foi chamada por mais 300 s", virou "não confirmado"
+(`semVeredito: 'bloquear'`) e o objetivo, já feito, foi replanejado. Esgotou os 12 ciclos e terminou em falha após 22 min.
+
+**Fase 2 — Crítica.** A premissa do disjuntor ("o modelo está indisponível para julgar") não vale quando a falha depende do
+**caso**. Um prompt pesado que faz o modelo se perder não diz nada sobre um prompt leve de outro tipo. Fechar todos os tipos
+troca 1 min de juiz por vários minutos de replanejamento. Risco da mudança: um modelo que nunca conclui gasta até 2 chamadas
+por tipo antes de ser bloqueado em cada um. É um custo limitado, que o disjuntor de cada tipo continua cortando.
+
+**Fase 3 — Alternativas.**
+- (a) Disjuntor por (modelo, tipo). Escolhida.
+- (b) Exigir falhas em ≥ 2 tipos para abrir. Descartada: continua fechando os tipos que funcionam.
+- (c) Nunca bloquear a conclusão. Descartada: troca a política declarada do tipo, que é decisão do operador.
+- (d) Mais orçamento. Descartada: 32–48 mil caracteres de raciocínio num prompt de 1,7–2,9 mil tokens é espiral, não falta de
+  tempo.
+
+**Fase 4 — Decisão.**
+- `PerfilDoJuiz.registrar(…, tipo)` guarda também as falhas seguidas por tipo (`porTipo`, persistido).
+- `estadoDoDisjuntor(chave, tipo)` responde só sobre aquele tipo; sem `tipo` (tela do juiz), segue valendo o histórico do
+  modelo inteiro.
+- A ordem dos modos e o "confiável" continuam por modelo, porque o aprendizado de **como** chamar vale para todos os tipos.
+
+**Fase 5 — Validação.**
+- Baseada em evidência real.
+- Elimina a classe "falha de um tipo derruba os outros".
+- Reverte trocando o argumento `d.tipo` no motor.
+- Cobertura: `S416`. `S376` e `S388` passam inalterados.
+- Pendente: por que o modelo se perde nesses dois tipos. O raciocínio interrompido era descartado sem registro; o fim dele
+  passa a ir para o log (Sprint 3) para a causa ser medida, não adivinhada.
