@@ -7,7 +7,7 @@
  */
 
 import { ToolExecutor, ToolResult } from '../loop/agentLoopTypes';
-import { exec } from 'child_process';
+import { exec, execFile } from 'child_process';
 import fs from 'fs';
 import { resolveHost, isDestructive } from './server_config';
 import path from 'path';
@@ -17,6 +17,26 @@ import { resolvePath } from '../utils/crossPlatform';
 import { extractVerifiedArtifacts } from '../loop/planning/artifactContract';
 
 const log = createLogger('ExecCommandTool');
+
+/** Limite de tempo de um comando quando o chamador não informa outro. */
+export const PRAZO_PADRAO_MS = 60000;
+
+/**
+ * Encerra o processo E tudo o que ele abriu. Matar só o shell deixa os filhos rodando sem dono (medido no Windows:
+ * o `timeout` do exec mata o cmd.exe e o programa chamado por ele continua). Windows: `taskkill /T` derruba a árvore;
+ * demais sistemas: o shell nasce num grupo próprio (`detached`) e o sinal vai para o grupo inteiro.
+ */
+export function encerrarArvore(pid: number | undefined): void {
+    if (!pid) return;
+    if (process.platform === 'win32') {
+        execFile('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true }, (err) => {
+            if (err) { try { process.kill(pid); } catch { /* já saiu */ } }
+        });
+        return;
+    }
+    try { process.kill(-pid, 'SIGTERM'); } catch { try { process.kill(pid, 'SIGTERM'); } catch { /* já saiu */ } }
+    setTimeout(() => { try { process.kill(-pid, 'SIGKILL'); } catch { /* grupo já saiu */ } }, 2000).unref();
+}
 
 // Referência a um "workspace" de outra instalação embutida no texto do comando (ex: o
 // GoalPlanner gerou "python /home/<user>/<repo>/workspace/script.py" copiando um path de outra
@@ -476,7 +496,7 @@ export class ExecCommandTool implements ToolExecutor {
         type: 'object',
         properties: {
             command: { type: 'string', description: 'Shell command. Use ssh://HOST/cmd para execução remota' },
-            timeout: { type: 'number', description: 'Timeout em ms (padrão: 30000)' },
+            timeout: { type: 'number', description: `Limite de tempo em ms (padrão: ${PRAZO_PADRAO_MS}). Ao passar dele, o comando é encerrado junto com os processos que abriu.` },
             workdir: { type: 'string', description: 'Diretório de trabalho (padrão: workspace)' }
         },
         required: ['command']
@@ -484,7 +504,7 @@ export class ExecCommandTool implements ToolExecutor {
 
     async execute(args: Record<string, any>): Promise<ToolResult> {
         let command = args.command as string;
-        const timeout = (args.timeout as number) || 60000;
+        const timeout = (args.timeout as number) || PRAZO_PADRAO_MS;
         const workdir = args.workdir as string;
 
         if (!command) {
@@ -551,8 +571,8 @@ export class ExecCommandTool implements ToolExecutor {
         // windowsHide evita que cada comando abra uma janela de console visível no Windows —
         // o processo do bot roda sem console próprio (PM2/Tarefa Agendada), então sem essa
         // flag o Windows aloca uma janela nova a cada chamada, piscando na tela do usuário.
-        const execOptions: { timeout: number; cwd?: string; windowsHide: boolean; env: NodeJS.ProcessEnv } =
-            { timeout, windowsHide: true, env: { ...process.env } };
+        const execOptions: { cwd?: string; windowsHide: boolean; env: NodeJS.ProcessEnv } =
+            { windowsHide: true, env: { ...process.env } };
         execOptions.cwd = effectiveWorkdir;
 
         // Windows: processos lançados via Tarefa Agendada/serviço/PM2 (autostart em background,
@@ -622,10 +642,20 @@ export class ExecCommandTool implements ToolExecutor {
         // análise inteira e o fix nunca era aplicado.
         command = applyFixup('wrap_powershell', command, fixupCtx);
 
+        // O prazo é controlado AQUI, não pelo `timeout` do exec: o do Node mata só o shell (cmd.exe / sh) e deixa os filhos
+        // vivos — medido no Windows (16/10/2026: `ping` continuou rodando depois do shell morto; o `npm install` do teste
+        // real seguiu escrevendo em node_modules enquanto o planejador já tentava outra coisa). Aqui a árvore inteira cai.
+        const t0 = Date.now();
+        let estourouPrazo = false;
         try {
             const output = await new Promise<string>((resolve, reject) => {
-                exec(command, execOptions, (error, stdout, stderr) => {
+                const filho = exec(command, { ...execOptions, ...(process.platform === 'win32' ? {} : { detached: true }) }, (error, stdout, stderr) => {
+                    clearTimeout(relogio);
                     const combined = decodeClixmlError((stdout ? stdout.toString() : '') + (stderr ? stderr.toString() : ''));
+                    if (estourouPrazo) {
+                        rejeitarPorPrazo(combined);
+                        return;
+                    }
                     if (error) {
                         const exitCode = error.code ?? 'unknown';
                         // Exit code 1 em comandos de busca = "nenhum resultado encontrado" (válido).
@@ -647,6 +677,29 @@ export class ExecCommandTool implements ToolExecutor {
                         resolve(combined);
                     }
                 });
+                let encerrado = false;
+                // Fato, não palpite: quem interrompeu foi o NewClaw, por tempo — a saída é só o que saiu até ali. Sem isto a
+                // falha aparecia só com os avisos do programa e o planejador concluía "aviso tomado por erro" (teste real
+                // 16/10/2026: npm install cortado em 60 s, saída = avisos de "deprecated" + "[exit code: unknown]").
+                // O fato vem PRIMEIRO: a saída é cortada em 16 mil caracteres e ele não pode ser o pedaço que some.
+                const rejeitarPorPrazo = (saidaAteAli: string) => {
+                    if (encerrado) return;
+                    encerrado = true;
+                    const fato = `[interrompido pelo NewClaw: o comando passou do limite de ${timeout} ms do exec_command ` +
+                        `(${Math.round((Date.now() - t0) / 1000)} s decorridos) e foi encerrado junto com os processos que abriu; ` +
+                        `o comando NÃO terminou. O limite é o parâmetro "timeout" do exec_command.]`;
+                    const saida = saidaAteAli.trim();
+                    reject(Object.assign(new Error(fato), {
+                        combinedOutput: saida ? `${fato}\nSaída até a interrupção (final):\n${saida.slice(-12000)}` : fato,
+                    }));
+                };
+                const relogio = setTimeout(() => {
+                    estourouPrazo = true;
+                    log.warn(`[EXEC-PRAZO] limite de ${timeout} ms atingido — encerrando a árvore do processo pid=${filho.pid}`);
+                    encerrarArvore(filho.pid);
+                    // Se algo da árvore escapou e segura a saída aberta, o retorno não fica preso esperando por ela.
+                    setTimeout(() => rejeitarPorPrazo(''), 5000).unref();
+                }, timeout);
             });
 
             // Contrato de artefato (docs/sprints-r1-r7-2026-07-13/REVISAO_ARQUITETURAL_SPRINT_R7_2026-07-13.md): scripts
