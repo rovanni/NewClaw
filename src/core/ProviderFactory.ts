@@ -8,7 +8,7 @@ import { createLogger } from '../shared/AppLogger';
 import { errorMessage } from '../shared/errors';
 import { circuitRegistry } from './CircuitBreaker';
 import { getLocalRuntimeLifecycle } from './localRuntimeState';
-import { LLMMessage, LLMResponse, ToolDefinition, LLMResult, AttemptInfo, FallbackReason, ToolCall, ILLMProvider, ChatOptions, CustomProviderConfig, ChatFallbackOptions, LlmCallDiag, REASONING_INTENSIVE_TIMEOUT_FLOOR_MS, AttemptTelemetry, ehModeloDaNuvemDoOllama, mensagemSemModeloEscolhido, caracteresQueCabem, DECISION_PROMPT_MAX_CHARS } from './providerTypes';
+import { LLMMessage, LLMResponse, ToolDefinition, LLMResult, AttemptInfo, FallbackReason, ToolCall, ILLMProvider, ChatOptions, CustomProviderConfig, ChatFallbackOptions, LlmCallDiag, REASONING_INTENSIVE_TIMEOUT_FLOOR_MS, AttemptTelemetry, CallTelemetry, ehModeloDaNuvemDoOllama, mensagemSemModeloEscolhido, caracteresQueCabem, DECISION_PROMPT_MAX_CHARS } from './providerTypes';
 import { GeminiProvider } from './GeminiProvider';
 import { DeepSeekProvider } from './DeepSeekProvider';
 import { GroqProvider } from './GroqProvider';
@@ -16,6 +16,7 @@ import { getBudgetAuxiliar, PerfilAuxiliar, OrcamentoAuxiliar } from '../shared/
 import { OpenAIProvider, OpenRouterProvider } from './OpenAIProvider';
 import { OllamaProvider, NO_MODEL_CONFIGURED_MESSAGE } from './OllamaProvider';
 import { mascararProfundo } from '../shared/segredos';
+import { medidorDoProcesso, observacaoDaChamada } from './medidorDeTrabalho';
 import { AnthropicProvider } from './AnthropicProvider';
 
 // Nomes reservados pelos providers nativos — um customProvider com label colidente seria
@@ -345,10 +346,30 @@ export class ProviderFactory {
         // ADR-019: nenhum valor do cofre ou de chave de API sai para um modelo — vale para todo componente que chama um
         // LLM, inclusive texto que chegou à memória antes de o cofre existir. Cópia: o array de quem chamou não muda.
         messages = mascararProfundo(messages);
-        const result = await this.chatWithFallbackImpl(messages, tools, preferredProvider, timeoutMs, externalSignal, modelOverride, opts);
+        // ADR-024 (etapa 1, SOMBRA): toda chamada é observada em tokens — se quem chamou não pediu telemetria, uma interna só
+        // para medir. Nada abaixo decide com ela.
+        const telemetriaInterna: CallTelemetry | undefined = opts?.telemetry ? undefined : { attempts: [] };
+        const optsObservadas = telemetriaInterna ? { ...opts, telemetry: telemetriaInterna } : opts;
+        const result = await this.chatWithFallbackImpl(messages, tools, preferredProvider, timeoutMs, externalSignal, modelOverride, optsObservadas);
         try {
             log.info(`[LLM-CALL] ${buildLlmCallSummary(opts?.diag, messages, result, Date.now() - t0)}`);
         } catch { /* diagnóstico nunca derruba a chamada */ }
+        try {
+            const tentativas = (optsObservadas?.telemetry?.attempts ?? []).filter(a => a.model !== 'non-streaming-fallback');
+            const ultima = tentativas[tentativas.length - 1];
+            if (ultima || result.usage) {
+                const obs = observacaoDaChamada({
+                    modelo: ultima?.model ?? modelOverride ?? '(padrão do provedor)',
+                    modo: opts?.raciocinio ?? 'padrao',
+                    tipo: `${opts?.diag?.component ?? 'sem_rotulo'}:${opts?.diag?.phase ?? opts?.diag?.role ?? '-'}`,
+                    status: result.status, tentativa: ultima, usage: result.usage,
+                    charsDeEntrada: messages.reduce((n, m) => n + (typeof m.content === 'string' ? m.content.length : 0), 0),
+                    msTotal: Date.now() - t0,
+                    canceladaPeloUsuario: !!sinalDoTurno()?.aborted,
+                });
+                log.info(`[TOKENS-SOMBRA] ${medidorDoProcesso.registrar(obs)}`);
+            }
+        } catch { /* medição nunca derruba a chamada */ }
         return result;
     }
 

@@ -10,6 +10,7 @@ import Database from 'better-sqlite3';
 import { ProviderFactory } from './ProviderFactory';
 import { ModelRegistryService } from './ModelRegistryService';
 import { perfilDoJuizDoProcesso } from '../validation/perfilDoJuiz';
+import { medidorDoProcesso } from './medidorDeTrabalho';
 import { AgentLoop } from '../loop/AgentLoop';
 import type { ChannelContext } from '../loop/agentLoopTypes';
 import { MemoryManager } from '../memory/MemoryManager';
@@ -217,6 +218,8 @@ export class AgentController {
         // ADR-016 — o juiz descobre o que o provedor DECLARA de cada modelo (ex.: o Ollama devolve `capabilities`) e aprende
         // pelo uso como o modelo se comporta como juiz; o aprendizado fica em disco, entre reinícios.
         perfilDoJuizDoProcesso.persistirEm(path.join(process.cwd(), 'data', 'validation-judge-profile.json'));
+        // ADR-024 (etapa 1, sombra): velocidades por modelo e tokens por tipo de chamada, medidos pelo uso, entre reinícios.
+        medidorDoProcesso.persistirEm(path.join(process.cwd(), 'data', 'medicao-de-tokens.json'));
         perfilDoJuizDoProcesso.definirResolvedorDeCapacidades(async (modelo) => {
             const catalogo = await this.modelRegistryService.getCatalog();
             const info = catalogo.find(m => m.id === modelo);

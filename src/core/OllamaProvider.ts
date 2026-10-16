@@ -7,6 +7,11 @@ import { assertNotSsrfTarget } from './ssrfGuard';
 
 const log = createLogger('Providerfactory');
 
+/** Durações do Ollama vêm em nanossegundos; `undefined` quando o servidor não informa (ADR-024: nunca inventar o número). */
+function nsParaMs(ns: unknown): number | undefined {
+    return typeof ns === 'number' && Number.isFinite(ns) && ns > 0 ? ns / 1e6 : undefined;
+}
+
 // Ollama native returns args as object; OpenAI-compat mode returns JSON string.
 function parseToolArgs(args: unknown): Record<string, unknown> {
     if (!args) return {};
@@ -399,7 +404,7 @@ export class OllamaProvider implements ILLMProvider {
                         log.info(`[${streamId}] [STREAM] DONE done_reason="${doneReason}" prompt_eval=${chunk.prompt_eval_count || 0} eval=${chunk.eval_count || 0} stats=${JSON.stringify(stats)} elapsed=${Date.now() - startTime}ms`);
                         yield {
                             type: 'done',
-                            value: { prompt_tokens: chunk.prompt_eval_count || 0, completion_tokens: chunk.eval_count || 0, done_reason: chunk.done_reason as string | undefined }
+                            value: { prompt_tokens: chunk.prompt_eval_count || 0, completion_tokens: chunk.eval_count || 0, done_reason: chunk.done_reason as string | undefined, prompt_ms: nsParaMs(chunk.prompt_eval_duration), eval_ms: nsParaMs(chunk.eval_duration) }
                         } as StreamChunk;
                         return;
                     }
@@ -420,7 +425,7 @@ export class OllamaProvider implements ILLMProvider {
                     if (chunk.done) {
                         const doneReason = chunk.done_reason || '(not provided)';
                         log.info(`[${streamId}] [STREAM] DONE in buffer flush. done_reason="${doneReason}" stats=${JSON.stringify(stats)}`);
-                        yield { type: 'done', value: { prompt_tokens: chunk.prompt_eval_count || 0, completion_tokens: chunk.eval_count || 0, done_reason: chunk.done_reason as string | undefined } } as StreamChunk;
+                        yield { type: 'done', value: { prompt_tokens: chunk.prompt_eval_count || 0, completion_tokens: chunk.eval_count || 0, done_reason: chunk.done_reason as string | undefined, prompt_ms: nsParaMs(chunk.prompt_eval_duration), eval_ms: nsParaMs(chunk.eval_duration) } } as StreamChunk;
                     }
                 } catch {
                     log.warn(`[${streamId}] [STREAM] Failed to parse remaining buffer: ${buffer.trim().slice(0, 80)}...`);
@@ -457,6 +462,7 @@ export class OllamaProvider implements ILLMProvider {
         let thinking = '';
         const toolCalls: RawToolCall[] = [];
         let usage: OpenAIChatResponse['usage'] | undefined = undefined;
+        let temposDoServidor: { prompt_ms?: number; eval_ms?: number } = {};
         // Issue 060: fim normal = chunk 'done' recebido e não cortado por limite de tokens.
         let doneReason: string | undefined;
         let sawDone = false;
@@ -475,7 +481,7 @@ export class OllamaProvider implements ILLMProvider {
             if (!tele) return;
             Object.assign(tele, {
                 chunks: chunkCount, thinkingChars: thinking.length, contentChars: content.length, toolCalls: toolCalls.length,
-                doneReason, promptTokens: usage?.prompt_tokens, evalTokens: usage?.completion_tokens,
+                doneReason, promptTokens: usage?.prompt_tokens, evalTokens: usage?.completion_tokens, promptEvalMs: temposDoServidor.prompt_ms, evalMs: temposDoServidor.eval_ms,
                 thinkingText: thinking, contentText: content,
             });
         };
@@ -497,7 +503,7 @@ export class OllamaProvider implements ILLMProvider {
                     case 'content': content += chunk.value; break;
                     case 'thinking': thinking += chunk.value; break;
                     case 'tool_call': toolCalls.push(chunk.value); break;
-                    case 'done': usage = chunk.value; sawDone = true; doneReason = chunk.value.done_reason; break;
+                    case 'done': usage = chunk.value; sawDone = true; doneReason = chunk.value.done_reason; temposDoServidor = { prompt_ms: chunk.value.prompt_ms, eval_ms: chunk.value.eval_ms }; break;
                 }
             }
         } catch (streamErr) {

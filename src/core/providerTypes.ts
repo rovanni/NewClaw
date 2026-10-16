@@ -67,7 +67,7 @@ export type StreamChunk =
     | { type: 'content'; value: string }
     | { type: 'thinking'; value: string }
     | { type: 'tool_call'; value: RawToolCall }
-    | { type: 'done'; value: { prompt_tokens: number; completion_tokens: number; done_reason?: string } };
+    | { type: 'done'; value: { prompt_tokens: number; completion_tokens: number; done_reason?: string; prompt_ms?: number; eval_ms?: number } };
 
 export interface LLMMessage {
     role: 'user' | 'assistant' | 'system' | 'tool';
@@ -262,6 +262,9 @@ export interface AttemptTelemetry {
     doneReason?: string;
     promptTokens?: number;
     evalTokens?: number;
+    /** Tempos que o SERVIDOR mediu (Ollama: prompt_eval_duration / eval_duration) — ADR-024. Ausentes = não informados. */
+    promptEvalMs?: number;
+    evalMs?: number;
     /** Amostras a cada TELEMETRY_SAMPLE_MS: quanto já tinha de raciocínio e de conteúdo. */
     timeline?: Array<{ ms: number; thinkingChars: number; contentChars: number }>;
     /** Texto bruto — inclusive o raciocínio de uma geração abortada. Quem grava decide se persiste (TRACE_CONTENT). */
