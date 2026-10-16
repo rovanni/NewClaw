@@ -17,12 +17,15 @@ import { errorMessage } from '../shared/errors';
 import { createLogger } from '../shared/AppLogger';
 import { processVision } from '../core/agentMediaHandlers';
 import { resolvePython3Runtime, defaultPython3Candidates } from '../utils/crossPlatform';
+import { FORMATOS_DO_READ_DOCUMENT } from './formatosDeDocumento';
 import type { ProviderFactory } from '../core/ProviderFactory';
 import type { ModelProfileRegistry } from '../loop/ModelProfileRegistry';
 
 const execAsync = promisify(exec);
 // execFile não passa pelo shell — elimina risco de injeção de comandos via args
 const execFileAsync = promisify(execFile);
+
+const FORMATOS = FORMATOS_DO_READ_DOCUMENT;
 
 /**
  * O erro REAL de uma tentativa (primeira linha do stderr, senão da mensagem), para a falha final relatar fatos — o que foi tentado
@@ -118,15 +121,15 @@ export class ReadDocumentTool implements ToolExecutor {
             }
         }
 
-        if (ext === '.pdf') {
+        if (FORMATOS.pdf.includes(ext)) {
             return this.extractPdf(filePath, pages);
         }
 
-        if (['.docx', '.odt', '.rtf'].includes(ext)) {
+        if (FORMATOS.escritorio.includes(ext)) {
             return this.extractOffice(filePath);
         }
 
-        if (['.png', '.jpg', '.jpeg', '.tiff', '.bmp', '.gif'].includes(ext)) {
+        if (FORMATOS.imagem.includes(ext)) {
             // Prompt explícito (ex: crítica visual de um screenshot) → modelo de visão.
             // Sem prompt → comportamento original (OCR), não muda para nenhum caller existente.
             if (prompt) {

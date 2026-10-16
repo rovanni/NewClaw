@@ -14,6 +14,7 @@ import { createHash } from 'crypto';
 import { ProviderFactory, LLMMessage, ToolDefinition, LLMResult, MetricsSummary, ToolCall } from '../core/ProviderFactory';
 import { computeDynamicTimeout } from '../shared/dynamicTimeout';
 import { caracteresQueCabem } from '../core/providerTypes';
+import { ferramentaQueLe } from '../tools/formatosDeDocumento';
 import { CognitiveWorkspace } from '../cognitive/CognitiveWorkspace';
 import { SessionContext } from '../session/SessionContext';
 import type { SessionKey } from '../session/SessionManager';
@@ -3222,9 +3223,11 @@ export class AgentLoop {
                 const pathArg = String(resolvedArgs.path || '');
                 const filename = pathArg.replace(/\\/g, '/').split('/').pop() || '';
                 if (filename) binaryReadFilenames.add(filename);
+                // Regra 11 do AGENTS.md: o fato e, se houver, a ferramenta do próprio NewClaw que lê o formato.
+                const leitor = ferramentaQueLe(filename || pathArg);
                 loopMessages.push({
                     role: 'system',
-                    content: `[ARQUIVO BINÁRIO] "${filename || pathArg}" não pode ser lido com "read". Use exec_command com a ferramenta adequada (python-pptx, pandoc, pdftotext, etc.). NÃO tente "read" neste arquivo novamente.`,
+                    content: `[ARQUIVO BINÁRIO] "${filename || pathArg}" não pode ser lido com "read".${leitor ? ` Para extrair o conteúdo, use ${leitor}.` : ''} NÃO tente "read" neste arquivo novamente.`,
                 });
             } else if (resolvedToolName === 'exec_command' && /no such file or directory/i.test(errorText)) {
                 // Path não existe — sugere explorar o workspace antes de adivinhar caminhos
@@ -3336,14 +3339,17 @@ export class AgentLoop {
             }
             if (filename && binaryReadFilenames.has(filename)) {
                 log.warn(`[${this.ts()}] [BINARY-READ-BLOCK] Blocked repeated read of binary file: ${filename}`);
+                // Regra 11 do AGENTS.md: o fato e, se houver, a ferramenta do próprio NewClaw que lê o formato — nunca programas
+                // externos que podem não existir (antes: "use exec_command com python-pptx, pandoc, pdftotext").
+                const leitor = ferramentaQueLe(filename);
                 loopMessages.push({
                     role: 'tool',
-                    content: `[BLOQUEADO] "${filename}" é um arquivo binário — "read" não consegue processá-lo. Use exec_command com python-pptx, pandoc, pdftotext ou similar para extrair o conteúdo.`,
+                    content: `[BLOQUEADO] "${filename}" é um arquivo binário — "read" não consegue processá-lo.${leitor ? ` Para extrair o conteúdo, use ${leitor}.` : ''}`,
                     tool_call_id: toolCall.id,
                 });
                 loopMessages.push({
                     role: 'system',
-                    content: `⚠️ NÃO chame "read" em "${filename}" novamente. Abordagem obrigatória: use exec_command com a ferramenta adequada para o formato ${filename.split('.').pop()?.toUpperCase()}.`,
+                    content: `⚠️ NÃO chame "read" em "${filename}" novamente.${leitor ? ` Use ${leitor}.` : ''}`,
                 });
                 return passthrough();
             }

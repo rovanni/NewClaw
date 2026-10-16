@@ -17,6 +17,7 @@ import { resolvePath } from '../utils/crossPlatform';
 import { errorMessage } from '../shared/errors';
 import { createLogger } from '../shared/AppLogger';
 import { PLACEHOLDER_ARG_PATTERN as PATH_PLACEHOLDER_PATTERN } from '../shared/placeholderPatterns';
+import { ferramentaQueLe } from './formatosDeDocumento';
 
 const log = createLogger('ReadTool');
 
@@ -73,7 +74,9 @@ export class ReadTool implements ToolExecutor {
 
         const ext = path.extname(rawPath).toLowerCase();
         if (BINARY_EXTENSIONS.has(ext)) {
-            return { success: false, output: '', error: `Arquivos binários (${ext}) não podem ser lidos como texto. Para PDF/DOC use exec_command com ferramentas como pdftotext ou pandoc.` };
+            // Regra 11 do AGENTS.md: o fato, e a ferramenta do próprio NewClaw que lê o formato (se houver) — sem receita externa.
+            const leitor = ferramentaQueLe(rawPath);
+            return { success: false, output: '', error: `Arquivos binários (${ext}) não podem ser lidos como texto pela ferramenta read.${leitor ? ` Para extrair o conteúdo, use ${leitor}.` : ''}` };
         }
 
         // Max readable size: 200 KB — larger files flood the context
