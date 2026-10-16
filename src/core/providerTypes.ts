@@ -235,6 +235,12 @@ export interface ChatFallbackOptions {
      * Provedor que não suporta ignora.
      */
     saidaJson?: boolean;
+    /**
+     * ADR-024: limite de tokens de SAÍDA (raciocínio + resposta) enviado ao PRÓPRIO provedor (Ollama: `num_predict`;
+     * OpenAI-compatível: `max_tokens`) — o modelo para sozinho, sem relógio. Medido: o Ollama Cloud respeita (16/10/2026,
+     * done_reason=length; o raciocínio consome o limite). Ausente = sem limite (comportamento anterior).
+     */
+    limiteDeSaidaTokens?: number;
 }
 
 /** Gravador de voo (ADR-013): o que aconteceu numa chamada ao LLM, tentativa por tentativa. */
@@ -360,4 +366,6 @@ export interface ChatOptions {
     raciocinio?: 'desligado' | 'livre';
     /** Ver `ChatFallbackOptions.saidaJson`. */
     saidaJson?: boolean;
+    /** Ver `ChatFallbackOptions.limiteDeSaidaTokens` (ADR-024). */
+    limiteDeSaidaTokens?: number;
 }

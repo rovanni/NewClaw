@@ -3,7 +3,8 @@
  * Suporta: Gemini, DeepSeek, Groq, OpenAI, OpenRouter, Anthropic, Ollama
  */
 
-import { combinarSinais, sinalDoTurno } from '../shared/turnCancellation';
+import { combinarSinais, sinalDoTurno, prazoDoTurno } from '../shared/turnCancellation';
+import { GOAL_LIMITS } from '../loop/GoalLimits';
 import { createLogger } from '../shared/AppLogger';
 import { errorMessage } from '../shared/errors';
 import { circuitRegistry } from './CircuitBreaker';
@@ -16,7 +17,10 @@ import { getBudgetAuxiliar, PerfilAuxiliar, OrcamentoAuxiliar } from '../shared/
 import { OpenAIProvider, OpenRouterProvider } from './OpenAIProvider';
 import { OllamaProvider, NO_MODEL_CONFIGURED_MESSAGE } from './OllamaProvider';
 import { mascararProfundo } from '../shared/segredos';
-import { medidorDoProcesso, observacaoDaChamada } from './medidorDeTrabalho';
+import { medidorDoProcesso, observacaoDaChamada, CHARS_POR_TOKEN_PTBR } from './medidorDeTrabalho';
+
+/** Folga sobre o tempo que o orçamento em tokens dá na velocidade medida (ADR-024): a velocidade varia entre chamadas. */
+const FOLGA_DE_TEMPO = 1.25;
 import { AnthropicProvider } from './AnthropicProvider';
 
 // Nomes reservados pelos providers nativos — um customProvider com label colidente seria
@@ -310,6 +314,27 @@ export class ProviderFactory {
         return ollama ? ollama.janelaEfetiva(modelo || ollama.getModel()) : undefined;
     }
 
+    /**
+     * ADR-024 (etapa 3): o que um trabalho deste TIPO costuma custar a ESTE modelo NESTE modo de raciocínio — em tokens
+     * (p95 × folga do que concluiu, aprendido pelo uso) — e quanto tempo isso dá na velocidade MEDIDA dele (leitura do
+     * prompt + geração). `null` sem histórico suficiente ou sem velocidade medida: quem chama segue com o prazo de sempre.
+     * O tempo nunca passa do que resta ao objetivo (ou do limite de um objetivo) — proteção contra travamento.
+     */
+    orcamentoPeloTrabalho(modelo: string | undefined, modo: 'livre' | 'desligado' | undefined, tipo: string, charsDeEntrada: number):
+        { modelo: string; tokens: number; prazoMs: number; amostras: number; geracao: number; leitura?: number } | null {
+        const nome = modelo || this.modeloPadraoDe(this.defaultProvider);
+        if (!nome) return null;
+        const m = modo ?? 'padrao';
+        const orc = medidorDoProcesso.orcamento(nome, m, tipo);
+        const vel = medidorDoProcesso.velocidade(nome, m);
+        if (!orc || !vel.geracao) return null;
+        const entradaTokens = charsDeEntrada / CHARS_POR_TOKEN_PTBR;
+        const bruto = (orc.tokens / vel.geracao + (vel.leitura ? entradaTokens / vel.leitura : 0)) * 1000 * FOLGA_DE_TEMPO + 5000;
+        const prazoFinal = prazoDoTurno();
+        const teto = prazoFinal ? Math.max(prazoFinal - Date.now(), 5000) : GOAL_LIMITS.MAX_GOAL_TTL_MS;
+        return { modelo: nome, tokens: orc.tokens, prazoMs: Math.round(Math.min(bruto, teto)), amostras: orc.amostras, geracao: vel.geracao, leitura: vel.leitura };
+    }
+
     getBudgetAuxiliar(perfil: PerfilAuxiliar, tamanhoDoTrabalhoChars?: number): OrcamentoAuxiliar {
         return getBudgetAuxiliar(perfil, this.defaultProvider, {
             getLatenciaTipicaMs: (provedor: string) =>
@@ -545,7 +570,7 @@ export class ProviderFactory {
                     // O que sobra do prazo de quem chamou (na primeira tentativa, o próprio `timeoutMs`).
                     const restanteDaTentativa = restanteDoPrazo();
                     const timeoutDaTentativa = (timeoutMs && restanteDaTentativa !== undefined) ? Math.min(timeoutMs, Math.max(1, restanteDaTentativa)) : timeoutMs;
-                    const chatOptions: ChatOptions = { signal: currentAbort.signal, timeoutMs: timeoutDaTentativa, reasoningIntensive: opts?.reasoningIntensive, telemetry: tentativaTele, raciocinio: opts?.raciocinio, saidaJson: opts?.saidaJson };
+                    const chatOptions: ChatOptions = { signal: currentAbort.signal, timeoutMs: timeoutDaTentativa, reasoningIntensive: opts?.reasoningIntensive, telemetry: tentativaTele, raciocinio: opts?.raciocinio, saidaJson: opts?.saidaJson, limiteDeSaidaTokens: opts?.limiteDeSaidaTokens };
                     const chatPromise = provider.chat(mensagensDoProvider, tools, chatOptions);
                     let result: LLMResponse;
 
@@ -734,7 +759,7 @@ export class ProviderFactory {
                         ? { provider: 'ollama', model: `${ollamaProvider.getModel()} (sem streaming)`, startedAt: new Date().toISOString() } : undefined;
                     if (teleNaoStreaming) opts!.telemetry!.attempts.push(teleNaoStreaming);
                     const t0NaoStreaming = Date.now();
-                    const result = await ollamaProvider.fallbackNonStreaming(mensagensNaoStreaming, tools, effectiveNonStreamingTimeoutMs, undefined, opts?.raciocinio, opts?.saidaJson)
+                    const result = await ollamaProvider.fallbackNonStreaming(mensagensNaoStreaming, tools, effectiveNonStreamingTimeoutMs, undefined, opts?.raciocinio, opts?.saidaJson, opts?.limiteDeSaidaTokens)
                         .catch((e) => { if (teleNaoStreaming) Object.assign(teleNaoStreaming, { status: 'error', errorMessage: errorMessage(e), durationMs: Date.now() - t0NaoStreaming }); throw e; });
                     if (teleNaoStreaming) Object.assign(teleNaoStreaming, { status: result.content?.trim() ? 'success' : 'empty', durationMs: Date.now() - t0NaoStreaming, contentChars: (result.content || '').length, contentText: result.content || '' });
                     if (result.content && result.content.trim()) {

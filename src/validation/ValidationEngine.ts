@@ -18,7 +18,8 @@
 import type { ProviderFactory } from '../core/ProviderFactory';
 import { DECISION_PROMPT_MAX_CHARS, type CallTelemetry } from '../core/providerTypes';
 import { createLogger } from '../shared/AppLogger';
-import { combinarSinais, sinalDoTurno } from '../shared/turnCancellation';
+import { combinarSinais, sinalDoTurno, prazoDoTurno } from '../shared/turnCancellation';
+import { GOAL_LIMITS } from '../loop/GoalLimits';
 import { PerfilDoJuiz } from './perfilDoJuiz';
 import { descreverAgora } from '../shared/dataEHora';
 import { descreverAmbienteDeExecucao } from '../shared/ambienteDeExecucao';
@@ -208,7 +209,25 @@ export class ValidationEngine {
             return naoAvaliavel(`o modelo vem falhando como juiz deste tipo (${d.tipo}) em todos os modos (nova sondagem em ${seg} s)`, 'juiz_indisponivel');
         }
         const modos = await this.perfil.modosParaTentar(chaveDoModelo, d.raciocinio);
-        const limite = t0 + orcamento.timeoutMs;
+        // ADR-024 (etapa 3): o que ESTE trabalho custa a ESTE modelo em cada modo — tokens aprendidos pelo uso e a velocidade
+        // MEDIDA dele. Só ESTENDE o prazo (nunca corta antes do que cortava): um modelo lento (local, ~38 tokens/s) ganha o
+        // tempo que o trabalho dele precisa; um rápido segue como antes. Sem histórico (< amostra mínima): prazo de sempre.
+        const pelaMedicao = new Map<string, { modelo: string; tokens: number; prazoMs: number; amostras: number; geracao: number }>();
+        if (typeof this.providerFactory.orcamentoPeloTrabalho === 'function') {
+            for (const m of modos) {
+                const o = this.providerFactory.orcamentoPeloTrabalho(modelo || undefined, m, `ValidationEngine:${d.tipo}`, prompt.length);
+                if (o) pelaMedicao.set(m, o);
+            }
+        }
+        const prazoFinalDoObjetivo = prazoDoTurno();
+        const tetoDoObjetivo = prazoFinalDoObjetivo ? Math.max(prazoFinalDoObjetivo - Date.now(), 5000) : GOAL_LIMITS.MAX_GOAL_TTL_MS;
+        const somaMedida = [...pelaMedicao.values()].reduce((n, o) => n + o.prazoMs, 0);
+        const prazoTotal = Math.max(orcamento.timeoutMs, Math.min(somaMedida, tetoDoObjetivo));
+        if (prazoTotal > orcamento.timeoutMs) {
+            orcamentoMs = prazoTotal;
+            log.info(`[VALIDACAO] tipo=${d.tipo} prazo pelo trabalho medido: ${[...pelaMedicao].map(([m, o]) => `${m}=${o.tokens} tokens a ${o.geracao.toFixed(1)} tok/s (n=${o.amostras}) → ${Math.round(o.prazoMs / 1000)} s`).join('; ')} — prazo ${Math.round(orcamento.timeoutMs / 1000)} s → ${Math.round(prazoTotal / 1000)} s`);
+        }
+        const limite = t0 + prazoTotal;
         let lido: ReturnType<typeof lerSaidaDoModelo> = null;
         let falha: { porque: string; desfecho: string } = { porque: 'sem tempo para chamar o modelo', desfecho: 'llm_timeout' };
         for (let i = 0; i < modos.length; i++) {
@@ -216,11 +235,14 @@ export class ValidationEngine {
             if (restante < Math.min(5000, orcamento.timeoutMs * 0.1)) break;
             const ultimo = i === modos.length - 1;
             const confiavel = i === 0 && this.perfil.confiavel(chaveDoModelo, modos[0]);
-            const fatia = ultimo
+            const medidoDoModo = pelaMedicao.get(modos[i]);
+            let fatia = ultimo
                 ? restante
                 : (confiavel
                     ? (orcamento.timeoutMs >= 15000 ? Math.max(1, Math.round(restante * 0.75)) : restante)
                     : Math.max(1, Math.round(restante * FATIA_DO_PRIMEIRO_MODO)));
+            // O modo com custo medido recebe pelo menos o que o trabalho dele precisa (dentro do que resta).
+            if (medidoDoModo && !ultimo) fatia = Math.max(fatia, Math.min(restante, medidoDoModo.prazoMs));
             const ctrl = new AbortController();
             const timer = setTimeout(() => ctrl.abort(), fatia);
             const t1 = Date.now();
@@ -229,7 +251,7 @@ export class ValidationEngine {
             try {
                 resultado = await this.providerFactory.chatWithFallback(
                     [{ role: 'user', content: prompt }], undefined, undefined, fatia, combinarSinais(opcoes.signal, ctrl.signal), modelo || undefined,
-                    { reasoningIntensive: modos[i] === 'livre', raciocinio: modos[i], saidaJson: true, diag: { component: 'ValidationEngine', role: 'validator', phase: d.tipo, goalId: opcoes.goalId }, telemetry: telemetria },
+                    { reasoningIntensive: modos[i] === 'livre', raciocinio: modos[i], saidaJson: true, limiteDeSaidaTokens: medidoDoModo?.tokens, diag: { component: 'ValidationEngine', role: 'validator', phase: d.tipo, goalId: opcoes.goalId }, telemetry: telemetria },
                 );
             } catch (err) {
                 // Falha de infraestrutura (rede, provedor): não diz nada sobre o modo — não pune o perfil nem tenta o outro.

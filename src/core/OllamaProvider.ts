@@ -185,7 +185,7 @@ export class OllamaProvider implements ILLMProvider {
                 if (queueWaitMs > 500) {
                     log.info(`[STREAM] Queue wait: ${queueWaitMs}ms — remaining budget: ${remainingMs ?? 'default'}ms`);
                 }
-                return this._consumeStream(messages, tools, remainingMs, options?.signal, options?.reasoningIntensive, options?.telemetry, options?.raciocinio, options?.saidaJson);
+                return this._consumeStream(messages, tools, remainingMs, options?.signal, options?.reasoningIntensive, options?.telemetry, options?.raciocinio, options?.saidaJson, options?.limiteDeSaidaTokens);
             },
             { priority }
         );
@@ -209,7 +209,7 @@ export class OllamaProvider implements ILLMProvider {
      *
      * Handles partial buffers (lines broken between chunks).
      */
-    async *streamChat(messages: LLMMessage[], tools?: ToolDefinition[], customTimeoutMs?: number, externalSignal?: AbortSignal, reasoningIntensive?: boolean, raciocinio?: 'desligado' | 'livre', saidaJson?: boolean): AsyncGenerator<StreamChunk> {
+    async *streamChat(messages: LLMMessage[], tools?: ToolDefinition[], customTimeoutMs?: number, externalSignal?: AbortSignal, reasoningIntensive?: boolean, raciocinio?: 'desligado' | 'livre', saidaJson?: boolean, limiteDeSaida?: number): AsyncGenerator<StreamChunk> {
         if (!this.model) throw new Error(NO_MODEL_CONFIGURED_MESSAGE);
         const streamId = `str-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 5)}`;
         const headers: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -302,7 +302,8 @@ export class OllamaProvider implements ILLMProvider {
             // ADR-014: tipo de validação que declara raciocínio desligado → o Ollama não raciocina antes de responder.
             ...(raciocinio === 'desligado' ? { think: false } : {}),
             ...(saidaJson ? { format: 'json' } : {}),   // saída estruturada (ver ChatFallbackOptions.saidaJson)
-            options: { num_ctx: numCtx },
+            // ADR-024: limite de tokens de saída, quando quem chama declara (o modelo para sozinho, sem relógio).
+            options: { num_ctx: numCtx, ...(limiteDeSaida && limiteDeSaida > 0 ? { num_predict: Math.round(limiteDeSaida) } : {}) },
             tools: tools ? tools.map(t => ({
                 type: 'function',
                 function: { name: t.name, description: t.description, parameters: t.parameters }
@@ -457,7 +458,7 @@ export class OllamaProvider implements ILLMProvider {
      * Consume the streaming generator and collect full response.
      * On stream failure, throws — caller handles retries and fallback.
      */
-    private async _consumeStream(messages: LLMMessage[], tools?: ToolDefinition[], customTimeoutMs?: number, externalSignal?: AbortSignal, reasoningIntensive?: boolean, telemetry?: AttemptTelemetry, raciocinio?: 'desligado' | 'livre', saidaJson?: boolean): Promise<LLMResponse> {
+    private async _consumeStream(messages: LLMMessage[], tools?: ToolDefinition[], customTimeoutMs?: number, externalSignal?: AbortSignal, reasoningIntensive?: boolean, telemetry?: AttemptTelemetry, raciocinio?: 'desligado' | 'livre', saidaJson?: boolean, limiteDeSaida?: number): Promise<LLMResponse> {
         let content = '';
         let thinking = '';
         const toolCalls: RawToolCall[] = [];
@@ -488,7 +489,7 @@ export class OllamaProvider implements ILLMProvider {
         if (tele) tele.timeline = [];
 
         try {
-            for await (const chunk of this.streamChat(messages, tools, customTimeoutMs, externalSignal, reasoningIntensive, raciocinio, saidaJson)) {
+            for await (const chunk of this.streamChat(messages, tools, customTimeoutMs, externalSignal, reasoningIntensive, raciocinio, saidaJson, limiteDeSaida)) {
                 chunkCount++;
                 if (tele) {
                     const ms = Date.now() - startTime;
@@ -574,7 +575,7 @@ export class OllamaProvider implements ILLMProvider {
      * Fallback: non-streaming request when streaming fails.
      * Only safe to call as last resort from chatWithFallback.
      */
-    public async fallbackNonStreaming(messages: LLMMessage[], tools?: ToolDefinition[], customTimeoutMs?: number, externalSignal?: AbortSignal, raciocinio?: 'desligado' | 'livre', saidaJson?: boolean): Promise<LLMResponse> {
+    public async fallbackNonStreaming(messages: LLMMessage[], tools?: ToolDefinition[], customTimeoutMs?: number, externalSignal?: AbortSignal, raciocinio?: 'desligado' | 'livre', saidaJson?: boolean, limiteDeSaida?: number): Promise<LLMResponse> {
         if (!this.model) throw new Error(NO_MODEL_CONFIGURED_MESSAGE);
         const numCtx = this.numCtx;
         const headers: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -599,7 +600,7 @@ export class OllamaProvider implements ILLMProvider {
                     stream: false,
                     ...(raciocinio === 'desligado' ? { think: false } : {}),   // ADR-014
                     ...(saidaJson ? { format: 'json' } : {}),
-                    options: { num_ctx: numCtx },
+                    options: { num_ctx: numCtx, ...(limiteDeSaida && limiteDeSaida > 0 ? { num_predict: Math.round(limiteDeSaida) } : {}) },
                     tools: tools ? tools.map(t => ({
                         type: 'function',
                         function: { name: t.name, description: t.description, parameters: t.parameters }

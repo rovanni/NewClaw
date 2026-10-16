@@ -270,6 +270,8 @@ export class OpenAIProvider implements ILLMProvider {
                         // ADR-014 (campanha 09/10/2026): declarado o controle, a chamada que pede raciocínio
                         // 'desligado' (descritor de validação) prevalece — mesmo efeito do `think: false` do Ollama.
                         ...(options?.saidaJson ? { response_format: { type: 'json_object' } } : {}),
+                        // ADR-024: limite de tokens de saída declarado por quem chama — o modelo para sozinho, sem relógio.
+                        ...(options?.limiteDeSaidaTokens && options.limiteDeSaidaTokens > 0 ? { max_tokens: Math.round(options.limiteDeSaidaTokens) } : {}),
                         ...(this.thinking ? { chat_template_kwargs: { enable_thinking: options?.raciocinio === 'desligado' ? false : this.thinking === 'on' } } : {}),
                     })
                 });
