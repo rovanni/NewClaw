@@ -208,7 +208,7 @@ export class ValidationEngine {
             log.warn(`[VALIDACAO] tipo=${d.tipo} modelo=${chaveDoModelo} vem falhando como juiz deste tipo em todos os modos — não chamado por mais ${seg} s (disjuntor do tipo)`);
             return naoAvaliavel(`o modelo vem falhando como juiz deste tipo (${d.tipo}) em todos os modos (nova sondagem em ${seg} s)`, 'juiz_indisponivel');
         }
-        const modos = await this.perfil.modosParaTentar(chaveDoModelo, d.raciocinio);
+        let modos = await this.perfil.modosParaTentar(chaveDoModelo, d.raciocinio);
         // ADR-024 (etapa 3): o que ESTE trabalho custa a ESTE modelo em cada modo — tokens aprendidos pelo uso e a velocidade
         // MEDIDA dele. Só ESTENDE o prazo (nunca corta antes do que cortava): um modelo lento (local, ~38 tokens/s) ganha o
         // tempo que o trabalho dele precisa; um rápido segue como antes. Sem histórico (< amostra mínima): prazo de sempre.
@@ -217,6 +217,18 @@ export class ValidationEngine {
             for (const m of modos) {
                 const o = this.providerFactory.orcamentoPeloTrabalho(modelo || undefined, m, `ValidationEngine:${d.tipo}`, prompt.length);
                 if (o) pelaMedicao.set(m, o);
+            }
+        }
+        // ADR-024 (etapa 4): entre modos que JÁ provaram dar veredito para este modelo, o mais BARATO em tokens neste tipo de
+        // trabalho. Medido em 16/10: sem raciocínio, um modelo local deu veredito com ~10× menos tokens. Mas trocar o modo pode
+        // mudar a QUALIDADE (5 casos comparados é pouco) — por isso, por padrão, só registra (sombra); troca de verdade só com
+        // JUIZ_MODO_PELO_CUSTO=1.
+        if (modos.length > 1 && modos.every(m => pelaMedicao.has(m) && this.perfil.confiavel(chaveDoModelo, m))) {
+            const pelosTokens = [...modos].sort((a, b) => pelaMedicao.get(a)!.tokens - pelaMedicao.get(b)!.tokens);
+            if (pelosTokens[0] !== modos[0]) {
+                const ativo = process.env.JUIZ_MODO_PELO_CUSTO === '1';
+                log.info(`[JUIZ-MODO-${ativo ? 'CUSTO' : 'SOMBRA'}] tipo=${d.tipo} modelo=${chaveDoModelo} hoje=${modos[0]} pelo_custo=${pelosTokens[0]} (${pelosTokens.map(m => `${m}=${pelaMedicao.get(m)!.tokens} tokens`).join(', ')})${ativo ? ' — usando o mais barato' : ' — só registrado (JUIZ_MODO_PELO_CUSTO desligado)'}`);
+                if (ativo) modos = pelosTokens;
             }
         }
         const prazoFinalDoObjetivo = prazoDoTurno();
