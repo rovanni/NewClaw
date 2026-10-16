@@ -1505,7 +1505,7 @@ export class AgentLoop {
         this.activeTurnStates.delete(conversationId);
         this.activeTurns.delete(conversationId);
         this.turnStartTimes.delete(conversationId);
-        this.ferramentasDoTurno.delete(conversationId);
+        this.ferramentasDoTurno?.delete(conversationId);   // ?.: objetos parciais de teste (S101) não têm o mapa
         // Dispara cognição pós-turno (fire-and-forget — nunca bloqueia resposta)
         if (this.postTurnCallback) {
             setImmediate(this.postTurnCallback);

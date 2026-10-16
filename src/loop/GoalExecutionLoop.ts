@@ -2791,8 +2791,8 @@ export class GoalExecutionLoop {
         const goalChannelContext: ChannelContext = {
             ...channelContext,
             goalTrace: { goalId: goal.id, stepId: step.id, stepDescription: (step.description ?? '').slice(0, 120), planGeneration: currentGeneration, userRequest: goal.userIntent },
-            priorStepEvidence,
             ferramentasCarregadas: this.ferramentasCarregadasDoGoal(goal.id),
+            priorStepEvidence,
             deliveryTracking: {
                 deferSendDocument: (args) => {
                     const fp = String(args['file_path'] ?? args['path'] ?? '');
