@@ -113,3 +113,25 @@ trabalho de três formas:
 - **Hipóteses não comprovadas:**
   - o modelo retoma bem o raciocínio interrompido;
   - o agente usa o `acompanhar` em vez de repetir o comando.
+
+## Medição (a) — o raciocínio interrompido pode ser reaproveitado? (16/10/2026)
+
+**Montagem:** Bonsai 27B (`llama-server`, raciocínio visível no texto), com o caso real "risco do plano" que a nuvem perdeu.
+Sem corte, esse caso tinha precisado de 8.630 tokens e 232 s.
+
+| Etapa | Tokens | Tempo | Resultado |
+|---|---|---|---|
+| 1. gerar até o corte (4.000 tokens, no meio do raciocínio) | 4.000 | 105 s | interrompido |
+| 2. devolver o pedaço como mensagem do assistente e pedir para continuar | 1.354 | 40 s | **concluiu** (reprovado) |
+| **total** | **5.354** | 145 s | contra 8.630 tokens e 232 s sem corte |
+
+**Achado:**
+- O modelo **não emenda literalmente** o texto. Ele abre um raciocínio novo e curto, mas **usa o que já pensou como
+  contexto**.
+- O trabalho interrompido não é perdido: terminou com +1,3 mil tokens, em vez de recomeçar do zero.
+- O veredito bate com o que o mesmo modelo deu para o caso antes.
+- **Limite:** 1 caso e 1 modelo. No Ollama Cloud, a forma de devolver o pedaço (mensagem do assistente com `thinking`) ainda
+  não foi medida.
+
+**Consequência para a decisão:** a etapa (5), "guardar o raciocínio", vale por si. A etapa (6) troca "continuar de onde
+parou" por **"devolver o raciocínio parcial ao modelo como contexto"**, que é o que o dado mostra funcionar.
