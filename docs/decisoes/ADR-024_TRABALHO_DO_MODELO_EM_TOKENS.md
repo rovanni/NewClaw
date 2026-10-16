@@ -107,3 +107,29 @@ nuvem ou local, entra na mesma média (`ProviderFactory.getBudgetAuxiliar` → `
 - **Hipóteses não comprovadas:**
   - o modo sem raciocínio julga tão bem quanto o com raciocínio. Base: 5 casos, 1 modelo; o período de sombra decide;
   - o percentil de tokens por tipo é estável o bastante para virar teto.
+
+## Registro de implementação (16/10/2026)
+
+A operadora autorizou seguir; tudo é incremental e reversível, e nenhuma etapa encurta um prazo.
+
+| Etapa | O que mudou | Cobertura | Como reverter |
+|---|---|---|---|
+| 1 — medição (sombra) | `medidorDeTrabalho.ts`. Velocidade por **modelo + modo**; tokens por tipo de chamada; linha `[TOKENS-SOMBRA]` em toda chamada (entrada, raciocínio≈, resposta≈, fonte servidor/estimado, "teria cortado" × "relógio cortou"); `data/medicao-de-tokens.json` | S422 | não muda comportamento |
+| 3 — juízes | `ProviderFactory.orcamentoPeloTrabalho`: p95 × 1,5 dos tokens do que concluiu ÷ velocidade medida × 1,25 + 5 s, com teto no que resta ao objetivo. O juiz só **estende** o prazo, e o limite de tokens vai ao provedor (`num_predict` / `max_tokens`). Sem histórico (< 5 conclusões): prazo de sempre | S423 | reverter o commit; sem histórico não age |
+| 4 — modo pelo custo | Entre modos confiáveis, o mais barato em tokens. **Em sombra** (`[JUIZ-MODO-SOMBRA]`); age só com `JUIZ_MODO_PELO_CUSTO=1` | S424 | desligado por padrão |
+| 5 — agente | O prazo da chamada do agente também estende pelo trabalho medido; **sem** limite de tokens (a saída do agente varia demais) | S425 | reverter o commit |
+| 6 — limites globais | `LIMITE_DO_OBJETIVO_MIN` (padrão 30). Modo experimental `LIMITE_DO_OBJETIVO_COMO_AVISO=1`: avisa e prorroga até `LIMITE_DURO_DO_OBJETIVO_MIN` (padrão 3×). O teto dos comandos acompanha a prorrogação | S426 | desligado por padrão |
+
+**Achado na etapa 6.** Os "10 min do turno" **não cortam trabalho**. O chat web já é assíncrono: responde 202 e entrega a
+resposta depois. Os 10 min só valem para a rota de aprovação de ação perigosa (`dashboard/routes/chat.ts`). O único corte
+global de tempo era o do objetivo.
+
+**Validação com dados reais** (produção Windows, 01–16/10, sem chamar modelo). Na maioria dos cortes do relógio, a chamada
+caberia no orçamento por tokens:
+- roteador de intenção (glm-5.3): 10 de 12;
+- juiz saída × evidência: 2 de 2;
+- juiz de risco: 1 de 1;
+- juiz de grounding: 2 de 2.
+
+O RiskAnalyzer com o glm-5.3 tem 22 cortes para 3 conclusões, o que é histórico insuficiente para orçamento: o prazo é
+curto demais para esse modelo.
