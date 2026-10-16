@@ -207,7 +207,12 @@ export function isReadOnlyExecCommand(toolName: string, args: Record<string, unk
 
 export function needsPowerShellWrap(command: string): boolean {
     if (/^\s*(powershell|pwsh)(\.exe)?\b/i.test(command)) return false; // já encaminhado
-    if (POWERSHELL_CMDLET_PATTERN.test(command)) return true;
+    // Um cmdlet DENTRO de uma chamada explícita (`… & powershell -Command "Get-PSDrive …"`) já roda no PowerShell — não é
+    // motivo para embrulhar a linha inteira. Embrulhar quebrava o resto (o `&` do cmd não é operador no PowerShell 5.1):
+    // teste real 16/10/2026, "python --version & git --version & powershell -NoProfile -Command \"Get-PSDrive …\"" →
+    // erro de sintaxe do PowerShell no caractere 226.
+    const foraDoPowerShellExplicito = command.replace(/\b(?:powershell|pwsh)(?:\.exe)?\b[^"'&|;]*?("[^"]*"|'[^']*')/gi, ' ');
+    if (POWERSHELL_CMDLET_PATTERN.test(foraDoPowerShellExplicito)) return true;
     return command.split(COMMAND_SEPARATOR).some(segment => {
         const firstToken = segment.trim().split(/\s+/)[0]?.toLowerCase().replace(/^.*[\\/]/, '');
         return firstToken ? POSIX_ONLY_NO_WIN_EQUIVALENT.has(firstToken) : false;
