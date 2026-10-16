@@ -94,7 +94,7 @@ async function main(): Promise<void> {
             ['replan budget zerado (blocked)', /goalStore\.setStatus\(goal\.id, 'failed'\);\s*const explanation = this\.gracefulDelivery\.buildFailureMessage\(goal, state\.cognitiveContext\);\s*await onProgress/],
             ['outcome failed (motivo do chamador)', /buildFailureMessage\(goal, state\.cognitiveContext, cycleResult\.output\)/],
             ['validação final com replan budget esgotado', /buildFailureMessage\(goal, state\.cognitiveContext, validation\.reason\)/],
-            ['MAX_CYCLES', /setStatus\(currentGoal\.id, 'failed'\);\s*const explanation = this\.gracefulDelivery\.buildFailureMessage\(currentGoal, state\.cognitiveContext\)/],
+            ['MAX_CYCLES', /setStatus\(currentGoal\.id, 'failed'\);\s*const explanation = this\.gracefulDelivery\.buildFailureMessage\(currentGoal, state\.cognitiveContext, motivoDaSaida\)/],   // S417: com o motivo da saída
             ['fallback de última instância de buildResult', /: this\.gracefulDelivery\.buildFailureMessage\(goal\)\);/],
         ];
         for (const [name, re] of exits) {
