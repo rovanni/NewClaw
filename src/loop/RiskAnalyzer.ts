@@ -489,7 +489,7 @@ export class RiskAnalyzer {
 
                 // Pouco espaço em disco para downloads/geração de mídia
                 const LOW_DISK_MB = 200;
-                if (hwData.diskFreeMB > 0 && hwData.diskFreeMB < LOW_DISK_MB) {
+                if (hwData.diskFreeMB !== undefined && hwData.diskFreeMB > 0 && hwData.diskFreeMB < LOW_DISK_MB) {
                     const isDiskHeavy = /\bffmpeg\b|\bdownload\b|\bcp\b.*\.\b|\bwget\b|\bcurl\b.*-o/.test(cmdLower);
                     if (isDiskHeavy) {
                         risks.push(`Step "${step.description}": apenas ${hwData.diskFreeMB}MB livres no disco — operação pode falhar por falta de espaço`);

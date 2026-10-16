@@ -41,7 +41,7 @@ interface ParsedCapabilities {
     osMedido:      string;
     cpuCores:      number;
     ramFreeMB:     number;
-    diskFreeMB:    number;
+    diskFreeMB:    number | undefined;
     gpuAvailable:  boolean;
     gpuLabel:      string;
     nodeVersion:   string;
@@ -180,7 +180,7 @@ export class PromptComposer {
         let osMedido      = '';
         let cpuCores      = 0;
         let ramFreeMB     = 0;
-        let diskFreeMB    = 0;
+        let diskFreeMB: number | undefined;
         let gpuAvailable  = false;
         let gpuLabel      = '';
         let nodeVersion   = '';
@@ -321,11 +321,11 @@ export class PromptComposer {
 
         // ── Hardware (apenas para camadas que consomem recursos) ──────────────
         if (layers.has('media') || layers.has('code') || layers.has('install') || layers.has('document')) {
-            if (caps.cpuCores > 0 || caps.ramFreeMB > 0 || caps.diskFreeMB > 0) {
+            if (caps.cpuCores > 0 || caps.ramFreeMB > 0 || (caps.diskFreeMB ?? 0) > 0) {
                 const gpuStr = caps.gpuAvailable
                     ? `, gpu:${caps.gpuLabel || 'true'}`
                     : ', gpu:false';
-                parts.push(`hw: {cpu:${caps.cpuCores}, ram_free:${caps.ramFreeMB}MB, disk_free:${caps.diskFreeMB}MB${gpuStr}}`);
+                parts.push(`hw: {cpu:${caps.cpuCores}, ram_free:${caps.ramFreeMB}MB, disk_free:${caps.diskFreeMB !== undefined ? `${caps.diskFreeMB}MB` : 'não medido'}${gpuStr}}`);
             }
         }
 

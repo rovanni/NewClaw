@@ -105,7 +105,8 @@ export interface HardwareCapabilities {
     cpuCores: number;
     totalMemoryMB: number;
     freeMemoryMB: number;
-    diskFreeMB: number;
+    /** Espaço livre no disco do workspace (MB), MEDIDO; ausente = não foi possível medir (nunca um 0 inventado). */
+    diskFreeMB?: number;
     gpuAvailable: boolean;
     gpuName?: string;
     gpuMemoryMB?: number;
@@ -415,15 +416,15 @@ class CapabilityProbe {
         const totalMemoryMB = Math.round(os.totalmem() / 1024 / 1024);
         const freeMemoryMB  = Math.round(os.freemem()  / 1024 / 1024);
 
-        let diskFreeMB = 0;
-        if (process.platform === 'win32') {
-            const out = runSafe('wmic logicaldisk where drivetype=3 get freespace /value 2>nul', 3000);
-            const m   = out?.match(/FreeSpace=(\d+)/);
-            if (m) diskFreeMB = Math.round(parseInt(m[1]) / 1024 / 1024);
-        } else {
-            const out = runSafe("df -m / 2>/dev/null | awk 'NR==2{print $4}'", 2000);
-            if (out) diskFreeMB = parseInt(out.trim()) || 0;
-        }
+        // Disco do WORKSPACE (onde o trabalho acontece), medido pelo próprio Node — sem programa externo. Antes: `wmic` no
+        // Windows, que não existe mais no Windows 11 recente — a medição falhava e virava "0MB livre", repassado ao agente e aos
+        // juízes como FATO ("disco com 0MB livre — risco crítico", teste real 16/10/2026, com 238 GB livres). Falhou = ausente.
+        let diskFreeMB: number | undefined;
+        try {
+            const alvo = path.parse(path.resolve(process.env.WORKSPACE_DIR || path.join(process.cwd(), 'workspace'))).root || process.cwd();
+            const s = fs.statfsSync(alvo);
+            diskFreeMB = Math.round((Number(s.bavail) * Number(s.bsize)) / 1024 / 1024);
+        } catch { diskFreeMB = undefined; }
 
         let gpuAvailable = false;
         let gpuName: string | undefined;
@@ -725,7 +726,7 @@ export class CapabilityRegistry {
         const hw = this.cache.hardware?.data;
         if (hw) {
             const gpuStr = hw.gpuAvailable ? `${hw.gpuName ?? 'gpu'} (${hw.gpuMemoryMB ?? '?'}MB)` : 'nenhuma';
-            lines.push(`• Hardware: cpu:${hw.cpuCores} cores | ram:${hw.totalMemoryMB}MB total / ${hw.freeMemoryMB}MB livre | disk:${hw.diskFreeMB}MB livre | gpu:${gpuStr}`);
+            lines.push(`• Hardware: cpu:${hw.cpuCores} cores | ram:${hw.totalMemoryMB}MB total / ${hw.freeMemoryMB}MB livre | disk:${hw.diskFreeMB !== undefined ? `${hw.diskFreeMB}MB livre` : 'não medido'} | gpu:${gpuStr}`);
         }
 
         const rt = this.cache.runtime?.data;

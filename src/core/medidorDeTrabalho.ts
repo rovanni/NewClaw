@@ -38,6 +38,12 @@ export interface ObservacaoDeChamada {
     desfecho: DesfechoDaChamada;
     /** 'servidor' = números do provedor; 'estimado' = contagem própria (chamada cortada, sem números do servidor). */
     fonte: 'servidor' | 'estimado';
+    /**
+     * De onde vêm os TEMPOS de leitura/geração: 'servidor' (o provedor mediu — Ollama local, llama-server) ou 'cliente' (o
+     * relógio do NewClaw: até o 1º token = leitura, o resto = geração; inclui a rede). O Ollama Cloud não devolve
+     * prompt_eval_duration/eval_duration — só total_duration (medido em 16/10/2026).
+     */
+    tempos?: 'servidor' | 'cliente';
 }
 
 interface Velocidade { geracao: number[]; leitura: number[] }
@@ -122,7 +128,7 @@ export class MedidorDeTrabalho {
         const tempoDoOrcamento = orc && vel.geracao ? Math.round(orc.tokens / vel.geracao + (vel.leitura ? o.entradaTokens / vel.leitura : 0)) : undefined;
         return [
             `modelo=${o.modelo}`, `modo=${o.modo}`, `tipo=${o.tipo}`, `desfecho=${o.desfecho}`, `fonte=${o.fonte}`,
-            `entrada=${o.entradaTokens}`, `saida=${o.saidaTokens}`, `raciocinio≈${o.raciocinioTokens}`, `resposta≈${o.respostaTokens}`,
+            `tempos=${o.tempos ?? '?'}`, `entrada=${o.entradaTokens}`, `saida=${o.saidaTokens}`, `raciocinio≈${o.raciocinioTokens}`, `resposta≈${o.respostaTokens}`,
             `ms=${o.msTotal}`, `primeiro_token_ms=${r(o.msAtePrimeiroToken)}`,
             `geracao=${r(vel.geracao, 1)}tok/s`, `leitura=${r(vel.leitura)}tok/s`, `amostras_vel=${vel.amostras}`,
             `orcamento_tokens=${orc ? orc.tokens : 'sem_historico'}`, `amostras_orc=${orc?.amostras ?? 0}`,
@@ -159,6 +165,13 @@ export interface TentativaObservada {
     evalMs?: number;
 }
 
+/** Tempos de leitura e geração: os do servidor quando ele informa; senão, os do relógio do cliente (declarados como tal). */
+function temposDaChamada(t: TentativaObservada, msTotal: number): { msLeitura?: number; msGeracao?: number; tempos?: 'servidor' | 'cliente' } {
+    if (t.evalMs !== undefined || t.promptEvalMs !== undefined) return { msLeitura: t.promptEvalMs, msGeracao: t.evalMs, tempos: 'servidor' };
+    if (t.firstChunkMs !== undefined && msTotal > t.firstChunkMs) return { msLeitura: t.firstChunkMs, msGeracao: msTotal - t.firstChunkMs, tempos: 'cliente' };
+    return {};
+}
+
 /**
  * Monta a observação de uma chamada a partir do que o provedor informou (números do servidor) ou, numa chamada cortada, do
  * que se contou (pedaços e caracteres — declarado como 'estimado'). Função pura.
@@ -188,7 +201,7 @@ export function observacaoDaChamada(e: {
     return {
         modelo: t.model || e.modelo, modo: e.modo, tipo: e.tipo,
         entradaTokens: entrada, saidaTokens: saida, raciocinioTokens: raciocinio, respostaTokens: saida - raciocinio,
-        msLeitura: t.promptEvalMs, msGeracao: t.evalMs,
+        ...temposDaChamada(t, e.msTotal),
         msTotal: e.msTotal, msAtePrimeiroToken: t.firstChunkMs,
         desfecho, fonte: doServidor ? 'servidor' : 'estimado',
     };
