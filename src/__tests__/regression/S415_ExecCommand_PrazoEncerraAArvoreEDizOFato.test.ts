@@ -9,6 +9,9 @@
  * "[exit code: unknown]". Sem o fato "interrompido por tempo", o planejador concluiu "aviso de deprecação tomado por
  * erro" e replanejou por um caminho errado; a ReflectionMemory gravou a falha como do exec_command.
  *
+ * LINUX (CI 16/10/2026, Node 22/24): o `exec` do Node NÃO repassa `detached` — o shell ficava no grupo do NewClaw, o sinal ao
+ * grupo dava ESRCH e o neto seguia vivo. Por isso o exec_command usa `spawn` com shell (o que o `exec` faz por dentro).
+ *
  * REGRESSÃO SE: o neto continuar escrevendo depois do retorno, ou o resultado não começar pelo fato da interrupção
  * (a saída é cortada em 16 mil caracteres — o fato não pode ser o pedaço que some), ou o schema voltar a anunciar
  * um padrão diferente do usado.
@@ -67,6 +70,10 @@ async function main() {
     assert(ok.success === true && /pronto/.test(ok.output || ''), 'comando rápido continua com sucesso', ok);
     const falha = await new ExecCommandTool().execute({ command: 'node -e "process.exit(3)"', timeout: 10000 });
     assert(falha.success === false && falha.exitCode === 3 && /\[exit code: 3\]/.test(falha.output || ''), 'saída com código ≠ 0 continua como antes (código real)', falha);
+
+    console.log('\n=== S415-3b — saída acima do teto (1 MB): encerrado, com o fato ===');
+    const grande = await new ExecCommandTool().execute({ command: `node -e "process.stdout.write('x'.repeat(3*1024*1024));setInterval(()=>{},1000)"`, timeout: 20000 });
+    assert(grande.success === false && /^\[interrompido pelo NewClaw: a saída do comando passou de \d+ bytes/.test(grande.output || ''), 'saída gigante: falha começando pelo fato do teto (antes o exec cortava com um erro genérico)', (grande.output || '').slice(0, 200));
 
     console.log('\n=== S415-4 — o schema anuncia o padrão usado ===');
     const desc = (new ExecCommandTool() as any).parameters?.properties?.timeout?.description ?? (new ExecCommandTool() as any).schema?.properties?.timeout?.description ?? '';

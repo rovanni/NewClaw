@@ -7,7 +7,7 @@
  */
 
 import { ToolExecutor, ToolResult } from '../loop/agentLoopTypes';
-import { exec, execFile } from 'child_process';
+import { spawn, execFile } from 'child_process';
 import fs from 'fs';
 import { resolveHost, isDestructive } from './server_config';
 import path from 'path';
@@ -17,6 +17,9 @@ import { resolvePath } from '../utils/crossPlatform';
 import { extractVerifiedArtifacts } from '../loop/planning/artifactContract';
 
 const log = createLogger('ExecCommandTool');
+
+/** Teto da saída guardada de um comando (o mesmo `maxBuffer` padrão que o `exec` usava). */
+const MAX_SAIDA_BYTES = 1024 * 1024;
 
 /** Limite de tempo de um comando quando o chamador não informa outro. */
 export const PRAZO_PADRAO_MS = 60000;
@@ -645,60 +648,94 @@ export class ExecCommandTool implements ToolExecutor {
         // O prazo é controlado AQUI, não pelo `timeout` do exec: o do Node mata só o shell (cmd.exe / sh) e deixa os filhos
         // vivos — medido no Windows (16/10/2026: `ping` continuou rodando depois do shell morto; o `npm install` do teste
         // real seguiu escrevendo em node_modules enquanto o planejador já tentava outra coisa). Aqui a árvore inteira cai.
+        // `spawn` com shell, e não `exec`: é o que o `exec` faz por dentro, mas o `exec` NÃO repassa `detached` — medido no
+        // Linux (VPS e CI, Node 22/24): o shell ficava no grupo do NewClaw, o sinal ao grupo dava ESRCH e o neto seguia vivo.
         const t0 = Date.now();
-        let estourouPrazo = false;
         try {
             const output = await new Promise<string>((resolve, reject) => {
-                const filho = exec(command, { ...execOptions, ...(process.platform === 'win32' ? {} : { detached: true }) }, (error, stdout, stderr) => {
-                    clearTimeout(relogio);
-                    const combined = decodeClixmlError((stdout ? stdout.toString() : '') + (stderr ? stderr.toString() : ''));
-                    if (estourouPrazo) {
-                        rejeitarPorPrazo(combined);
-                        return;
+                const filho = spawn(command, { ...execOptions, shell: true, ...(process.platform === 'win32' ? {} : { detached: true }) });
+                const saidaPadrao: Buffer[] = [];
+                const saidaDeErro: Buffer[] = [];
+                let bytes = 0;
+                let estourouSaida = false;
+                const guardar = (destino: Buffer[]) => (b: Buffer) => {
+                    if (estourouSaida) return;
+                    destino.push(b);
+                    bytes += b.length;
+                    if (bytes > MAX_SAIDA_BYTES) {
+                        // Mesmo teto que o `exec` tinha (1 MB): acima disso o comando é encerrado — agora com a árvore e o fato.
+                        estourouSaida = true;
+                        log.warn(`[EXEC-SAIDA] saída passou de ${MAX_SAIDA_BYTES} bytes — encerrando a árvore do processo pid=${filho.pid}`);
+                        encerrarArvore(filho.pid);
                     }
-                    if (error) {
-                        const exitCode = error.code ?? 'unknown';
-                        // Exit code 1 em comandos de busca = "nenhum resultado encontrado" (válido).
-                        // Apenas exit code 2+ indica erro real no grep/rg/find.
-                        if (isSearchCommand && exitCode === 1) {
-                            resolve('Nenhum resultado encontrado.');
-                            return;
-                        }
-                        // Non-zero exit is a failure — reject so the caller sees success: false.
-                        // Preserve stdout/stderr in combinedOutput so GoalEvaluator can classify it.
-                        // exitCode também propagado como dado estruturado (ToolResult.exitCode) —
-                        // GoalEvaluator não precisa mais fazer regex sobre "[exit code: N]" no texto.
-                        const fullOutput = (combined.trim() || error.message) + `\n[exit code: ${exitCode}]`;
-                        reject(Object.assign(error, {
-                            combinedOutput: fullOutput.trim(),
-                            exitCode: typeof exitCode === 'number' ? exitCode : undefined,
-                        }));
-                    } else {
-                        resolve(combined);
-                    }
-                });
+                };
+                filho.stdout?.on('data', guardar(saidaPadrao));
+                filho.stderr?.on('data', guardar(saidaDeErro));
+                // Mesma composição de antes: a saída padrão e, depois, a de erro (é nela que vem o CLIXML do PowerShell).
+                const saidaAteAgora = () => decodeClixmlError(Buffer.concat(saidaPadrao).toString('utf8') + Buffer.concat(saidaDeErro).toString('utf8'));
+
                 let encerrado = false;
+                let estourouPrazo = false;
                 // Fato, não palpite: quem interrompeu foi o NewClaw, por tempo — a saída é só o que saiu até ali. Sem isto a
                 // falha aparecia só com os avisos do programa e o planejador concluía "aviso tomado por erro" (teste real
                 // 16/10/2026: npm install cortado em 60 s, saída = avisos de "deprecated" + "[exit code: unknown]").
                 // O fato vem PRIMEIRO: a saída é cortada em 16 mil caracteres e ele não pode ser o pedaço que some.
-                const rejeitarPorPrazo = (saidaAteAli: string) => {
+                const rejeitarComFato = (fato: string) => {
                     if (encerrado) return;
                     encerrado = true;
-                    const fato = `[interrompido pelo NewClaw: o comando passou do limite de ${timeout} ms do exec_command ` +
-                        `(${Math.round((Date.now() - t0) / 1000)} s decorridos) e foi encerrado junto com os processos que abriu; ` +
-                        `o comando NÃO terminou. O limite é o parâmetro "timeout" do exec_command.]`;
-                    const saida = saidaAteAli.trim();
+                    clearTimeout(relogio);
+                    const saida = saidaAteAgora().trim();
                     reject(Object.assign(new Error(fato), {
-                        combinedOutput: saida ? `${fato}\nSaída até a interrupção (final):\n${saida.slice(-12000)}` : fato,
+                        combinedOutput: saida ? `${fato}
+Saída até a interrupção (final):
+${saida.slice(-12000)}` : fato,
                     }));
                 };
+                const fatoDoPrazo = () => `[interrompido pelo NewClaw: o comando passou do limite de ${timeout} ms do exec_command ` +
+                    `(${Math.round((Date.now() - t0) / 1000)} s decorridos) e foi encerrado junto com os processos que abriu; ` +
+                    `o comando NÃO terminou. O limite é o parâmetro "timeout" do exec_command.]`;
+                const fatoDaSaida = `[interrompido pelo NewClaw: a saída do comando passou de ${MAX_SAIDA_BYTES} bytes e ele foi ` +
+                    `encerrado junto com os processos que abriu; o comando NÃO terminou. Reduza a saída (filtre, ou grave num arquivo e leia um trecho).]`;
+
+                filho.on('error', (err) => {
+                    // Falha ao criar o processo (ex.: ENOENT do shell): mesma forma de antes — mensagem do erro, sem código de saída.
+                    if (encerrado) return;
+                    encerrado = true;
+                    clearTimeout(relogio);
+                    reject(Object.assign(err, { combinedOutput: (saidaAteAgora().trim() || err.message) }));
+                });
+                filho.on('close', (code, signal) => {
+                    if (estourouPrazo) { rejeitarComFato(fatoDoPrazo()); return; }
+                    if (estourouSaida) { rejeitarComFato(fatoDaSaida); return; }
+                    if (encerrado) return;
+                    encerrado = true;
+                    clearTimeout(relogio);
+                    const combined = saidaAteAgora();
+                    if (code === 0) { resolve(combined); return; }
+                    const exitCode: number | string = code ?? (signal ? `sinal ${signal}` : 'unknown');
+                    // Exit code 1 em comandos de busca = "nenhum resultado encontrado" (válido).
+                    // Apenas exit code 2+ indica erro real no grep/rg/find.
+                    if (isSearchCommand && exitCode === 1) {
+                        resolve('Nenhum resultado encontrado.');
+                        return;
+                    }
+                    // Non-zero exit is a failure — reject so the caller sees success: false.
+                    // Preserve stdout/stderr in combinedOutput so GoalEvaluator can classify it.
+                    // exitCode também propagado como dado estruturado (ToolResult.exitCode) —
+                    // GoalEvaluator não precisa mais fazer regex sobre "[exit code: N]" no texto.
+                    const fullOutput = (combined.trim() || `Command failed: ${command}`) + `
+[exit code: ${exitCode}]`;
+                    reject(Object.assign(new Error(fullOutput), {
+                        combinedOutput: fullOutput.trim(),
+                        exitCode: typeof exitCode === 'number' ? exitCode : undefined,
+                    }));
+                });
                 const relogio = setTimeout(() => {
                     estourouPrazo = true;
                     log.warn(`[EXEC-PRAZO] limite de ${timeout} ms atingido — encerrando a árvore do processo pid=${filho.pid}`);
                     encerrarArvore(filho.pid);
                     // Se algo da árvore escapou e segura a saída aberta, o retorno não fica preso esperando por ela.
-                    setTimeout(() => rejeitarPorPrazo(''), 5000).unref();
+                    setTimeout(() => rejeitarComFato(fatoDoPrazo()), 5000).unref();
                 }, timeout);
             });
 
