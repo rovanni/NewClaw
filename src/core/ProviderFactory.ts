@@ -294,10 +294,19 @@ export class ProviderFactory {
      * medida (outro provedor, servidor fora): o número conservador de sempre, declarado como padrão.
      */
     async tetoDeEntrada(modelo?: string): Promise<{ chars: number; origem: string }> {
-        const ollama = this.defaultProvider === 'ollama' ? this.getOllamaProvider() : undefined;
-        const janela = ollama ? await ollama.janelaEfetiva(modelo || ollama.getModel()) : undefined;
+        const janela = await this.janelaMedida(modelo);
         if (janela) return { chars: caracteresQueCabem(janela.tokens), origem: janela.origem };
         return { chars: DECISION_PROMPT_MAX_CHARS, origem: 'padrão (janela do modelo não medida)' };
+    }
+
+    /**
+     * A janela de contexto que `modelo` REALMENTE recebe pelo provedor que vai atendê-lo (hoje medida só no Ollama, pelo /api/tags).
+     * undefined = não medida — cada consumidor decide o próprio padrão (juiz: DECISION_PROMPT_MAX_CHARS; agente: o num_ctx).
+     */
+    async janelaMedida(modelo?: string, provedor?: string): Promise<{ tokens: number; origem: string } | undefined> {
+        if ((provedor || this.defaultProvider) !== 'ollama') return undefined;
+        const ollama = this.getOllamaProvider();
+        return ollama ? ollama.janelaEfetiva(modelo || ollama.getModel()) : undefined;
     }
 
     getBudgetAuxiliar(perfil: PerfilAuxiliar, tamanhoDoTrabalhoChars?: number): OrcamentoAuxiliar {

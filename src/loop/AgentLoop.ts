@@ -13,6 +13,7 @@
 import { createHash } from 'crypto';
 import { ProviderFactory, LLMMessage, ToolDefinition, LLMResult, MetricsSummary, ToolCall } from '../core/ProviderFactory';
 import { computeDynamicTimeout } from '../shared/dynamicTimeout';
+import { caracteresQueCabem } from '../core/providerTypes';
 import { CognitiveWorkspace } from '../cognitive/CognitiveWorkspace';
 import { SessionContext } from '../session/SessionContext';
 import type { SessionKey } from '../session/SessionManager';
@@ -358,6 +359,8 @@ interface RunWithToolsLoopState {
     loopMessages: LLMMessage[];
     getContextChars: () => number;
     initialContextChars: number;
+    /** Quantos chars de contexto cabem na janela do modelo DESTE turno (medida; sem medição, o num_ctx). */
+    capacidadeDeContexto: number;
     decisionCtx: DecisionContext;
     executionMode: string;
     maxSteps: number;
@@ -3644,6 +3647,12 @@ export class AgentLoop {
         // Context growth guard helpers — defined here so loopMessages is in scope.
         const getContextChars = () => loopMessages.reduce((s, m) => s + (m.content?.length ?? 0), 0);
         const initialContextChars = getContextChars();
+        // A janela do modelo DESTE turno, medida (OllamaProvider.janelaEfetiva). Antes: sempre o num_ctx de 32.768 tokens
+        // (~73,7 mil chars), também para modelos de nuvem com 1 milhão de tokens — o Ollama Cloud ignora o num_ctx (medido em
+        // 15/10/2026: 108.294 tokens processados com num_ctx=32768). Sem medição: o num_ctx, como sempre.
+        const janela = await this.providerFactory.janelaMedida?.(chatProfile.model, chatProfile.provider).catch(() => undefined);
+        const capacidadeDeContexto = janela ? caracteresQueCabem(janela.tokens) : AgentLoop.contextCapacityChars();
+        log.info(`[${this.ts()}] [CONTEXT-CAPACITY] model=${chatProfile.model || '(padrão)'} capacidade=${capacidadeDeContexto} chars origem=${janela?.origem ?? 'padrão (num_ctx)'}`);
 
         // ── DecisionContext ─────────────────────────────────────────────────
         // Build from all cognitive signals available after session context is ready.
@@ -3707,7 +3716,7 @@ export class AgentLoop {
             action: 'proceed',
             state: {
                 intentDecision, reflectionHintInjected, toolDefs, chatProfile, loopMessages,
-                getContextChars, initialContextChars, decisionCtx, executionMode, maxSteps, stepCount,
+                getContextChars, initialContextChars, capacidadeDeContexto, decisionCtx, executionMode, maxSteps, stepCount,
                 hasUsedNativeTools, consecutiveNonProgressSteps, blockedKeyCount, dedupAbort,
                 dedupAbortTool, contextGuardWriteExtensionUsed, memoryFirstInjected,
             },
@@ -3729,11 +3738,10 @@ export class AgentLoop {
      * para a saída do modelo (que pode trazer o conteúdo inteiro de um `write`). Padrão: ~73,7 mil chars.
      */
     static contextCapacityChars(): number {
-        const CHARS_PER_TOKEN = 3;
-        const OUTPUT_RESERVE = 0.25;
+        // Padrão quando a janela do modelo não foi medida (setupTurn tenta medir antes — ProviderFactory.janelaMedida).
         const parsed = parseInt(process.env.OLLAMA_NUM_CTX || '32768', 10);
         const numCtx = Number.isFinite(parsed) && parsed > 0 ? parsed : 32768;
-        return Math.floor(numCtx * CHARS_PER_TOKEN * (1 - OUTPUT_RESERVE));
+        return caracteresQueCabem(numCtx);   // a mesma conversão do teto do juiz (3 chars/token, 25% para a saída)
     }
 
     private checkContextGrowthGuard(
@@ -3748,6 +3756,8 @@ export class AgentLoop {
         getContextChars: () => number,
         initialContextChars: number,
         loopMessages: LLMMessage[],
+        /** A capacidade do modelo deste turno, medida em setupTurn. Ausente: o num_ctx (contextCapacityChars). */
+        capacidadeDeContexto?: number,
     ): ContextGrowthGuardResult {
         // Context Growth Guard (issue 052, Sprint 2) — UM limite, derivado da janela real do modelo.
         //
@@ -3756,8 +3766,9 @@ export class AgentLoop {
         // disparos de trava depois do S298 foram estes; os de absolute_limit com ~30 mil chars no total,
         // folgados numa janela de 32.768 tokens. O risco real que a trava evita é o contexto passar da
         // janela (`num_ctx`), onde o servidor descarta o início em silêncio — então o limite é ela.
+        // A janela do modelo do turno, medida (nuvem: a janela informada; local: o num_ctx). Sem medição: o num_ctx.
         const currentContextChars = getContextChars();
-        const capacity = AgentLoop.contextCapacityChars();
+        const capacity = capacidadeDeContexto ?? AgentLoop.contextCapacityChars();
         const contextGrowthRatio = initialContextChars > 0 ? currentContextChars / initialContextChars : 1;
         if (currentContextChars > capacity && stepCount > 1 && !dedupAbort) {
             const triggerReason = 'capacity_limit';
@@ -3970,7 +3981,7 @@ export class AgentLoop {
         if (setupResult.action === "earlyReturn") return setupResult.result;
         const {
             intentDecision, reflectionHintInjected, toolDefs, chatProfile, loopMessages,
-            getContextChars, initialContextChars, decisionCtx, executionMode, blockedKeyCount,
+            getContextChars, initialContextChars, capacidadeDeContexto, decisionCtx, executionMode, blockedKeyCount,
         } = setupResult.state;
         let maxSteps = setupResult.state.maxSteps;
         let stepCount = setupResult.state.stepCount;
@@ -4001,7 +4012,7 @@ export class AgentLoop {
             const contextGuardResult = this.checkContextGrowthGuard(
                 cycleHistory, userText, stepCount, dedupAbort, dedupAbortTool, maxSteps,
                 contextGuardWriteExtensionUsed, guardsTriggered, getContextChars, initialContextChars,
-                loopMessages,
+                loopMessages, capacidadeDeContexto,
             );
             dedupAbort = contextGuardResult.dedupAbort;
             dedupAbortTool = contextGuardResult.dedupAbortTool;
