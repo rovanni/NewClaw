@@ -653,7 +653,10 @@ export class ExecCommandTool implements ToolExecutor {
         const t0 = Date.now();
         try {
             const output = await new Promise<string>((resolve, reject) => {
-                const filho = spawn(command, { ...execOptions, shell: true, ...(process.platform === 'win32' ? {} : { detached: true }) });
+                // Entrada FECHADA (ADR-023): o exec_command não tem como digitar nada, então uma entrada aberta e vazia só servia
+                // para o programa que pergunta algo ficar esperando para sempre. Fechada, ele recebe "fim da entrada" e termina
+                // na hora — medido nos dois sistemas: node, python, `set /p`, `Read-Host` e `read` em 0–2 s, contra travar.
+                const filho = spawn(command, { ...execOptions, shell: true, stdio: ['ignore', 'pipe', 'pipe'], ...(process.platform === 'win32' ? {} : { detached: true }) });
                 const saidaPadrao: Buffer[] = [];
                 const saidaDeErro: Buffer[] = [];
                 let bytes = 0;
