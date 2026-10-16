@@ -16,7 +16,7 @@
  *   - Nenhum ciclo roda sem trigger explícito (user message ou auth callback)
  */
 
-import { executarComPrazo } from '../shared/turnCancellation';
+import { executarComPrazo, executarAguardandoComandos } from '../shared/turnCancellation';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
@@ -2700,11 +2700,13 @@ export class GoalExecutionLoop {
         if (typeof (toolInstance as unknown as ContextAwareTool).setContext === 'function' && channelContext) {
             (toolInstance as unknown as ContextAwareTool).setContext(channelContext.chatId, channelContext.channel);
         }
-        const recoveryResult = await this.proactiveRecovery.execute(
+        // ADR-025: um passo DIRETO do objetivo não tem um modelo para acompanhar um comando em segundo plano — aguarda o fim
+        // (enquanto o comando trabalha; teto do objetivo e "Parar" continuam valendo).
+        const recoveryResult = await executarAguardandoComandos(() => this.proactiveRecovery.execute(
             toolName, resolvedArgs, getTool, new Set<string>(),
             undefined,
             { toolsTried: goal.toolsTried, userIntent: goal.userIntent },
-        );
+        ));
         const toolResult = recoveryResult.result;
         let stepMutations: import('./GoalTypes').ToolMutation[] | undefined;
         if (recoveryResult.recovered) {

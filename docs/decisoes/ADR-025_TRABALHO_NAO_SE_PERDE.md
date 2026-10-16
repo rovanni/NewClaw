@@ -135,3 +135,38 @@ Sem corte, esse caso tinha precisado de 8.630 tokens e 232 s.
 
 **Consequência para a decisão:** a etapa (5), "guardar o raciocínio", vale por si. A etapa (6) troca "continuar de onde
 parou" por **"devolver o raciocínio parcial ao modelo como contexto"**, que é o que o dado mostra funcionar.
+
+## Implementação das etapas 1 e 2 (16/10/2026) — EXPERIMENTAL
+
+**Como ligar:** `EXEC_EM_SEGUNDO_PLANO=1`. Desligado por padrão: tudo como antes, e o log registra
+`[EXEC-SEGUNDO-PLANO-SOMBRA]` quando um comando **teria** ido para segundo plano.
+
+**Registro** (`src/tools/registroDeProcessos.ts`):
+- cada comando que vai para segundo plano ganha um número;
+- quando ele termina, guarda só o resultado (≤ 16 mil caracteres) e libera o buffer da saída;
+- mantém até 64 resultados, por até 6 h;
+- comando que termina a tempo não fica guardado;
+- ao sair, o NewClaw encerra a árvore de tudo o que ainda roda.
+
+**`exec_command`:**
+- Depois de `EXEC_SEGUNDO_PLANO_APOS_S` (padrão 10 s), devolve
+  `[nº N — segue rodando em segundo plano … O comando NÃO terminou ainda. Para acompanhar: exec_command com acompanhar=N e acao="consultar" | "aguardar" | "encerrar"]`,
+  mais o final da saída até ali, e o comando **continua**.
+- Com `acompanhar=N`:
+  - `consultar` devolve o estado, há quanto tempo roda, o último sinal de atividade e a saída;
+  - `aguardar` espera mais um pouco pelo fim;
+  - `encerrar` encerra a árvore e diz o fato.
+- **Em segundo plano, ficar sem sinal de atividade não encerra o comando**: vira fato na consulta. O teto do objetivo, o
+  "Parar" e o `encerrar` continuam encerrando.
+
+**Passo direto do objetivo** (sem modelo para acompanhar): aguarda o fim (`executarAguardandoComandos` no
+`dispatchToolStep`).
+
+**Cobertura:** `S427`. O caso da pausa legítima que voltou a trabalhar: antes seria cortado, agora segue vivo.
+
+**Pendentes (próximas etapas):**
+- (4) avisar o usuário ou o agente quando um comando em segundo plano termina sem ninguém aguardando;
+- (5) guardar o raciocínio cortado;
+- (6) devolver o raciocínio parcial ao modelo (medição (a) acima);
+- encerramento por **dono** (objetivo ou conversa) no fim do objetivo — hoje fica coberto pelo teto do objetivo e pelo
+  encerramento ao sair.

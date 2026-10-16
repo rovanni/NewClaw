@@ -24,6 +24,11 @@ export interface ToolResult {
      */
     exitCode?: number;
     /**
+     * ADR-025: o comando NÃO terminou — segue rodando em segundo plano com este número (exec_command com `acompanhar`).
+     * Não é sucesso nem falha do comando; é o estado dele agora.
+     */
+    processoEmAndamento?: number;
+    /**
      * Fatos sobre a entrega — a terceira categoria do contrato (`ADR-007`), ao lado do conteúdo
      * (`output`) e do status operacional (log).
      *

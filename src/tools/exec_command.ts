@@ -17,7 +17,8 @@ import { resolvePath } from '../utils/crossPlatform';
 import { extractVerifiedArtifacts } from '../loop/planning/artifactContract';
 import { GOAL_LIMITS } from '../loop/GoalLimits';
 import { amostradorDaPlataforma, AmostraDeAtividade } from './atividadeDoProcesso';
-import { prazoDoTurno, sinalDoTurno } from '../shared/turnCancellation';
+import { prazoDoTurno, sinalDoTurno, aguardarComandos } from '../shared/turnCancellation';
+import { registroDeProcessos, ProcessoRegistrado } from './registroDeProcessos';
 
 const log = createLogger('ExecCommandTool');
 
@@ -36,6 +37,17 @@ export const PRAZO_PADRAO_MS = GOAL_LIMITS.MAX_GOAL_TTL_MS;
  * 16/10/2026). Medido: trabalho real nunca ficou mais de 2 s sem sinal; travado fica sem sinal o tempo todo.
  */
 export const TOLERANCIA_PADRAO_S = 30;
+
+/**
+ * ADR-025 (EXPERIMENTAL — EXEC_EM_SEGUNDO_PLANO=1): depois deste tempo o comando segue em SEGUNDO PLANO e o agente recebe
+ * "rodando" (padrão 10 s, o mesmo do OpenClaw; medido: 90% dos comandos terminam em menos de 5,6 s — os rápidos não mudam).
+ * Desligado: o comando é aguardado como sempre, e o log registra quando ele TERIA ido para segundo plano.
+ */
+export function segundoPlanoLigado(): boolean { return process.env.EXEC_EM_SEGUNDO_PLANO === '1'; }
+export function esperaAntesDoSegundoPlanoMs(): number {
+    const s = Number(process.env.EXEC_SEGUNDO_PLANO_APOS_S);
+    return (Number.isFinite(s) && s > 0 ? s : 10) * 1000;
+}
 
 /** Abaixo disto, numa amostra de 1 s, CPU e E/S são ruído de processo ocioso (medido: shell e processo parado ficam abaixo). */
 const CPU_MINIMA_MS = 50;
@@ -518,9 +530,11 @@ export class ExecCommandTool implements ToolExecutor {
             command: { type: 'string', description: 'Shell command. Use ssh://HOST/cmd para execução remota' },
             tolerancia_sem_atividade: { type: 'number', description: `Segundos SEM NENHUM sinal de atividade (saída, CPU, disco/rede) até o comando ser considerado parado e encerrado (padrão: ${TOLERANCIA_PADRAO_S}). Aumente quando souber que haverá espera longa sem atividade.` },
             timeout: { type: 'number', description: `Teto opcional em ms, mesmo com o comando trabalhando (sem ele: ${PRAZO_PADRAO_MS} ms, o limite do objetivo). Ao passar dele, o comando é encerrado junto com os processos que abriu.` },
-            workdir: { type: 'string', description: 'Diretório de trabalho (padrão: workspace)' }
+            workdir: { type: 'string', description: 'Diretório de trabalho (padrão: workspace)' },
+            acompanhar: { type: 'number', description: 'Número de um comando que segue em segundo plano (o "nº" devolvido quando ele não terminou a tempo). Com ele, "command" é dispensado.' },
+            acao: { type: 'string', enum: ['consultar', 'aguardar', 'encerrar'], description: 'Com "acompanhar": consultar (estado e saída até agora), aguardar (espera mais um pouco pelo fim) ou encerrar (encerra o comando e o que ele abriu).' }
         },
-        required: ['command']
+        required: []
     };
 
     async execute(args: Record<string, any>): Promise<ToolResult> {
@@ -534,6 +548,9 @@ export class ExecCommandTool implements ToolExecutor {
         const toleranciaS = Number(args.tolerancia_sem_atividade) > 0 ? Number(args.tolerancia_sem_atividade) : TOLERANCIA_PADRAO_S;
         const workdir = args.workdir as string;
 
+        if (args.acompanhar !== undefined && args.acompanhar !== null && args.acompanhar !== '') {
+            return acompanharProcesso(Number(args.acompanhar), String(args.acao || 'consultar'));
+        }
         if (!command) {
             return { success: false, output: '', error: 'Command not provided' };
         }
@@ -675,6 +692,10 @@ export class ExecCommandTool implements ToolExecutor {
         // `spawn` com shell, e não `exec`: é o que o `exec` faz por dentro, mas o `exec` NÃO repassa `detached` — medido no
         // Linux (VPS e CI, Node 22/24): o shell ficava no grupo do NewClaw, o sinal ao grupo dava ESRCH e o neto seguia vivo.
         const t0 = Date.now();
+        let emSegundoPlano = false;
+        let encerradoPeloAgente = false;
+        let acesso: { saida: () => string; ultimoSinal: () => number; pid?: number; encerrar: () => void } | undefined;
+        const fim: Promise<ToolResult> = (async (): Promise<ToolResult> => {
         try {
             const output = await new Promise<string>((resolve, reject) => {
                 // Entrada FECHADA (ADR-023): o exec_command não tem como digitar nada, então uma entrada aberta e vazia só servia
@@ -742,7 +763,9 @@ ${saida.slice(-12000)}` : fato,
                     `(${fonteDaAtividade}) e foi encerrado junto com os processos que abriu; o comando NÃO terminou ` +
                     `(${Math.round((Date.now() - t0) / 1000)} s no total). Se ele precisa esperar sem atividade, aumente o parâmetro ` +
                     `"tolerancia_sem_atividade" do exec_command.]`;
+                const fatoDoEncerramentoPedido = () => `[encerrado a pedido do agente (acompanhar/encerrar) após ${Math.round((Date.now() - t0) / 1000)} s, junto com os processos que abriu; o comando NÃO terminou.]`;
                 filho.on('close', (code, signal) => {
+                    if (encerradoPeloAgente) { rejeitarComFato(fatoDoEncerramentoPedido()); return; }
                     if (cancelado) { rejeitarComFato(fatoDoCancelamento()); return; }
                     if (estourouPrazo) { rejeitarComFato(fatoDoPrazo()); return; }
                     if (parado) { rejeitarComFato(fatoParado()); return; }
@@ -802,6 +825,11 @@ ${saida.slice(-12000)}` : fato,
                         if (a && anterior && (a.cpuMs - anterior.cpuMs >= CPU_MINIMA_MS || a.ioBytes - anterior.ioBytes >= IO_MINIMA_BYTES)) sinal = true;
                         if (a) anterior = a;
                         if (sinal) { ultimoSinal = agora; return; }
+                        if (agora - ultimoSinal >= toleranciaS * 1000 && !encerrado && emSegundoPlano) {
+                            // ADR-025: em segundo plano, "sem sinal" é FATO para quem acompanha (consultar mostra há quanto
+                            // tempo), não motivo para encerrar sozinho. Teto, "Parar" e encerrar continuam valendo.
+                            return;
+                        }
                         if (agora - ultimoSinal >= toleranciaS * 1000 && !encerrado) {
                             parado = true;
                             log.warn(`[EXEC-PARADO] ${toleranciaS} s sem nenhum sinal (${fonteDaAtividade}) — encerrando a árvore do processo pid=${filho.pid} após ${Math.round((agora - t0) / 1000)} s`);
@@ -821,6 +849,16 @@ ${saida.slice(-12000)}` : fato,
                 };
                 if (sinal?.aborted) aoCancelar(); else sinal?.addEventListener('abort', aoCancelar, { once: true });
                 function pararRelogios(): void { clearTimeout(relogio); clearInterval(vigia); sinal?.removeEventListener('abort', aoCancelar); }
+                acesso = {
+                    saida: saidaAteAgora, ultimoSinal: () => ultimoSinal, pid: filho.pid,
+                    encerrar: () => {
+                        if (encerrado || encerradoPeloAgente) return;
+                        encerradoPeloAgente = true;
+                        log.warn(`[EXEC-ENCERRAR] encerrado a pedido do agente — árvore do processo pid=${filho.pid}`);
+                        encerrarArvore(filho.pid);
+                        setTimeout(() => rejeitarComFato(fatoDoEncerramentoPedido()), 5000).unref();
+                    },
+                };
             });
 
             // Contrato de artefato (docs/sprints-r1-r7-2026-07-13/REVISAO_ARQUITETURAL_SPRINT_R7_2026-07-13.md): scripts
@@ -839,5 +877,66 @@ ${saida.slice(-12000)}` : fato,
             const msg = (e.combinedOutput || errorMessage(err)).slice(0, 16000);
             return { success: false, output: msg, error: msg, ...(e.exitCode !== undefined ? { exitCode: e.exitCode } : {}) };
         }
+        })();
+
+        // ADR-025: o comando fica no registro (o resultado de quem terminou continua disponível para "acompanhar").
+        const reg = acesso
+            ? registroDeProcessos.registrar({ comando: command, inicio: t0, pid: acesso.pid, saida: acesso.saida, ultimoSinal: acesso.ultimoSinal, fim, encerrar: acesso.encerrar })
+            : undefined;
+        const espera = esperaAntesDoSegundoPlanoMs();
+        if (reg && segundoPlanoLigado() && !aguardarComandos()) {
+            let relogioDaEspera: NodeJS.Timeout | undefined;
+            const aTempo = await Promise.race([fim, new Promise<null>(r => { relogioDaEspera = setTimeout(() => r(null), espera); })]);
+            if (relogioDaEspera) clearTimeout(relogioDaEspera);
+            if (aTempo) { registroDeProcessos.remover(reg.numero); return aTempo; }
+            emSegundoPlano = true;
+            log.info(`[EXEC-SEGUNDO-PLANO] nº ${reg.numero} segue rodando após ${Math.round(espera / 1000)} s — pid=${reg.pid} comando="${command.slice(0, 120)}"`);
+            return estadoDoProcesso(reg, 'segue rodando em segundo plano');
+        }
+        const r = await fim;
+        if (reg) registroDeProcessos.remover(reg.numero);
+        if (reg && !segundoPlanoLigado() && Date.now() - t0 > espera) {
+            log.info(`[EXEC-SEGUNDO-PLANO-SOMBRA] este comando TERIA ido para segundo plano após ${Math.round(espera / 1000)} s (rodou ${Math.round((Date.now() - t0) / 1000)} s; EXEC_EM_SEGUNDO_PLANO desligado)`);
+        }
+        return r;
     }
+}
+
+/** O estado de um comando em segundo plano, como o agente o vê: fatos e como acompanhar. */
+function estadoDoProcesso(reg: ProcessoRegistrado, situacao: string): ToolResult {
+    const agora = Date.now();
+    const saida = reg.saida().trim();
+    const fato = `[nº ${reg.numero} — ${situacao}: rodando há ${Math.round((agora - reg.inicio) / 1000)} s; último sinal de atividade há ` +
+        `${Math.round((agora - reg.ultimoSinal()) / 1000)} s. O comando NÃO terminou ainda. Para acompanhar: exec_command com ` +
+        `acompanhar=${reg.numero} e acao="consultar" | "aguardar" | "encerrar".]`;
+    return {
+        success: true,
+        output: saida ? `${fato}\nSaída até agora (final):\n${saida.slice(-8000)}` : fato,
+        processoEmAndamento: reg.numero,
+    };
+}
+
+/** exec_command com `acompanhar` (ADR-025): consultar, aguardar mais um pouco, ou encerrar um comando em segundo plano. */
+async function acompanharProcesso(numero: number, acao: string): Promise<ToolResult> {
+    const reg = registroDeProcessos.obter(numero);
+    if (!reg) {
+        const msg = `[não há comando nº ${numero} no registro — ele nunca existiu, ou terminou há muito tempo e o resultado foi descartado]`;
+        return { success: false, output: msg, error: msg };
+    }
+    if (reg.terminou && reg.resultado) {
+        return { ...reg.resultado, output: `[nº ${numero} — TERMINOU]\n${reg.resultado.output}` };
+    }
+    if (acao === 'encerrar') {
+        reg.encerrar();
+        const r = await reg.fim;
+        return { ...r, output: `[nº ${numero} — ENCERRADO]\n${r.output}` };
+    }
+    if (acao === 'aguardar') {
+        let relogio: NodeJS.Timeout | undefined;
+        const r = await Promise.race([reg.fim, new Promise<null>(res => { relogio = setTimeout(() => res(null), esperaAntesDoSegundoPlanoMs() * 3); })]);
+        if (relogio) clearTimeout(relogio);
+        if (r) return { ...r, output: `[nº ${numero} — TERMINOU]\n${r.output}` };
+        return estadoDoProcesso(reg, 'ainda rodando depois de aguardar');
+    }
+    return estadoDoProcesso(reg, 'consulta');
 }

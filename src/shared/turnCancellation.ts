@@ -12,7 +12,7 @@
  */
 import { AsyncLocalStorage } from 'async_hooks';
 
-const contexto = new AsyncLocalStorage<{ signal?: AbortSignal; prazoFinal?: number | (() => number) }>();
+const contexto = new AsyncLocalStorage<{ signal?: AbortSignal; prazoFinal?: number | (() => number); aguardarComandos?: boolean }>();
 
 /** Roda `fn` dentro do turno: toda chamada ao modelo feita por ela (e pelo que ela dispara) enxerga o sinal. */
 export function executarNoTurno<T>(signal: AbortSignal, fn: () => Promise<T>): Promise<T> {
@@ -25,6 +25,19 @@ export function executarNoTurno<T>(signal: AbortSignal, fn: () => Promise<T>): P
  */
 export function executarComPrazo<T>(prazoFinal: number | (() => number), fn: () => Promise<T>): Promise<T> {
     return contexto.run({ ...contexto.getStore(), prazoFinal }, fn);
+}
+
+/**
+ * Roda `fn` exigindo que comandos AGUARDEM o fim (ADR-025): um passo direto do objetivo não tem um modelo para acompanhar um
+ * comando em segundo plano — ele espera o comando terminar (enquanto trabalha).
+ */
+export function executarAguardandoComandos<T>(fn: () => Promise<T>): Promise<T> {
+    return contexto.run({ ...contexto.getStore(), aguardarComandos: true }, fn);
+}
+
+/** O código atual precisa aguardar o fim dos comandos (passo direto do objetivo)? */
+export function aguardarComandos(): boolean {
+    return contexto.getStore()?.aguardarComandos === true;
 }
 
 /** O sinal do turno em que o código atual roda; `undefined` fora de um turno (tarefa de fundo, teste, CLI). */
