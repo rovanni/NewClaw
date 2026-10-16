@@ -153,6 +153,8 @@ async function main(): Promise<void> {
             assert(resA.finalOutput.includes(SIGNATURE_HEAD) && resA.finalOutput.includes(SIGNATURE_TAIL),
                 'a mensagem tem a assinatura da autoridade única', resA.finalOutput);
             assert(resA.finalOutput.includes(`Tentei: ${TOOL}.`), 'e informa a ferramenta tentada', resA.finalOutput);
+            assert(resA.finalOutput.includes(`Atingi o limite de ${GOAL_LIMITS.MAX_CYCLES} ciclos de trabalho com 1 passo(s) ainda por fazer`),
+                'S417: diz o MOTIVO da saída — limite de ciclos, com o passo que faltou (antes: "failed" sem motivo, teste real 16/10/2026)', resA.finalOutput);
             assert(spyA.calls === 1 && resA.finalOutput.includes(spyA.last), 'PROVA: a saída MAX_CYCLES invocou buildFailureMessage exatamente 1 vez e devolveu o texto que chegou ao usuário', spyA);
 
             // (b) CENÁRIO "artefato enviado + falha posterior", agora por uma saída REAL do laço (antes só

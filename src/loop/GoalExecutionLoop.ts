@@ -2311,8 +2311,16 @@ export class GoalExecutionLoop {
             }
             log.info(`[GoalLoop] goal=${currentGoal.id} final validation failed at MAX_CYCLES: ${validation.reason}`);
         }
+        // O motivo da saída é um FATO a registrar e a dizer: antes o goal ia para "failed" sem uma linha de log explicando
+        // (teste real 16/10/2026: 22 min, 4 replanos, "executing → failed" com um passo ainda por fazer e nada dizendo por quê).
+        const pendentes = this.getPendingSteps(currentGoal.currentPlan);
+        const motivoDaSaida = allStepsDone
+            ? `Atingi o limite de ${GOAL_LIMITS.MAX_CYCLES} ciclos de trabalho e a conferência final não confirmou a conclusão.`
+            : `Atingi o limite de ${GOAL_LIMITS.MAX_CYCLES} ciclos de trabalho com ${pendentes.length} passo(s) ainda por fazer` +
+              (pendentes.length ? `: ${pendentes.map(s => `"${s.description.slice(0, 120)}"`).join('; ')}.` : '.');
+        log.warn(`[GoalLoop] goal=${currentGoal.id} MAX_CYCLES=${GOAL_LIMITS.MAX_CYCLES} esgotado — replans=${totalReplans} pendentes=${pendentes.map(s => s.id).join(',') || 'nenhum'} → failed`);
         this.goalStore.setStatus(currentGoal.id, 'failed');
-        const explanation = this.gracefulDelivery.buildFailureMessage(currentGoal, state.cognitiveContext);
+        const explanation = this.gracefulDelivery.buildFailureMessage(currentGoal, state.cognitiveContext, motivoDaSaida);
         return this.buildResult(currentGoal, false, totalCycles, totalReplans, explanation);
     }
 

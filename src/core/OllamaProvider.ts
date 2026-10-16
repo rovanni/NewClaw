@@ -509,7 +509,9 @@ export class OllamaProvider implements ILLMProvider {
             // segue, marcado interrupted=true (issue 060). Issue 064: antes, a issue 042 ainda promovia o raciocínio de
             // chamadas sem reasoningIntensive — o mesmo vazamento, por outro caminho; agora a regra é uma só.
             if (!content) {
-                if (thinking) log.warn(`[${consumeId}] [STREAM-CONSUME] Aborted with ${thinking.length} chars of thinking, no content — discarding (interrupted reasoning is never an answer)`);
+                // O raciocínio interrompido nunca vira resposta — mas o FINAL dele vai para o log: é a única pista de por que o
+                // modelo não concluiu (juízes que pensaram 32–48 mil caracteres sem resposta, 16/10/2026, sem nada para analisar).
+                if (thinking) log.warn(`[${consumeId}] [STREAM-CONSUME] Aborted with ${thinking.length} chars of thinking, no content — discarding (interrupted reasoning is never an answer); fim do raciocínio: "${thinking.slice(-600).replace(/\s+/g, ' ').trim()}"`);
                 log.error(`[${consumeId}] [STREAM-CONSUME] FAILED after ${chunkCount} chunks, ${elapsed}ms: ${errorMessage(streamErr)}`);
                 throw streamErr;
             }

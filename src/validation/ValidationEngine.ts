@@ -252,7 +252,11 @@ export class ValidationEngine {
             if (resultado.status === 'timeout' || resultado.status === 'cancelled') {
                 // O modelo não concluiu NA FATIA deste modo (nem sinal do usuário): este modo é lento demais para este modelo.
                 this.perfil.registrar(chaveDoModelo, modos[i], false, ms, d.tipo);
-                log.info(`[VALIDACAO] tipo=${d.tipo} modelo=${chaveDoModelo} modo=${modos[i]} sem veredito em ${ms} ms (fatia ${fatia} ms)${ultimo ? '' : ' — tentando o outro modo'}`);
+                // O que o modelo escreveu até ser cortado é a pista de por que não concluiu (com o raciocínio desligado, há modelos que
+                // escrevem a análise inteira no conteúdo antes do JSON) — o fim dele vai para o log, nunca para o veredito.
+                const escritoAteOCorte = (resultado.content ?? '').trim();
+                log.info(`[VALIDACAO] tipo=${d.tipo} modelo=${chaveDoModelo} modo=${modos[i]} sem veredito em ${ms} ms (fatia ${fatia} ms)${ultimo ? '' : ' — tentando o outro modo'}` +
+                    (escritoAteOCorte ? ` — escreveu ${escritoAteOCorte.length} chars até o corte; fim: "${escritoAteOCorte.slice(-400).replace(/\s+/g, ' ')}"` : ''));
                 falha = { porque: `modelo não concluiu (${resultado.status === 'cancelled' ? 'timeout' : resultado.status})`, desfecho: 'llm_timeout' };
                 continue;
             }
