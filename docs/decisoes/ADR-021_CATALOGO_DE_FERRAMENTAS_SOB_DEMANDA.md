@@ -86,6 +86,24 @@ ferramentas perigosas (`exec_command`, `ssh_exec`) é do modo de operação e da
 **Critérios de sucesso:** teste de regressão (catálogo gerado do registro; carregar acrescenta a definição completa; nome inexistente
 é recusado; carregada persiste no goal) e validação real: o pedido dos feriados com o PDF chega a usar `read_document`.
 
-## Implementação
+## Implementação e resultados das sprints (16/10/2026)
 
-Ver o histórico do repositório (commit desta ADR) e os testes `S413`.
+- **Sprint 2 — catálogo + sob demanda:** `AgentLoop.buildToolDefs` (seleção vira dica; catálogo de uma linha na meta-ferramenta
+  `carregar_ferramenta`, gerado de `definicaoDoCatalogo(registro, naLista)`), interceptação nos dois caminhos de chamada (nativo e
+  ação em JSON), `carregarFerramentas` (valida, acrescenta a definição completa, atualiza o catálogo, registra
+  `[TOOLS] carregar_ferramenta pedidas=… carregadas=… inexistentes=…` — a medição do item 4), `ChannelContext.ferramentasCarregadas`
+  e `GoalExecutionLoop.ferramentasCarregadasDoGoal` (mesmo conjunto em todos os passos). Teste `S413`.
+- **Sprint 3 — dicas sem receita:** os três avisos de leitura binária ("use exec_command com pdftotext/pandoc/python-pptx") passam a
+  dizer o fato e apontar `read_document` quando ela lê o formato (`tools/formatosDeDocumento.ts`, fonte única). Teste `S414`.
+  Fora do escopo, anotado: a tabela de alternativas de `PromptComposer` (`pandoc: ['python-pptx', 'pptxgenjs', 'html']`) é do mesmo
+  tipo (regra 11) e merece revisão própria.
+- **Sprint 4 — cache medido nos registros (sem cota):** tempo até o 1º pedaço da resposta, por mil tokens de prompt, chamadas que
+  continuam a anterior × chamadas frias: glm-5.3-flash:cloud 165 × 296 ms (−44%; prompts das continuações ~2× maiores e ainda assim
+  respondendo antes), glm-5.3:cloud 317 × 412 (−23%), glm-5.2:cloud 188 × 233 (−19%), gemma4 local 342 × 409 (−16%). Sinal
+  consistente de reaproveitamento do prefixo; parte do tempo é fixa (rede, fila), então o número é aproximado. O efeito na COTA do
+  Ollama Cloud não é informado por chamada — continua desconhecido.
+- **Sprint 5 — "memória velha":** os nomes de arquivo que o agente procurou (`calendario_uenp_2026_texto.txt`) vieram do HISTÓRICO
+  da conversa (scripts da tentativa anterior, que falharam antes de gravar), não do banco de memória; o agente conferiu se existiam
+  (duas leituras rápidas) antes de refazer — comportamento razoável. O caminho `-p\…` veio de uma pasta `-p` de verdade no
+  workspace (sobra de um `mkdir -p` de julho), removida para a Lixeira. Nada a corrigir.
+- **Sprint 6 — árvore hierárquica:** não implementada; critério por medição no item 5 da Fase 4.
