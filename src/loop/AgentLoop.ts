@@ -3762,6 +3762,17 @@ export class AgentLoop {
         const janela = await this.providerFactory.janelaMedida?.(chatProfile.model, chatProfile.provider).catch(() => undefined);
         const capacidadeDeContexto = janela ? caracteresQueCabem(janela.tokens) : AgentLoop.contextCapacityChars();
         log.info(`[${this.ts()}] [CONTEXT-CAPACITY] model=${chatProfile.model || '(padrão)'} capacidade=${capacidadeDeContexto} chars origem=${janela?.origem ?? 'padrão (num_ctx)'}`);
+        // ADR-021, critério da árvore (Fase 4, item 5), MEDIDO a cada turno: ela compensa quando o catálogo plano (mandado em toda
+        // chamada) passa do tamanho de uma chamada — o custo de uma volta extra para abrir uma categoria. Os dois lados medidos aqui.
+        const tamanho = (defs: ToolDefinition[]) => defs.reduce((s, d) => s + JSON.stringify(d).length, 0);
+        const catalogo = toolDefs.filter(d => d.name === AgentLoop.CARREGAR_FERRAMENTA);
+        const completas = toolDefs.filter(d => d.name !== AgentLoop.CARREGAR_FERRAMENTA);
+        const catalogoChars = tamanho(catalogo);
+        log.info(
+            `[${this.ts()}] [TOOLS-CATALOGO] completas=${completas.length} completas_chars=${tamanho(completas)} ` +
+            `fora_da_lista=${this.tools.size - completas.length} catalogo_chars=${catalogoChars} contexto_chars=${initialContextChars} ` +
+            `arvore_compensaria=${catalogoChars > initialContextChars}`
+        );
 
         // ── DecisionContext ─────────────────────────────────────────────────
         // Build from all cognitive signals available after session context is ready.

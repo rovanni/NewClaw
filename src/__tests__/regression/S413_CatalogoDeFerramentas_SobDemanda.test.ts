@@ -95,6 +95,14 @@ async function main(): Promise<void> {
     const todas = quieto(() => agente().buildToolDefs({ category: 'desconhecida', confidence: 0.3 }, [], new Set())) as Array<{ name: string }>;
     assert(todas.length === REGISTRO.length && !nomes(todas).includes(AgentLoop.CARREGAR_FERRAMENTA), 'todas as ferramentas enviadas → sem catálogo nem meta-ferramenta');
 
+    console.log('\n=== S413-5 — o critério da árvore é MEDIDO a cada turno, no log ===');
+    {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const src = require('fs').readFileSync(require('path').join(__dirname, '../../loop/AgentLoop.ts'), 'utf-8') as string;
+        assert(/\[TOOLS-CATALOGO\] completas=/.test(src) && /catalogo_chars=\$\{catalogoChars\} contexto_chars=\$\{initialContextChars\}/.test(src) && /arvore_compensaria=\$\{catalogoChars > initialContextChars\}/.test(src),
+            'setupTurn registra o tamanho do catálogo, o do contexto da chamada e se a árvore compensaria (ADR-021, Fase 4, item 5)');
+    }
+
     console.log(`\n${'─'.repeat(60)}`);
     console.log(`S413 RESULTADO: ✅ ${passed} passou | ❌ ${failed} falhou`);
     process.exit(failed > 0 ? 1 : 0);

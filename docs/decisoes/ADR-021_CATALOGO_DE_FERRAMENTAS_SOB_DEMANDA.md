@@ -106,4 +106,6 @@ ferramentas perigosas (`exec_command`, `ssh_exec`) é do modo de operação e da
   da conversa (scripts da tentativa anterior, que falharam antes de gravar), não do banco de memória; o agente conferiu se existiam
   (duas leituras rápidas) antes de refazer — comportamento razoável. O caminho `-p\…` veio de uma pasta `-p` de verdade no
   workspace (sobra de um `mkdir -p` de julho), removida para a Lixeira. Nada a corrigir.
-- **Sprint 6 — árvore hierárquica:** não implementada; critério por medição no item 5 da Fase 4.
+- **Sprint 6 — árvore hierárquica:** não implementada; critério por medição no item 5 da Fase 4, **medido a cada turno** no log
+  `[TOOLS-CATALOGO] completas=… completas_chars=… fora_da_lista=… catalogo_chars=… contexto_chars=… arvore_compensaria=…` (pedido da
+  usuária: "senão não tem como a gente medir e comparar"). `arvore_compensaria=true` aparecendo com frequência = hora de implementá-la.
