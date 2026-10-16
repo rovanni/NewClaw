@@ -480,6 +480,8 @@ export class AgentLoop {
     private turnStartTimes: Map<string, number> = new Map();
     private readonly TURN_STALE_MS = 7 * 60 * 1000; // 7 min — matches MAX_TIMEOUT (420s) + small buffer
     private activeTurnStates: Map<string, TurnState> = new Map();
+    /** ADR-021: a lista de ferramentas de cada turno em andamento (por conversa) — cresce quando o agente carrega uma ferramenta. */
+    private ferramentasDoTurno: Map<string, ToolDefinition[]> = new Map();
 
     private getTurnState(conversationId?: string): TurnState {
         const key = conversationId || 'legacy-fallback-id';
@@ -1502,6 +1504,7 @@ export class AgentLoop {
         this.activeTurnStates.delete(conversationId);
         this.activeTurns.delete(conversationId);
         this.turnStartTimes.delete(conversationId);
+        this.ferramentasDoTurno.delete(conversationId);
         // Dispara cognição pós-turno (fire-and-forget — nunca bloqueia resposta)
         if (this.postTurnCallback) {
             setImmediate(this.postTurnCallback);
@@ -1565,29 +1568,104 @@ export class AgentLoop {
         destructive:      ['exec_command', 'ssh_exec', 'server_config'],
     };
 
-    private buildToolDefs(intent: IntentDecision, hostToolNames: readonly string[] = []): ToolDefinition[] {
+    /**
+     * ADR-021 — a seleção abaixo (skill preferida + CATEGORY_TOOLS) é DICA DE ECONOMIA, não proibição: as ferramentas que ficam de
+     * fora vão num catálogo de uma linha dentro da meta-ferramenta `carregar_ferramenta`, e o agente carrega o que precisar.
+     * `carregadas`: o que o agente já carregou antes neste goal — continua disponível ("carregada fica carregada").
+     */
+    private buildToolDefs(intent: IntentDecision, hostToolNames: readonly string[] = [], carregadas: ReadonlySet<string> = new Set()): ToolDefinition[] {
+        const completa = (t: ToolExecutor): ToolDefinition => ({ name: t.name, description: t.description, parameters: t.parameters });
+        const comCatalogo = (escolhidas: ToolExecutor[]): ToolDefinition[] => {
+            const defs = escolhidas.map(completa);
+            const catalogo = AgentLoop.definicaoDoCatalogo(this.tools, new Set(defs.map(d => d.name)));
+            return catalogo ? [...defs, catalogo] : defs;
+        };
         // Preferred tools from skill + category tools (never exclude domain-appropriate tools).
         // Skills can add specific preferred tools, but category tools are always merged in so
         // the model still has access to domain-relevant tools (e.g. crypto_analysis for data_analysis).
         if (intent.preferredTools && intent.preferredTools.length > 0) {
             const categoryExtras = AgentLoop.CATEGORY_TOOLS[intent.category] ?? [];
-            const allowed = new Set([...AgentLoop.CORE_TOOLS, ...intent.preferredTools, ...categoryExtras, ...hostToolNames]);
+            const allowed = new Set([...AgentLoop.CORE_TOOLS, ...intent.preferredTools, ...categoryExtras, ...hostToolNames, ...carregadas]);
             const filtered = Array.from(this.tools.values()).filter(t => allowed.has(t.name));
             log.info(`[TOOLS] Skill-preferred filter: ${filtered.map(t => t.name).join(', ')} (${filtered.length}/${this.tools.size})`);
-            return filtered.map(t => ({ name: t.name, description: t.description, parameters: t.parameters }));
+            return comCatalogo(filtered);
         }
 
         const extras = AgentLoop.CATEGORY_TOOLS[intent.category] ?? null;
         // Unknown category, low confidence, or conversation with specific topicSlug (indicates a concrete operational capability) → send all tools to be safe.
         if (extras === null || intent.confidence < 0.65 || (intent.category === 'conversation' && intent.topicSlug)) {
             log.info(`[TOOLS] Sending all tools (category=${intent.category}, confidence=${intent.confidence}${intent.topicSlug ? `, topicSlug=${intent.topicSlug}` : ''})`);
-            return Array.from(this.tools.values()).map(t => ({ name: t.name, description: t.description, parameters: t.parameters }));
+            return Array.from(this.tools.values()).map(completa);
         }
 
-        const allowed = new Set([...AgentLoop.CORE_TOOLS, ...extras, ...hostToolNames]);
+        const allowed = new Set([...AgentLoop.CORE_TOOLS, ...extras, ...hostToolNames, ...carregadas]);
         const filtered = Array.from(this.tools.values()).filter(t => allowed.has(t.name));
         log.info(`[TOOLS] Category filter '${intent.category}': ${filtered.map(t => t.name).join(', ')} (${filtered.length}/${this.tools.size})`);
-        return filtered.map(t => ({ name: t.name, description: t.description, parameters: t.parameters }));
+        return comCatalogo(filtered);
+    }
+
+    /** ADR-021: nome da meta-ferramenta. Não é um ToolExecutor registrado — o AgentLoop a monta e a intercepta. */
+    static readonly CARREGAR_FERRAMENTA = 'carregar_ferramenta';
+
+    /**
+     * ADR-021: a meta-ferramenta com o catálogo das ferramentas registradas que NÃO estão na lista do turno — uma linha cada, gerada
+     * da própria descrição da ferramenta (resumo declarado; a definição completa vem ao carregar). undefined: nada fora da lista.
+     */
+    static definicaoDoCatalogo(registro: ReadonlyMap<string, ToolExecutor>, naLista: ReadonlySet<string>): ToolDefinition | undefined {
+        const fora = Array.from(registro.values()).filter(t => !naLista.has(t.name));
+        if (!fora.length) return undefined;
+        const primeiraFrase = (d: string) => {
+            const linha = d.split(/\n/)[0].trim();
+            const fim = linha.search(/[.;:](\s|$)/);
+            const frase = fim > 0 ? linha.slice(0, fim) : linha;
+            return frase.length > 140 ? `${frase.slice(0, 140)}…` : frase;
+        };
+        return {
+            name: AgentLoop.CARREGAR_FERRAMENTA,
+            description:
+                'Carrega ferramentas que EXISTEM mas não vieram completas neste turno — use quando precisar de uma delas. ' +
+                'Ficam disponíveis a partir da sua próxima resposta (e nos próximos passos do mesmo objetivo). ' +
+                'Disponíveis para carregar (resumo de uma linha; a definição completa vem ao carregar):\n' +
+                fora.map(t => `- ${t.name}: ${primeiraFrase(t.description)}`).join('\n'),
+            parameters: {
+                type: 'object',
+                properties: { nomes: { type: 'array', items: { type: 'string' }, description: 'Nomes das ferramentas a carregar, exatamente como no catálogo.' } },
+                required: ['nomes'],
+            },
+        };
+    }
+
+    /**
+     * ADR-021: carrega ferramentas pedidas pelo agente na lista DESTE turno (e na memória do goal). Valida que existem; troca a
+     * meta-ferramenta pelo catálogo atualizado (ou a remove, se nada mais ficou de fora). Devolve o texto da resposta ao agente.
+     */
+    private carregarFerramentas(nomesPedidos: unknown, toolDefs: ToolDefinition[], channelContext?: ChannelContext): string {
+        const nomes = (Array.isArray(nomesPedidos) ? nomesPedidos : [nomesPedidos]).map(n => String(n ?? '').trim()).filter(Boolean);
+        const naLista = new Set(toolDefs.map(d => d.name));
+        const carregadas: string[] = [];
+        const jaTinha: string[] = [];
+        const inexistentes: string[] = [];
+        for (const nome of nomes) {
+            const t = this.tools.get(nome);
+            if (!t || nome === AgentLoop.CARREGAR_FERRAMENTA) { inexistentes.push(nome); continue; }
+            if (naLista.has(nome)) { jaTinha.push(nome); continue; }
+            toolDefs.push({ name: t.name, description: t.description, parameters: t.parameters });
+            naLista.add(nome);
+            carregadas.push(nome);
+            channelContext?.ferramentasCarregadas?.add(nome);
+        }
+        const i = toolDefs.findIndex(d => d.name === AgentLoop.CARREGAR_FERRAMENTA);
+        if (i >= 0) {
+            naLista.delete(AgentLoop.CARREGAR_FERRAMENTA);
+            const novo = AgentLoop.definicaoDoCatalogo(this.tools, naLista);
+            if (novo) toolDefs[i] = novo; else toolDefs.splice(i, 1);
+        }
+        log.info(`[${this.ts()}] [TOOLS] carregar_ferramenta pedidas=${nomes.join(',') || '-'} carregadas=${carregadas.join(',') || '-'} ja_tinha=${jaTinha.join(',') || '-'} inexistentes=${inexistentes.join(',') || '-'}`);
+        const partes: string[] = [];
+        if (carregadas.length) partes.push(`Carregadas: ${carregadas.join(', ')} — disponíveis a partir da sua próxima resposta.`);
+        if (jaTinha.length) partes.push(`Já estavam disponíveis: ${jaTinha.join(', ')}.`);
+        if (inexistentes.length) partes.push(`Não existem: ${inexistentes.join(', ')} — use os nomes do catálogo.`);
+        return partes.join(' ') || 'Nenhum nome de ferramenta informado.';
     }
 
     // ── LLM call with fallback ─────────────────────────────────────────────────
@@ -2496,6 +2574,17 @@ export class AgentLoop {
             const toolName = atomicData.action.name;
             const inputKey = computeToolInputKey(toolName, atomicData.action.input || {});
 
+            // ADR-021: meta-ferramenta também pelo protocolo de ação em JSON (modelos sem tool-calling nativo).
+            if (toolName === AgentLoop.CARREGAR_FERRAMENTA) {
+                const lista = this.ferramentasDoTurno.get(conversationId);
+                const texto = lista
+                    ? this.carregarFerramentas((atomicData.action.input as Record<string, unknown> | undefined)?.nomes, lista, channelContext)
+                    : 'A lista de ferramentas deste turno não está disponível.';
+                loopMessages.push({ role: 'tool', content: texto });
+                cycleHistory.push({ step: stepCount, tool: toolName, input: JSON.stringify(atomicData.action.input ?? {}), status: 'success' });
+                return { action: 'continueLoop', dedupAbort, dedupAbortTool, consecutiveToolFailures, guardsTriggered, totalToolCalls, toolFailureCount };
+            }
+
             if (usedToolInputs.has(inputKey)) {
                 const blockCount = (blockedKeyCount.get(inputKey) ?? 0) + 1;
                 blockedKeyCount.set(inputKey, blockCount);
@@ -3291,6 +3380,18 @@ export class AgentLoop {
             return passthrough();
         }
 
+        // ADR-021: meta-ferramenta — o agente pede ferramentas que existem mas não vieram completas neste turno.
+        if (toolName === AgentLoop.CARREGAR_FERRAMENTA) {
+            const lista = this.ferramentasDoTurno.get(conversationId);
+            const texto = lista
+                ? this.carregarFerramentas(toolCall.arguments?.nomes, lista, channelContext)
+                : 'A lista de ferramentas deste turno não está disponível.';
+            loopMessages.push({ role: 'tool', content: texto, tool_call_id: toolCall.id });
+            cycleHistory.push({ step: stepCount, tool: toolName, input: JSON.stringify(toolCall.arguments ?? {}), status: 'success' });
+            usedToolInputs.add(inputKey);
+            return passthrough();
+        }
+
         // FIX C: quando em contexto de goal-execution, adiar send_document para pós-validação
         if (toolName === 'send_document' && channelContext?.deliveryTracking?.deferSendDocument) {
             const filePath = String(toolCall.arguments?.file_path ?? toolCall.arguments?.path ?? '(unknown)');
@@ -3583,7 +3684,9 @@ export class AgentLoop {
 
         // RFC-008 (HOST_CONTEXT=on): ferramentas do aplicativo hospedeiro entram em TODA categoria — só acrescenta.
         const hostTools = hostContextMode() === 'on' ? hostAppToolNames(channelContext?.metadata) : [];
-        const toolDefs: ToolDefinition[] = this.buildToolDefs(intentDecision, hostTools);
+        const toolDefs: ToolDefinition[] = this.buildToolDefs(intentDecision, hostTools, channelContext?.ferramentasCarregadas);
+        // ADR-021: a lista do turno, para `carregar_ferramenta` poder acrescentar ferramentas no meio do turno.
+        this.ferramentasDoTurno.set(conversationId, toolDefs);
 
         // O override do roteador vale só para ESTE turno. Antes, `resolveProfile()` devolvia a
         // referência do perfil guardado no registry e estas linhas escreviam nele: quando o perfil

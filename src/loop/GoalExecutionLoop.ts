@@ -267,6 +267,22 @@ export class GoalExecutionLoop {
      * espelhadas à mão em cada um). Captura de Caso e de conhecimento operacional só gravam; o aprendizado de skill roda depois,
      * em segundo plano, fora do caminho da resposta. Nada aqui influencia o resultado deste goal.
      */
+    /**
+     * ADR-021 — "carregada fica carregada": o MESMO Set em todos os passos do goal, para uma ferramenta carregada pelo agente
+     * (`carregar_ferramenta`) continuar na lista dos passos seguintes sem pedir de novo. Em processo, com teto pequeno (os goals
+     * mais antigos saem primeiro); um reinício só custa pedir de novo.
+     */
+    private readonly ferramentasPorGoal = new Map<string, Set<string>>();
+    private ferramentasCarregadasDoGoal(goalId: string): Set<string> {
+        let s = this.ferramentasPorGoal.get(goalId);
+        if (!s) {
+            s = new Set<string>();
+            this.ferramentasPorGoal.set(goalId, s);
+            if (this.ferramentasPorGoal.size > 50) this.ferramentasPorGoal.delete(this.ferramentasPorGoal.keys().next().value as string);
+        }
+        return s;
+    }
+
     private registrarAprendizados(goalId: string): void {
         const goal = this.goalStore.getById(goalId);
         if (!goal) return;
@@ -2776,6 +2792,7 @@ export class GoalExecutionLoop {
             ...channelContext,
             goalTrace: { goalId: goal.id, stepId: step.id, stepDescription: (step.description ?? '').slice(0, 120), planGeneration: currentGeneration, userRequest: goal.userIntent },
             priorStepEvidence,
+            ferramentasCarregadas: this.ferramentasCarregadasDoGoal(goal.id),
             deliveryTracking: {
                 deferSendDocument: (args) => {
                     const fp = String(args['file_path'] ?? args['path'] ?? '');

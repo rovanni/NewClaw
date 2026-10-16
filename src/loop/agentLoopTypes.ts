@@ -156,6 +156,11 @@ export interface ChannelContext {
      */
     priorStepEvidence?: EvidenceItem[];
     /**
+     * ADR-021: ferramentas que o agente já carregou (meta-ferramenta `carregar_ferramenta`) neste goal — continuam na lista dos
+     * passos seguintes ("carregada fica carregada"). O GoalExecutionLoop mantém o mesmo Set em todos os passos do goal.
+     */
+    ferramentasCarregadas?: Set<string>;
+    /**
      * Só observabilidade (`[GROUNDING-TRACE]`, S-E/issue 048): a qual goal/step este turno pertence.
      * Nenhuma decisão lê isto — existe para o log do juiz de grounding poder dizer QUAL passo do
      * plano produziu o texto avaliado, sem o AgentLoop precisar conhecer a semântica de goals.
