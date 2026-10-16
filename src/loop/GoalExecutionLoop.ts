@@ -16,6 +16,7 @@
  *   - Nenhum ciclo roda sem trigger explícito (user message ou auth callback)
  */
 
+import { executarComPrazo } from '../shared/turnCancellation';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
@@ -852,7 +853,20 @@ export class GoalExecutionLoop {
 
     // ── Loop de ciclos (compartilhado entre executeGoal e resumeGoal) ─────────
 
-    private async runLoop(
+    private runLoop(
+        goal: Goal,
+        channelContext: ChannelContext,
+        onProgress: ProgressCallback | undefined,
+        initialCycles: number,
+        initialReplans: number,
+        initialFeedback?: string,
+    ): Promise<GoalResult> {
+        // ADR-023: tudo o que o objetivo executa enxerga o prazo final dele — um comando nunca dura mais que o objetivo que o
+        // pediu (o exec_command usa o que resta como teto, em vez de um número próprio).
+        return executarComPrazo(goal.expiresAt, () => this.runLoopNoPrazo(goal, channelContext, onProgress, initialCycles, initialReplans, initialFeedback));
+    }
+
+    private async runLoopNoPrazo(
         goal: Goal,
         channelContext: ChannelContext,
         onProgress: ProgressCallback | undefined,

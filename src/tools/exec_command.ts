@@ -17,6 +17,7 @@ import { resolvePath } from '../utils/crossPlatform';
 import { extractVerifiedArtifacts } from '../loop/planning/artifactContract';
 import { GOAL_LIMITS } from '../loop/GoalLimits';
 import { amostradorDaPlataforma, AmostraDeAtividade } from './atividadeDoProcesso';
+import { prazoDoTurno, sinalDoTurno } from '../shared/turnCancellation';
 
 const log = createLogger('ExecCommandTool');
 
@@ -524,7 +525,12 @@ export class ExecCommandTool implements ToolExecutor {
 
     async execute(args: Record<string, any>): Promise<ToolResult> {
         let command = args.command as string;
-        const timeout = (args.timeout as number) || PRAZO_PADRAO_MS;
+        // Teto (ADR-023): o pedido explícito do agente; senão, o que RESTA ao objetivo em que o comando roda; fora de um objetivo,
+        // o limite de um objetivo. Nunca é a regra do dia a dia — quem encerra comando parado é a tolerância sem atividade.
+        const prazoDoObjetivo = prazoDoTurno();
+        const origemDoTeto: 'pedido' | 'objetivo' | 'padrao' = args.timeout ? 'pedido' : prazoDoObjetivo ? 'objetivo' : 'padrao';
+        const timeout = (args.timeout as number)
+            || (prazoDoObjetivo ? Math.max(prazoDoObjetivo - Date.now(), 5000) : PRAZO_PADRAO_MS);
         const toleranciaS = Number(args.tolerancia_sem_atividade) > 0 ? Number(args.tolerancia_sem_atividade) : TOLERANCIA_PADRAO_S;
         const workdir = args.workdir as string;
 
@@ -714,9 +720,14 @@ Saída até a interrupção (final):
 ${saida.slice(-12000)}` : fato,
                     }));
                 };
-                const fatoDoPrazo = () => `[interrompido pelo NewClaw: o comando passou do limite de ${timeout} ms do exec_command ` +
+                const fatoDoPrazo = () => (origemDoTeto === 'objetivo'
+                    ? `[interrompido pelo NewClaw: o comando chegou ao fim do tempo que restava ao objetivo (${Math.round(timeout / 1000)} s) `
+                    : `[interrompido pelo NewClaw: o comando passou do limite de ${timeout} ms do exec_command `) +
                     `(${Math.round((Date.now() - t0) / 1000)} s decorridos) e foi encerrado junto com os processos que abriu; ` +
-                    `o comando NÃO terminou. O limite é o parâmetro "timeout" do exec_command.]`;
+                    `o comando NÃO terminou.${origemDoTeto === 'objetivo' ? '' : ' O limite é o parâmetro "timeout" do exec_command.'}]`;
+                let cancelado = false;
+                const fatoDoCancelamento = () => `[interrompido pelo NewClaw: o usuário cancelou o pedido ("Parar") e o comando foi ` +
+                    `encerrado junto com os processos que abriu, após ${Math.round((Date.now() - t0) / 1000)} s; o comando NÃO terminou.]`;
                 const fatoDaSaida = `[interrompido pelo NewClaw: a saída do comando passou de ${MAX_SAIDA_BYTES} bytes e ele foi ` +
                     `encerrado junto com os processos que abriu; o comando NÃO terminou. Reduza a saída (filtre, ou grave num arquivo e leia um trecho).]`;
 
@@ -732,6 +743,7 @@ ${saida.slice(-12000)}` : fato,
                     `(${Math.round((Date.now() - t0) / 1000)} s no total). Se ele precisa esperar sem atividade, aumente o parâmetro ` +
                     `"tolerancia_sem_atividade" do exec_command.]`;
                 filho.on('close', (code, signal) => {
+                    if (cancelado) { rejeitarComFato(fatoDoCancelamento()); return; }
                     if (estourouPrazo) { rejeitarComFato(fatoDoPrazo()); return; }
                     if (parado) { rejeitarComFato(fatoParado()); return; }
                     if (estourouSaida) { rejeitarComFato(fatoDaSaida); return; }
@@ -798,7 +810,17 @@ ${saida.slice(-12000)}` : fato,
                         }
                     } finally { amostrando = false; }
                 }, 1000);
-                function pararRelogios(): void { clearTimeout(relogio); clearInterval(vigia); }
+                // "Parar" do usuário: o comando cai na hora, com a árvore — antes só as chamadas ao modelo ouviam o sinal do turno.
+                const sinal = sinalDoTurno();
+                const aoCancelar = () => {
+                    if (encerrado || cancelado) return;
+                    cancelado = true;
+                    log.warn(`[EXEC-CANCELADO] pedido cancelado pelo usuário — encerrando a árvore do processo pid=${filho.pid}`);
+                    encerrarArvore(filho.pid);
+                    setTimeout(() => rejeitarComFato(fatoDoCancelamento()), 5000).unref();
+                };
+                if (sinal?.aborted) aoCancelar(); else sinal?.addEventListener('abort', aoCancelar, { once: true });
+                function pararRelogios(): void { clearTimeout(relogio); clearInterval(vigia); sinal?.removeEventListener('abort', aoCancelar); }
             });
 
             // Contrato de artefato (docs/sprints-r1-r7-2026-07-13/REVISAO_ARQUITETURAL_SPRINT_R7_2026-07-13.md): scripts
