@@ -20,6 +20,10 @@ import { DECISION_PROMPT_MAX_CHARS, type CallTelemetry } from '../core/providerT
 import { createLogger } from '../shared/AppLogger';
 import { combinarSinais, sinalDoTurno, prazoDoTurno } from '../shared/turnCancellation';
 import { GOAL_LIMITS } from '../loop/GoalLimits';
+import { tetoDoPerfilAuxiliar } from '../shared/auxTimeout';
+
+/** No prazo da vez, o modelo conta como "ainda gerando" se chegou um pedaço nos últimos N ms (ADR-024). */
+const JANELA_GERANDO_MS = 10_000;
 import { PerfilDoJuiz } from './perfilDoJuiz';
 import { descreverAgora } from '../shared/dataEHora';
 import { descreverAmbienteDeExecucao } from '../shared/ambienteDeExecucao';
@@ -256,20 +260,45 @@ export class ValidationEngine {
             // O modo com custo medido recebe pelo menos o que o trabalho dele precisa (dentro do que resta).
             if (medidoDoModo && !ultimo) fatia = Math.max(fatia, Math.min(restante, medidoDoModo.prazoMs));
             const ctrl = new AbortController();
-            const timer = setTimeout(() => ctrl.abort(), fatia);
             const t1 = Date.now();
+            // ADR-024: o prazo da vez (fatia) NÃO corta um modelo que AINDA ESTÁ GERANDO e não passou do orçamento em tokens —
+            // reteste do GenOffice (16/10/2026): juiz cortado aos 59 s com 2,3 mil tokens (orçamento medido: 7,3 mil) porque a
+            // nuvem estava lenta (~40 tok/s, contra 238 medidos). No prazo, olha a telemetria AO VIVO: chegou pedaço nos últimos
+            // JANELA_GERANDO_MS e ainda abaixo do orçamento → confere de novo a cada 2 s. Proteções: com orçamento medido, o
+            // próprio provedor para no limite de tokens e o teto é o que resta ao objetivo; sem histórico, o teto de sempre do
+            // juiz (perfil 'validacao'); sem telemetria ao vivo (provedor que não informa), corta no prazo como antes.
+            const tetoDaChamada = Math.max(fatia, Math.min(medidoDoModo ? tetoDoObjetivo : Math.max(fatia, tetoDoPerfilAuxiliar('validacao')), tetoDoObjetivo));
+            const tentativasAntes = telemetria.attempts.length;
+            let continuouGerando = false;
+            let timer: NodeJS.Timeout;
+            const decidirNoPrazo = (): void => {
+                const t = telemetria.attempts.length > tentativasAntes ? telemetria.attempts[telemetria.attempts.length - 1] : undefined;
+                const agora = Date.now();
+                const gerando = !!t?.ultimoPedacoEm && agora - t.ultimoPedacoEm < JANELA_GERANDO_MS;
+                const abaixoDoOrcamento = !medidoDoModo || (t?.pedacosAteAgora ?? 0) < medidoDoModo.tokens;
+                if (gerando && abaixoDoOrcamento && agora - t1 < tetoDaChamada) {
+                    if (!continuouGerando) {
+                        continuouGerando = true;
+                        log.info(`[VALIDACAO] tipo=${d.tipo} modelo=${chaveDoModelo} modo=${modos[i]} prazo da vez (${Math.round(fatia / 1000)} s) chegou com o modelo AINDA GERANDO (${t?.pedacosAteAgora ?? 0} pedaços${medidoDoModo ? ` de ${medidoDoModo.tokens} do orçamento` : ''}) — não corta; teto ${Math.round(tetoDaChamada / 1000)} s`);
+                    }
+                    timer = setTimeout(decidirNoPrazo, 2000);
+                    return;
+                }
+                ctrl.abort();
+            };
+            timer = setTimeout(decidirNoPrazo, fatia);
             modosTentados.push(modos[i]);
             let resultado;
             try {
                 resultado = await this.providerFactory.chatWithFallback(
-                    [{ role: 'user', content: prompt }], undefined, undefined, fatia, combinarSinais(opcoes.signal, ctrl.signal), modelo || undefined,
-                    { reasoningIntensive: modos[i] === 'livre', raciocinio: modos[i], saidaJson: true, limiteDeSaidaTokens: medidoDoModo?.tokens, diag: { component: 'ValidationEngine', role: 'validator', phase: d.tipo, goalId: opcoes.goalId }, telemetry: telemetria },
+                    [{ role: 'user', content: prompt }], undefined, undefined, tetoDaChamada, combinarSinais(opcoes.signal, ctrl.signal), modelo || undefined,
+                    { reasoningIntensive: modos[i] === 'livre', raciocinio: modos[i], saidaJson: true, limiteDeSaidaTokens: medidoDoModo?.tokens, prazoDaVezMs: fatia, diag: { component: 'ValidationEngine', role: 'validator', phase: d.tipo, goalId: opcoes.goalId }, telemetry: telemetria },
                 );
             } catch (err) {
                 // Falha de infraestrutura (rede, provedor): não diz nada sobre o modo — não pune o perfil nem tenta o outro.
                 return naoAvaliavel(`erro na chamada: ${String(err).slice(0, 120)}`, 'erro');
             } finally {
-                clearTimeout(timer);
+                clearTimeout(timer!);
             }
             const ms = Date.now() - t1;
             if (opcoes.signal?.aborted || sinalDoTurno()?.aborted) return naoAvaliavel('cancelado pelo usuário', 'llm_cancelled');

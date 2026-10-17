@@ -38,9 +38,9 @@ function fabrica(chamadas: Chamada[], orcamentoMs = 60_000) {
         getBudgetAuxiliar: () => ({ timeoutMs: orcamentoMs, origem: 'padrao', latenciaTipicaMs: null }),
         chatWithFallback: async (
             _m: unknown, _t: unknown, _p: unknown, timeoutMs: number, sinal: AbortSignal | undefined, _modelo: unknown,
-            opts: { raciocinio: string; reasoningIntensive?: boolean }
+            opts: { raciocinio: string; reasoningIntensive?: boolean; prazoDaVezMs?: number }
         ) => {
-            chamadas.push({ modo: opts.raciocinio, fatiaMs: timeoutMs, reasoningIntensive: !!opts.reasoningIntensive });
+            chamadas.push({ modo: opts.raciocinio, fatiaMs: opts.prazoDaVezMs ?? timeoutMs, reasoningIntensive: !!opts.reasoningIntensive });   // ADR-024: prazo da vez explícito
             if (opts.raciocinio === 'livre') {
                 return new Promise(res => {
                     const t = setTimeout(() => res({ status: 'timeout', content: '' }), 5);

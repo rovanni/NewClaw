@@ -492,6 +492,8 @@ export class OllamaProvider implements ILLMProvider {
             for await (const chunk of this.streamChat(messages, tools, customTimeoutMs, externalSignal, reasoningIntensive, raciocinio, saidaJson, limiteDeSaida)) {
                 chunkCount++;
                 if (tele) {
+                    tele.pedacosAteAgora = chunkCount;
+                    tele.ultimoPedacoEm = Date.now();
                     const ms = Date.now() - startTime;
                     if (tele.firstChunkMs === undefined) { tele.firstChunkMs = ms; tele.firstChunkType = chunk.type; }
                     if (chunk.type === 'content' && tele.firstContentMs === undefined) tele.firstContentMs = ms;

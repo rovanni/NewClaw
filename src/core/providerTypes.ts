@@ -241,6 +241,11 @@ export interface ChatFallbackOptions {
      * done_reason=length; o raciocínio consome o limite). Ausente = sem limite (comportamento anterior).
      */
     limiteDeSaidaTokens?: number;
+    /**
+     * ADR-024 (informativo): o prazo da VEZ de quem chama. Quem controla o corte é o próprio chamador (ele não corta um modelo
+     * que ainda gera abaixo do orçamento); `timeoutMs` passa a ser o TETO da chamada. O provedor não usa este campo.
+     */
+    prazoDaVezMs?: number;
 }
 
 /** Gravador de voo (ADR-013): o que aconteceu numa chamada ao LLM, tentativa por tentativa. */
@@ -268,6 +273,12 @@ export interface AttemptTelemetry {
     doneReason?: string;
     promptTokens?: number;
     evalTokens?: number;
+    /**
+     * AO VIVO (atualizados a cada pedaço do streaming): quantos pedaços chegaram até agora e quando chegou o último (epoch ms).
+     * Quem chama usa para saber se o modelo AINDA ESTÁ GERANDO no instante do prazo (ADR-024: não cortar quem trabalha).
+     */
+    pedacosAteAgora?: number;
+    ultimoPedacoEm?: number;
     /** Tempos que o SERVIDOR mediu (Ollama: prompt_eval_duration / eval_duration) — ADR-024. Ausentes = não informados. */
     promptEvalMs?: number;
     evalMs?: number;

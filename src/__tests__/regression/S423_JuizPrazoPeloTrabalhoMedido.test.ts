@@ -35,7 +35,7 @@ async function main(): Promise<void> {
         getBudgetAuxiliar: () => ({ timeoutMs: 1000, origem: 'padrao', latenciaTipicaMs: null }),
         ...(medido ? { orcamentoPeloTrabalho: (_mod: unknown, modo: string) => medido(modo) } : {}),
         chatWithFallback: async (_m: unknown, _t: unknown, _p: unknown, fatia: number, _s: unknown, _mod: unknown, opts: any) => {
-            chamadas.push({ modo: opts.raciocinio, fatia, limite: opts.limiteDeSaidaTokens });
+            chamadas.push({ modo: opts.raciocinio, fatia: opts.prazoDaVezMs ?? fatia, limite: opts.limiteDeSaidaTokens });   // ADR-024: prazo da vez explícito
             return { status: 'success', content: VEREDITO, attempts: [] };
         },
     }) as any;

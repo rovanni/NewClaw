@@ -42,7 +42,7 @@ function fabrica(comportamento: Comportamento, chamadas: Chamada[], orcamentoMs 
     return {
         getBudgetAuxiliar: () => ({ timeoutMs: orcamentoMs, origem: 'padrao', latenciaTipicaMs: null }),
         chatWithFallback: async (_m: unknown, _t: unknown, _p: unknown, timeoutMs: number, sinal: AbortSignal | undefined, _modelo: unknown, opts: any) => {
-            chamadas.push({ modo: opts.raciocinio, fatiaMs: timeoutMs, reasoningIntensive: !!opts.reasoningIntensive });
+            chamadas.push({ modo: opts.raciocinio, fatiaMs: opts.prazoDaVezMs ?? timeoutMs, reasoningIntensive: !!opts.reasoningIntensive });   // ADR-024: o prazo da vez vem explícito; timeoutMs é o teto
             const travar = (): Promise<any> => new Promise(res => {
                 const t = setTimeout(() => res({ status: 'timeout', content: '', attempts: [] }), timeoutMs);
                 sinal?.addEventListener('abort', () => { clearTimeout(t); res({ status: 'cancelled', content: '', attempts: [] }); });

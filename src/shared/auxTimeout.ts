@@ -114,6 +114,9 @@ const PERFIS: Record<PerfilAuxiliar, DefinicaoPerfil> = {
     validacao: { fator: 4, minMs: 30_000, maxMs: 300_000, padraoMs: 45_000, msPorMilCaracteres: 8_000 },
 };
 
+/** O teto de um perfil (ms) — para quem precisa do MESMO limite de proteção, sem repetir o número. */
+export function tetoDoPerfilAuxiliar(perfil: PerfilAuxiliar): number { return PERFIS[perfil].maxMs; }
+
 /** Fonte da latência típica — injetada para manter este módulo sem dependência de runtime. */
 export interface FonteDeLatencia {
     getLatenciaTipicaMs(provedor: string): number | null;
