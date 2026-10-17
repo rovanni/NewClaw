@@ -456,6 +456,19 @@ export function sleepSync(ms: number): void {
  * @param extraRoots Roots adicionais a permitir no sandbox (ex: ['/custom/dir']).
  * @returns { resolved } ou { resolved, error } quando fora do sandbox.
  */
+/**
+ * Tira o prefixo RELATIVO "workspace" de um caminho que o modelo escreveu pensando a partir da raiz do NewClaw ("workspace",
+ * "workspace/x", "workspace\x") — os caminhos relativos já SÃO a partir do workspace. Uma regra só, para read/write
+ * (resolvePath) e para a pasta de trabalho do exec_command: antes só "workspace/" (barra normal) era reconhecido, e no Windows
+ * o modelo escreve "workspace\x" ou passa workdir "workspace" — virava workspace\workspace\… (teste real 16/10/2026; a pasta
+ * workspace\workspace existia vazia desde 23/09, criada por esse mesmo engano).
+ */
+export function semPrefixoDoWorkspace(caminho: string): string {
+    if (path.isAbsolute(caminho) || caminho.startsWith('/') || caminho.startsWith('\\')) return caminho;
+    const m = /^workspace(?:[\\/]+|$)/.exec(caminho);
+    return m ? caminho.slice(m[0].length) : caminho;
+}
+
 export function resolvePath(
     inputPath: string,
     { extraRoots = [] }: { extraRoots?: string[] } = {}
@@ -466,10 +479,8 @@ export function resolvePath(
 
     let expanded = Array.isArray(inputPath) ? String((inputPath as string[])[0] ?? '') : String(inputPath ?? '');
 
-    // Strip prefixo relativo 'workspace/' (sem barra inicial)
-    if (!expanded.startsWith('/') && !expanded.startsWith('\\') && expanded.startsWith('workspace/')) {
-        expanded = expanded.slice(10);
-    }
+    // Strip prefixo relativo 'workspace' (sem barra inicial) — "workspace/x", "workspace\x" ou "workspace"
+    expanded = semPrefixoDoWorkspace(expanded);
 
     // Expansão ~/
     if (expanded.startsWith('~/')) {

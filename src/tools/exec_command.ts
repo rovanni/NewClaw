@@ -13,7 +13,7 @@ import { resolveHost, isDestructive } from './server_config';
 import path from 'path';
 import { errorMessage } from '../shared/errors';
 import { createLogger } from '../shared/AppLogger';
-import { resolvePath } from '../utils/crossPlatform';
+import { resolvePath, semPrefixoDoWorkspace } from '../utils/crossPlatform';
 import { extractVerifiedArtifacts } from '../loop/planning/artifactContract';
 import { GOAL_LIMITS } from '../loop/GoalLimits';
 import { amostradorDaPlataforma, AmostraDeAtividade } from './atividadeDoProcesso';
@@ -83,7 +83,8 @@ export function encerrarArvore(pid: number | undefined): void {
 // depende disso — um path absoluto é inequívoco não importa qual seja o cwd.
 function looksLikeForeignWorkspaceReference(token: string, allowRelativePrefix: boolean): boolean {
     if (path.isAbsolute(token) && /[\\/]workspace(?:[\\/]|$)/.test(token)) return true;
-    if (allowRelativePrefix && /^workspace\//.test(token)) return true;
+    // "workspace/x" e também "workspace\x" (o modelo no Windows escreve com barra invertida) — mesma regra de semPrefixoDoWorkspace.
+    if (allowRelativePrefix && /^workspace[\\/]/.test(token)) return true;
     return false;
 }
 
@@ -586,7 +587,9 @@ export class ExecCommandTool implements ToolExecutor {
         const workspaceDir = path.resolve(process.env.WORKSPACE_DIR || path.join(process.cwd(), 'workspace'));
 
         // Se workdir for absoluto, resolve em relação ao root; se relativo, em relação ao workspace
-        const effectiveWorkdir = workdir ? path.resolve(workspaceDir, workdir) : workspaceDir;
+        // workdir relativo é a partir do workspace — "workspace" ou "workspace\x" (o modelo pensando a partir da raiz do
+        // NewClaw) não pode virar workspace\workspace\x (ver semPrefixoDoWorkspace).
+        const effectiveWorkdir = workdir ? path.resolve(workspaceDir, semPrefixoDoWorkspace(workdir)) : workspaceDir;
 
         // Normaliza referências a um "workspace" de outra instalação (ex: o GoalPlanner gerou
         // "python /home/<user>/<repo>/workspace/script.py" copiando um path de outra máquina)
