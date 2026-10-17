@@ -194,7 +194,8 @@ async function main() {
     assert(/replanBudget\s*<=\s*0/.test(gelSrc), 'checagem de replanBudget<=0 (transição para failed) continua presente e inalterada');
     assert(/setStatus\(currentGoal\.id, 'failed'\)/.test(gelSrc), 'transição para status=failed quando budget esgota continua presente');
     assert(
-        (gelSrc.match(/while\s*\(totalCycles < GOAL_LIMITS\.MAX_CYCLES\)/g) ?? []).length === 1,
+        // S430: o laço conta os ciclos SEM AVANÇO (passo concluído não gasta o limite) — continua um único laço limitado por MAX_CYCLES.
+        (gelSrc.match(/while\s*\(ciclosSemAvanco < GOAL_LIMITS\.MAX_CYCLES\)/g) ?? []).length === 1,
         'nenhum novo loop foi introduzido — continua existindo exatamente 1 loop principal limitado por MAX_CYCLES'
     );
 

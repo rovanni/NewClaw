@@ -49,7 +49,9 @@ async function main() {
     const r = await new ExecCommandTool().execute({ command: comando, timeout: 1500 });
     const ms = Date.now() - t0;
     assert(r.success === false, 'resultado é falha', r);
-    assert(ms < 1500 + 7000, `retorna logo depois do prazo (${ms} ms)`);
+    // Folga para máquina carregada: na suíte completa (16/10/2026) o taskkill do Windows sob carga levou o retorno a 8,7 s.
+    // O que importa é não ficar preso esperando o comando (que nunca termina sozinho).
+    assert(ms < 1500 + 15000, `retorna logo depois do prazo (${ms} ms)`);
     await esperar(600);
     const tamanho1 = fs.existsSync(marca) ? fs.statSync(marca).size : 0;
     await esperar(1500);
