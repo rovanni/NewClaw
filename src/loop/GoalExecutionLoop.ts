@@ -2199,7 +2199,13 @@ export class GoalExecutionLoop {
         // H4/ITEM4: rastreia writes por path para detectar duplicate writes entre ciclos
         const writeTraceByPath = new Map<string, { cycle: number; step: string; source: string }>();
 
-        while (totalCycles < GOAL_LIMITS.MAX_CYCLES) {
+        // O limite conta só os ciclos SEM AVANÇO (passo que falhou, replanejamento, validação que não confirmou). Um passo que
+        // termina com sucesso é trabalho feito, não tentativa gasta. Antes contava TODO ciclo: no reteste do GenOffice (16/10/2026)
+        // um plano de 5 passos com 3 replanejamentos esgotou os 12 ciclos com os passos dando certo — o mesmo corte injusto do
+        // relógio, por contagem. Proteção contra repetição sem fim continua: replanejamentos têm orçamento próprio e o objetivo
+        // tem o seu prazo. `initialCycles` (retomada) entra como já gasto — conservador.
+        let ciclosSemAvanco = initialCycles;
+        while (ciclosSemAvanco < GOAL_LIMITS.MAX_CYCLES) {
             totalCycles++;
 
             // Cancelamento (botão "Parar" / /cancelar): também no INÍCIO de cada ciclo. Antes só se olhava depois de um passo
@@ -2238,6 +2244,7 @@ export class GoalExecutionLoop {
                 currentGoal = validationResult.goal;
                 totalReplans = validationResult.totalReplans;
                 priorFeedback = validationResult.priorFeedback;
+                ciclosSemAvanco++;   // a validação não confirmou a conclusão: ciclo sem avanço
                 continue;
             }
 
@@ -2292,6 +2299,9 @@ export class GoalExecutionLoop {
             currentGoal = outcomeHandled.goal;
             totalReplans = outcomeHandled.totalReplans;
             priorFeedback = outcomeHandled.priorFeedback;
+            // Avançou = o passo executado neste ciclo está CONCLUÍDO no plano atual (replanejado/falhou/não confirmado = não).
+            const avancou = currentGoal.currentPlan.some(s => s.id === pendingStep.id && s.status === 'completed');
+            if (!avancou) ciclosSemAvanco++;
 
             // Complemento do usuário chegado durante a execução (ver MessageBus.ts,
             // GoalOrchestrator.trySupplementActiveGoal) — roda DEPOIS do switch de outcome
@@ -2360,10 +2370,10 @@ export class GoalExecutionLoop {
         // (teste real 16/10/2026: 22 min, 4 replanos, "executing → failed" com um passo ainda por fazer e nada dizendo por quê).
         const pendentes = this.getPendingSteps(currentGoal.currentPlan);
         const motivoDaSaida = allStepsDone
-            ? `Atingi o limite de ${GOAL_LIMITS.MAX_CYCLES} ciclos de trabalho e a conferência final não confirmou a conclusão.`
-            : `Atingi o limite de ${GOAL_LIMITS.MAX_CYCLES} ciclos de trabalho com ${pendentes.length} passo(s) ainda por fazer` +
+            ? `Atingi o limite de ${GOAL_LIMITS.MAX_CYCLES} ciclos sem avanço (passos que falharam ou replanejamentos) e a conferência final não confirmou a conclusão.`
+            : `Atingi o limite de ${GOAL_LIMITS.MAX_CYCLES} ciclos sem avanço (passos que falharam ou replanejamentos) com ${pendentes.length} passo(s) ainda por fazer` +
               (pendentes.length ? `: ${pendentes.map(s => `"${s.description.slice(0, 120)}"`).join('; ')}.` : '.');
-        log.warn(`[GoalLoop] goal=${currentGoal.id} MAX_CYCLES=${GOAL_LIMITS.MAX_CYCLES} esgotado — replans=${totalReplans} pendentes=${pendentes.map(s => s.id).join(',') || 'nenhum'} → failed`);
+        log.warn(`[GoalLoop] goal=${currentGoal.id} MAX_CYCLES=${GOAL_LIMITS.MAX_CYCLES} ciclos sem avanço esgotados (ciclos no total=${totalCycles}) — replans=${totalReplans} pendentes=${pendentes.map(s => s.id).join(',') || 'nenhum'} → failed`);
         this.goalStore.setStatus(currentGoal.id, 'failed');
         const explanation = this.gracefulDelivery.buildFailureMessage(currentGoal, state.cognitiveContext, motivoDaSaida);
         return this.buildResult(currentGoal, false, totalCycles, totalReplans, explanation);

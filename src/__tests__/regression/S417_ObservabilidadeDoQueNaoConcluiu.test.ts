@@ -56,7 +56,7 @@ async function main(): Promise<void> {
     console.log('\n=== S417-3 — goal que esgota os ciclos: o motivo no log e na mensagem ===');
     {
         const src = ler('src/loop/GoalExecutionLoop.ts');
-        assert(/MAX_CYCLES=\$\{GOAL_LIMITS\.MAX_CYCLES\} esgotado — replans=/.test(src), 'linha de log com o limite, os replanos e os passos pendentes');
+        assert(/MAX_CYCLES=\$\{GOAL_LIMITS\.MAX_CYCLES\} ciclos sem avanço esgotados \(ciclos no total=\$\{totalCycles\}\) — replans=/.test(src), 'linha de log com o limite (ciclos sem avanço), o total, os replanos e os passos pendentes');
         assert(/buildFailureMessage\(currentGoal, state\.cognitiveContext, motivoDaSaida\)/.test(src), 'o motivo vai para a autoridade única da mensagem de falha (comportamento real em S279)');
     }
 
