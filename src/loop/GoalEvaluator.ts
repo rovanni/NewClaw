@@ -132,10 +132,16 @@ const ERROR_PATTERNS: ErrorPattern[] = [
     // inglês e pt-BR, e o "[exit code: 127]" some daqui porque classifyError() checa exitCode
     // ANTES desta lista) identificaram o caso — mantido só pra texto solto tipo "not found" sem
     // formato reconhecido o bastante pra extrair um nome.
+    //
+    // Só as frases que DIZEM que um comando falta ("command not found", "which: no"). Antes também casava "not found",
+    // "no such file", "ENOENT", "cannot find" — palavras que aparecem em fatos de outra natureza, e o fato real se perdia
+    // (reteste do GenOffice, 16/10/2026): o 404 do registro do npm via api_request virou "Ferramenta 'api_request' não
+    // encontrada no sistema" e o "npm error code E404" virou "Caminho não encontrado" — o planejador nunca soube que o
+    // PACOTE não existia no npm e insistiu na rota. Fora destas frases, vale o texto real do erro (fallback genérico).
     {
-        pattern: /command not found|not found|no such file|ENOENT|which: no|cannot find/i,
+        pattern: /command not found|which: no/i,
         kind: 'missing_tool',
-        description: (_, tool) => `Ferramenta '${tool}' não encontrada no sistema`,
+        description: (_, tool) => `Comando não encontrado ao executar '${tool}'`,
         suggestedActions: [
             'Instalar a ferramenta via gerenciador de pacotes',
             'Buscar ferramenta alternativa com a mesma função',
@@ -509,24 +515,10 @@ export class GoalEvaluator {
         const matched = this.findMatchedPattern(error);
 
         if (matched) {
-            // exec_command: sem exitCode estruturado disponível pra decidir, o padrão genérico de
-            // missing_tool em ERROR_PATTERNS bateu (texto solto) mas extractMissingExecutable() não
-            // conseguiu extrair um binário — sinal de que o problema real é um PATH de ARGUMENTO
-            // inexistente, não o binário do próprio exec_command.
-            if (matched.kind === 'missing_tool' && toolName === 'exec_command') {
-                return {
-                    kind: 'tool_error',
-                    toolName,
-                    description: `Caminho não encontrado ao executar '${toolName}': ${error.slice(0, 200)}`,
-                    suggestedActions: [
-                        'Verificar se o caminho existe com list_workspace',
-                        'Listar o workspace: list_workspace',
-                        'Corrigir o caminho no próximo passo',
-                    ],
-                    detectedAt: Date.now(),
-                };
-            }
-
+            // (Até 17/10/2026 havia aqui um caso "exec_command + missing_tool por texto solto → 'Caminho não encontrado'":
+            // ele CHUTAVA que o "not found" era um caminho de argumento — e rotulava como caminho um "npm error code E404"
+            // (pacote ausente no registro). Com o padrão restrito a frases que dizem "comando não encontrado", o chute some:
+            // o que não é isso cai no fallback genérico, com o texto real.)
             const match = error.match(matched.pattern)!;
             const description = matched.description(match, toolName);
             log.debug(`[GoalEvaluator] classify: tool=${toolName} kind=${matched.kind} pattern=/${matched.pattern.source.slice(0, 60)}/ retryable=${matched.isRetryable}`);
