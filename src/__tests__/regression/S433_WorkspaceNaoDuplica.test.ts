@@ -34,8 +34,12 @@ async function main(): Promise<void> {
     assert(semPrefixoDoWorkspace('workspaces/app') === 'workspaces/app' && semPrefixoDoWorkspace('meu-workspace/app') === 'meu-workspace/app', 'nomes parecidos não são tocados');
     assert(semPrefixoDoWorkspace(path.join(ws, 'app')) === path.join(ws, 'app'), 'caminho absoluto não é tocado');
 
-    console.log('\n=== S433-2 — read/write (resolvePath) com barra invertida ===');
-    assert(resolvePath('workspace\\genoffice-app\\README.md').resolved === path.join(ws, 'genoffice-app', 'README.md'), 'resolve dentro do workspace, sem duplicar', resolvePath('workspace\\genoffice-app\\README.md'));
+    console.log('\n=== S433-2 — read/write (resolvePath) com o separador do sistema ===');
+    // No Windows o modelo escreve "workspace\x\y"; no Linux a barra invertida faz parte do NOME (não separa pastas) — o caso
+    // real usa o separador do sistema.
+    const pedido = ['workspace', 'genoffice-app', 'README.md'].join(path.sep);
+    assert(resolvePath(pedido).resolved === path.join(ws, 'genoffice-app', 'README.md'), `resolve dentro do workspace, sem duplicar (${pedido})`, resolvePath(pedido));
+    assert(resolvePath('workspace/genoffice-app/README.md').resolved === path.join(ws, 'genoffice-app', 'README.md'), 'com barra normal também (em qualquer sistema)');
 
     console.log('\n=== S433-3 — exec_command com workdir "workspace" e "workspace\\app" ===');
     fs.mkdirSync(path.join(ws, 'genoffice-app'));
