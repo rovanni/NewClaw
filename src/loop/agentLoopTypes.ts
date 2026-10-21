@@ -61,6 +61,23 @@ export function toolResultForModel(result: ToolResult): string {
     return [result.output, ...result.deliveryFacts].join('\n\n');
 }
 
+/** Teto do texto de erro devolvido ao modelo — limite de tamanho do prompt, declarado quando corta. */
+export const LIMITE_DO_ERRO_PARA_O_MODELO = 1500;
+
+/**
+ * O motivo de uma falha de ferramenta, como o modelo o recebe no `[FALHA]`. Fonte única dos caminhos nativo e json_action do
+ * AgentLoop. O corte (se houver) é declarado com os números — antes era `.slice(0, 300)` em silêncio: validação real
+ * (21/10/2026), o `memory_write` devolveu as duas saídas possíveis depois do trecho do nó parecido, o modelo recebeu só os
+ * 300 primeiros caracteres, repetiu a mesma chamada duas vezes e desistiu.
+ */
+export function motivoDaFalhaParaOModelo(result: ToolResult): string {
+    const texto = (result.error ?? result.output ?? '').trim();
+    if (!texto) return 'sem detalhes do erro retornados pela ferramenta';
+    return texto.length > LIMITE_DO_ERRO_PARA_O_MODELO
+        ? `${texto.slice(0, LIMITE_DO_ERRO_PARA_O_MODELO)}[… erro cortado pelo sistema: primeiros ${LIMITE_DO_ERRO_PARA_O_MODELO} de ${texto.length} caracteres]`
+        : texto;
+}
+
 export interface ToolExecutor {
     name: string;
     description: string;

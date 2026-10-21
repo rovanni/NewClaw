@@ -323,7 +323,10 @@ export class AgentController {
         this.goalOrchestrator.setSessionManager(this.sessionManager);
         this.goalOrchestrator.setWorkflowEngine(this.workflowEngine);
         // O juiz de suficiência vê as skills instaladas (ex.: gmail-himalaya) — sem isso, adivinhava se o acesso existia.
-        this.goalOrchestrator.setResumoDasSkills(() => this.skillLoader.getSkillSummaries());
+        // loadAll() antes do resumo: o cache só era preenchido quando o AgentLoop rodava, e a validação de suficiência roda
+        // ANTES dele — recebeu `skills: 0 chars` em 13 chamadas de 15 a 19/10/2026 (inclusive com a skill de e-mail
+        // instalada). loadAll() respeita o próprio TTL de 10 s; não relê o disco a cada pedido.
+        this.goalOrchestrator.setResumoDasSkills(() => { this.skillLoader.loadAll(); return this.skillLoader.getSkillSummaries(); });
         // ADR-017: skill aprendida com um goal concluído → aviso na mesma conversa (canal e chat saem da chave da sessão do goal).
         this.goalOrchestrator.setAprendizadoDeSkills({
             skillLearner: this.skillLearner,

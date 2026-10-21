@@ -65,7 +65,9 @@ console.log('\n=== S398-3 — o juiz de suficiência recebe as skills instaladas
     assert(descritorSuficienciaDoPedido.checklist.some(c => /skill instalada já descreve como o assistente acessa/.test(c)), 'o checklist diz que acesso coberto por skill não é dado faltante');
     const orq = src('loop', 'GoalOrchestrator.ts');
     assert(/\{ pedido, preferencias, memoria, conversa, ferramentas, skills \}/.test(orq), 'verificarSuficiencia envia as skills ao motor');
-    assert(/this\.goalOrchestrator\.setResumoDasSkills\(\(\) => this\.skillLoader\.getSkillSummaries\(\)\)/.test(src('core', 'AgentController.ts')), 'o AgentController liga o resumo ao SkillLoader (lido a cada pedido)');
+    // Desde S435 (21/10/2026) a fonte carrega as skills antes do resumo: o cache só era preenchido pelo AgentLoop, que roda
+    // DEPOIS da suficiência — o juiz recebeu `skills: 0 chars` em 13 chamadas de 15 a 19/10.
+    assert(/this\.goalOrchestrator\.setResumoDasSkills\(\(\) => \{ this\.skillLoader\.loadAll\(\); return this\.skillLoader\.getSkillSummaries\(\); \}\)/.test(src('core', 'AgentController.ts')), 'o AgentController liga o resumo ao SkillLoader (carregado e lido a cada pedido)');
 }
 
 console.log(`\n${'─'.repeat(60)}`);

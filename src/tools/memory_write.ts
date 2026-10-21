@@ -197,19 +197,32 @@ export class MemoryWriteTool implements ToolExecutor {
             name = (content as string).slice(0, 50);
         }
 
-        // Auto-generate id if missing — but first check for semantically similar existing nodes
-        // to avoid creating duplicates of the same fact with different timestamps.
+        // Auto-generate id if missing — but first check for a similar existing node, to avoid creating duplicates of the same
+        // fact with different timestamps.
+        //
+        // Parecido NÃO é o mesmo fato, e quem decide isso é o agente (AGENTS.md, regra 9). Antes, o nó parecido era
+        // SOBRESCRITO aqui: produção, 17/10/2026, "salvar os dados do e-mail e da agenda" trocou nome e conteúdo de um nó sobre
+        // a VPS (3 palavras em comum) — o fato da VPS se perdeu e o agente leu "duplicata evitada". Agora nada é gravado: o
+        // candidato volta como fato, com as duas saídas possíveis.
         if (!id) {
             const similar = this.findSimilarNode(content as string, type as string);
-            if (similar) {
-                similar.content = content;
-                similar.name = name || similar.name;
-                this.memoryManager.addNode(similar);
-                if (domain) this.facade.setNodeDomain(similar.id, domain as string);
-                await this.regenerateEmbedding(similar.id, similar);
-                return { success: true, output: `✅ Nó "${similar.id}" atualizado (conteúdo similar já existia — duplicata evitada).` };
-            }
             const slug = (name || content || 'node').toLowerCase().replace(/[^a-z0-9]+/g, '_').slice(0, 30);
+            if (similar) {
+                const atual = (similar.content ?? '').replace(/\s+/g, ' ');
+                // A decisão vem PRIMEIRO, com a chamada exata de cada saída; o trecho do nó existente, por último. Validação real
+                // (21/10/2026, "É outro programa, não o de voz"): com as saídas no fim, depois de 400 caracteres do conteúdo, o
+                // agente repetiu a mesma chamada duas vezes e desistiu — o AgentLoop devolvia ao modelo só os primeiros 300
+                // caracteres do erro. A escolha continua do agente; só deixa de depender do que sobra de um corte.
+                return {
+                    success: false,
+                    output: '',
+                    error: `Nada foi gravado: já existe um nó parecido, "${similar.id}" (${similar.type}, "${similar.name}"). Decida: `
+                        + `(1) é o MESMO fato → memory_write action="update" id="${similar.id}" com o conteúdo novo (substitui o atual); `
+                        + `(2) é OUTRO fato → memory_write action="create" id="${slug}_${Date.now()}" com os mesmos type/name/content `
+                        + `(com id informado, a gravação acontece e o nó existente não é tocado). `
+                        + `Conteúdo atual de "${similar.id}": "${atual.length > 400 ? `${atual.slice(0, 400)}…` : atual}"`,
+                };
+            }
             id = `${slug}_${Date.now()}`;
         }
 

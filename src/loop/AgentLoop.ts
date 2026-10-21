@@ -21,7 +21,7 @@ import type { SessionKey } from '../session/SessionManager';
 import { ModelProfileRegistry } from './ModelProfileRegistry';
 import { UnifiedIntentRouter, IntentDecision, IntentCategory } from './UnifiedIntentRouter';
 import { generationQueue, TaskPriority } from '../core/providerQueue';
-import { MemoryManager } from '../memory/MemoryManager';
+import { MemoryManager, descreverNoDaMemoria } from '../memory/MemoryManager';
 import { SkillLearner } from './SkillLearner';
 import { AgentStateManager } from '../core/AgentStateManager';
 import { extractText } from './ResponseAdapter';
@@ -53,7 +53,7 @@ import type { ContinuationContext, WorkflowStepResult, AuthDecision } from './Wo
 
 import {
     ToolResult, ToolExecutor, LoopMetrics, ChannelContext,
-    AgentLoopConfig, ProcessedResult, ContextAwareTool, toolResultForModel, GroundingBlock, ProviderFailure
+    AgentLoopConfig, ProcessedResult, ContextAwareTool, toolResultForModel, motivoDaFalhaParaOModelo, GroundingBlock, ProviderFailure
 } from './agentLoopTypes';
 import { buildMasterPrompt } from './agentPrompts';
 import { parseLLMResponse, extractFinalText } from './agentOutputParser';
@@ -1756,7 +1756,7 @@ export class AgentLoop {
 
             const evidencia = [
                 ...preferencias.map(p => `• [preferência salva] ${p.name}: ${p.content}`),
-                ...rows.map(r => `• ${r.name}: ${r.content}`),
+                ...rows.map(descreverNoDaMemoria),
             ];
             if (evidencia.length === 0) return null;
 
@@ -2725,8 +2725,7 @@ export class AgentLoop {
                     // Mesma correção do caminho de tool-calling nativo acima: sem o texto real do
                     // erro (result.error), o LLM só via "tente uma abordagem diferente" e adivinhava
                     // variações de frase às cegas em vez de corrigir a causa real da falha.
-                    const atomicReason = (result.error ?? result.output ?? '').trim().slice(0, 300)
-                        || 'sem detalhes do erro retornados pela ferramenta';
+                    const atomicReason = motivoDaFalhaParaOModelo(result);
                     loopMessages.push({
                         role: 'system',
                         content: `[FALHA] A ferramenta "${resolvedToolName}" falhou: ${atomicReason}. Corrija a causa indicada antes de tentar de novo — não repita a mesma chamada sem mudar o que a causou.`
@@ -3254,7 +3253,7 @@ export class AgentLoop {
                 // genérica ("tente uma abordagem diferente") não informa POR QUE a tool falhou,
                 // fazendo o LLM adivinhar variações de frase às cegas em vez de corrigir a causa
                 // real (ex: argumento obrigatório ausente, dependência não instalada).
-                const reason = errorText.trim().slice(0, 300) || 'sem detalhes do erro retornados pela ferramenta';
+                const reason = motivoDaFalhaParaOModelo(result);
                 loopMessages.push({
                     role: 'system',
                     content: `[FALHA] A ferramenta "${resolvedToolName}" falhou: ${reason}. Corrija a causa indicada antes de tentar de novo — não repita a mesma chamada sem mudar o que a causou.`

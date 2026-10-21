@@ -40,6 +40,16 @@ import { CognitiveMemoryIndex } from './CognitiveMemoryIndex';
 
 export type { Message, Conversation, MemoryNode, MemoryEdge } from './memoryTypes';
 
+/**
+ * Uma linha da "memória do pedido" para quem decide (LLM): nome, conteúdo e a confiança registrada — como dado, com o que ela
+ * significa, para o modelo ponderar em vez de um corte numérico decidir por ele. Fonte única dos dois consumidores
+ * (validação de suficiência e resolução de parâmetro do fast path).
+ */
+export function descreverNoDaMemoria(n: { name: string; content: string; confidence?: number | null }): string {
+    const confianca = typeof n.confidence === 'number' ? ` (confiança registrada ${Math.round(n.confidence * 100)}% — diminui com o tempo sem uso)` : '';
+    return `• ${n.name}${confianca}: ${n.content}`;
+}
+
 const log = createLogger('Memorymanager');
 
 export class MemoryManager {
@@ -383,20 +393,24 @@ export class MemoryManager {
     /**
      * Nós de memória ativos mais próximos de um texto (o pedido do usuário), sem as preferências — que já vêm inteiras
      * de getPreferences(). Fonte única (ADR-015) para quem precisa da "memória do pedido": a validação de suficiência
-     * e a resolução de parâmetro do fast path. Ordem = a da busca; filtro só de metadado objetivo do nó (ativo e
-     * confiança mínima), nunca de relevância — quem decide se serve é o LLM que recebe.
+     * e a resolução de parâmetro do fast path. Ordem = a da busca; filtro só do estado do nó (ativo), nunca de relevância
+     * nem de confiança — quem decide se serve é o LLM que recebe, com a confiança como dado (`descreverNoDaMemoria`).
+     *
+     * Havia um corte `confidence >= 0.60`. A confiança DECAI com o tempo sem uso (MemoryGovernor.decayAllConfidences): em
+     * 21/10/2026, 71 de 80 nós ativos da produção estavam abaixo de 0,60, e a validação de suficiência recebeu a memória
+     * VAZIA em 46 de 63 chamadas — perguntou duas vezes "qual e-mail você usa?" com os 4 nós do e-mail achados pela busca e
+     * descartados (0,50–0,58).
      */
-    memoriaProximaDoPedido(texto: string, limite = 5): Array<{ id: string; name: string; content: string }> {
+    memoriaProximaDoPedido(texto: string, limite = 5): Array<{ id: string; name: string; content: string; confidence: number | null }> {
         const preferencias = new Set(this.getPreferences().map(p => p.id));
         const candidatos = new MultiLayerRetriever(this.db).retrieve(texto, [])
             .filter(c => !preferencias.has(c.nodeId)).slice(0, limite);
         if (candidatos.length === 0) return [];
         const linhas = this.db.prepare(`
-            SELECT id, name, content FROM memory_nodes
+            SELECT id, name, content, confidence FROM memory_nodes
             WHERE id IN (${candidatos.map(() => '?').join(',')})
               AND (lifecycle_state IS NULL OR lifecycle_state = 'ACTIVE')
-              AND (confidence IS NULL OR confidence >= 0.60)
-        `).all(...candidatos.map(c => c.nodeId)) as Array<{ id: string; name: string; content: string }>;
+        `).all(...candidatos.map(c => c.nodeId)) as Array<{ id: string; name: string; content: string; confidence: number | null }>;
         const ordem = new Map(candidatos.map((c, i) => [c.nodeId, i]));
         return linhas.sort((a, b) => (ordem.get(a.id) ?? 0) - (ordem.get(b.id) ?? 0));
     }

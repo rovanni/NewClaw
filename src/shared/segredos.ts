@@ -78,7 +78,11 @@ function calcular(env: NodeJS.ProcessEnv): SegredoConhecido[] {
     for (const [k, v] of Object.entries(env)) {
         if (typeof v !== 'string' || v.trim().length < 6) continue;
         if (k.startsWith(PREFIXO)) r.push({ nome: k.slice(PREFIXO.length).toLowerCase(), valor: v.trim() });
-        else if (NOME_SENSIVEL.test(k) && !NAO_E_VALOR_SECRETO.test(k) && v.trim().length >= 8) r.push({ nome: k, valor: v.trim() });
+        // Mesmo mínimo do cofre (6, acima). Antes era 8 para as variáveis de nome sensível: produção (Linux), 17/10/2026, a
+        // senha do painel tinha 7 caracteres, o agente a leu no .env e ela foi em claro ao modelo, ao log e ao Telegram.
+        // Medido em 21/10 nas duas instalações: nenhuma variável do ambiente com nome sensível tem valor de 6–7 caracteres
+        // que não seja segredo.
+        else if (NOME_SENSIVEL.test(k) && !NAO_E_VALOR_SECRETO.test(k)) r.push({ nome: k, valor: v.trim() });
     }
     return r.sort((a, b) => b.valor.length - a.valor.length);
 }

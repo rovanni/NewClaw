@@ -16,7 +16,7 @@ import { GroqProvider } from './GroqProvider';
 import { getBudgetAuxiliar, PerfilAuxiliar, OrcamentoAuxiliar } from '../shared/auxTimeout';
 import { OpenAIProvider, OpenRouterProvider } from './OpenAIProvider';
 import { OllamaProvider, NO_MODEL_CONFIGURED_MESSAGE } from './OllamaProvider';
-import { mascararProfundo } from '../shared/segredos';
+import { mascararProfundo, mascararSegredos } from '../shared/segredos';
 import { medidorDoProcesso, observacaoDaChamada, CHARS_POR_TOKEN_PTBR } from './medidorDeTrabalho';
 
 /** Folga sobre o tempo que o orçamento em tokens dá na velocidade medida (ADR-024): a velocidade varia entre chamadas. */
@@ -798,9 +798,13 @@ export class ProviderFactory {
             // usuário esperar por algo que nunca ia responder. Sem inferir a causa (DNS, recusa,
             // TLS): o fato observado é que o provider não respondeu.
             // Issue 068: sem modelo escolhido, a mensagem diz isso — não "verifique se o serviço está em execução".
+            // A mensagem diz O QUE o provedor respondeu (AGENTS.md, regra 11), sem prescrever. Antes era sempre "verifique se o
+            // serviço está em execução": produção, 18/10/2026, o Ollama respondeu HTTP 429 (limite de uso) — o serviço estava no
+            // ar e a orientação mandava procurar o defeito no lugar errado.
             fallbackMessage: lastError === NO_MODEL_CONFIGURED_MESSAGE ? NO_MODEL_CONFIGURED_MESSAGE : isTimeoutError
                 ? 'O modelo demorou mais que o esperado. Tente novamente em alguns instantes.'
-                : `Não foi possível obter resposta do provedor "${attemptLog[attemptLog.length - 1]?.provider ?? 'desconhecido'}". Verifique se o serviço está em execução e acessível e tente novamente.`,
+                : `Não foi possível obter resposta do provedor "${attemptLog[attemptLog.length - 1]?.provider ?? 'desconhecido'}". `
+                    + (lastError ? `Resposta da última tentativa: ${mascararSegredos(lastError.replace(/\s+/g, ' ')).slice(0, 300)}` : 'A última tentativa não trouxe mensagem de erro.'),
             attempts: attemptLog
         };
     }

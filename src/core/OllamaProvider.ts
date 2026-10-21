@@ -333,8 +333,12 @@ export class OllamaProvider implements ILLMProvider {
             if (connectionTimer) clearTimeout(connectionTimer);
             if (activityTimer) clearTimeout(activityTimer);
             if (maxTimer) clearTimeout(maxTimer);
-            log.error(`[${streamId}] [STREAM] HTTP ${response.status}`);
-            throw new Error(`Ollama API error: ${response.status}`);
+            // O corpo é a explicação do servidor (no 429 da nuvem, qual limite de uso foi atingido) — antes era descartado e a
+            // usuária só via o número (produção, 18/10/2026). O prefixo "Ollama API error: <status>" continua igual.
+            let explicacao = '';
+            try { explicacao = String(await response.text()).replace(/\s+/g, ' ').trim().slice(0, 200); } catch { /* sem corpo legível */ }
+            log.error(`[${streamId}] [STREAM] HTTP ${response.status}${explicacao ? ` — ${explicacao}` : ''}`);
+            throw new Error(`Ollama API error: ${response.status}${explicacao ? ` — ${explicacao}` : ''}`);
         }
 
         const body = response.body;

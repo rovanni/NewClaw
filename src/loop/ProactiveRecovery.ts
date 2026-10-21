@@ -285,33 +285,16 @@ export class ProactiveRecovery {
         if (step1.result.success) return { ...step1, recovered: false };
         usedInputs.add(FALHOU + chaveEntrada);
 
+        // A falha original é o fato que o planejador precisa para reformular: antes só aparecia a "recuperação" seguinte.
+        log.warn(`[RECOVERY] "${toolName}" falhou com os argumentos do planejador: ${(step1.result.error || step1.result.output || '(sem mensagem)').replace(/\s+/g, ' ').slice(0, 300)}`);
+
         const config = RECOVERY[toolName];
 
-        // ── Step 1b: goal-aware query enrichment (web_search / crypto_analysis) ──
-        // Quando a query genérica falha, tenta enriquecer com entidades do objetivo.
-        if (goalContext?.userIntent) {
-            const enriched = this.enrichWithGoalEntities(toolName, args, goalContext.userIntent);
-            if (enriched) {
-                const enrichKey = makeKey(toolName, enriched);
-                if (!usedInputs.has(enrichKey)) {
-                    log.info(`[RECOVERY] Goal-aware enrichment for "${toolName}": ${JSON.stringify(enriched)}`);
-                    const enrichResult = await this.tryWithRetry(toolName, enriched, getTool, usedInputs, signal);
-                    if (enrichResult.result.success) {
-                        log.info(`[RECOVERY] "${toolName}" succeeded after goal-aware enrichment`);
-                        return {
-                            result: enrichResult.result,
-                            finalToolName: toolName,
-                            finalArgs: enriched,
-                            recovered: true,
-                            recoveryNote: `Recuperado: query enriquecida com entidades do objetivo`,
-                            originalArgs: args,
-                            originalToolName: toolName,
-                            mutationKind: 'arg_mutation',
-                        };
-                    }
-                }
-            }
-        }
+        // Não há mais "enriquecimento" da busca com palavras do pedido (Step 1b, removido em 21/10/2026). Ele SUBSTITUÍA a
+        // consulta do planejador pelas palavras do pedido que não estavam nela — escolha de conteúdo por regex (AGENTS.md,
+        // regra 9). Produção, 19/10: "aplicativo "Voice Studio" Windows onde fica instalado…" virou "qual meu", o resultado
+        // (signos) foi aceito como sucesso e o ReflectionMemory registrou a falha contra o web_search. Reformular a busca é
+        // do planejador, que recebe a falha acima.
 
         // ── Step 2: try arg mutations ────────────────────────────────────────────
         if (config?.argMutators?.length) {
@@ -390,48 +373,6 @@ export class ProactiveRecovery {
 
         // ── All strategies exhausted ─────────────────────────────────────────────
         return { ...step1, recovered: false };
-    }
-
-    /**
-     * Extrai entidades-chave do objetivo do usuário para enriquecer queries que falharam.
-     * Aplica apenas para web_search (enriquece a query existente).
-     */
-    private enrichWithGoalEntities(
-        toolName: string,
-        args: Record<string, unknown>,
-        userIntent: string,
-    ): Record<string, unknown> | null {
-        if (toolName !== 'web_search' || !args.query) return null;
-
-        const STOPWORDS = new Set([
-            'para', 'com', 'sem', 'uma', 'uns', 'ela', 'ele', 'que', 'não', 'por', 'mas',
-            'como', 'sobre', 'estar', 'ficar', 'além', 'algumas', 'pedir', 'busque',
-            'você', 'memória', 'olho', 'monitorar', 'algumas', 'gostaria', 'poderia',
-            'favor', 'preciso', 'quero', 'queria', 'isso', 'esse', 'esta', 'este',
-        ]);
-
-        // Coleta até 12 tokens — amplia janela para capturar termos de domínio
-        // que aparecem depois dos verbos de tarefa (ex: "criar slides sobre Modelo Incremental...").
-        // Os primeiros tokens frequentemente são verbos genéricos ("criar", "slides")
-        // que já estão na query falha; os termos úteis ficam na cauda da frase.
-        const entities = [...new Set(
-            userIntent
-                .toLowerCase()
-                .replace(/[^a-z0-9áéíóúãõâêôçàü\s]/g, ' ')
-                .split(/\s+/)
-                .filter(t => t.length > 2 && !STOPWORDS.has(t))
-        )].slice(0, 12);
-
-        if (entities.length === 0) return null;
-
-        const currentQuery = String(args.query).toLowerCase();
-        const newEntities = entities.filter(e => !currentQuery.includes(e));
-        if (newEntities.length === 0) return null;
-
-        // A query original falhou — substituir completamente por entidades do userIntent
-        // (em vez de concatenar) evita queries mistas português+inglês que retornam 0 resultados
-        const enrichedQuery = newEntities.join(' ').slice(0, 200);
-        return { ...args, query: enrichedQuery };
     }
 
     // ── Retry with exponential backoff for transient errors ─────────────────────

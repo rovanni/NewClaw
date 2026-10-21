@@ -3,8 +3,21 @@ import { taskQueue, TaskPriority } from './providerQueue';
 import { createLogger } from '../shared/AppLogger';
 import { guessCapabilities } from './modelCapabilityHeuristics';
 import { assertNotSsrfTarget } from './ssrfGuard';
+import { Agent } from 'undici';
 
 const log = createLogger('OpenAIProvider');
+
+/**
+ * Transporte sem prazo próprio para os cabeçalhos — o prazo é o de quem chamou (o sinal de cancelamento da chamada).
+ *
+ * O `fetch` do Node desiste sozinho se os cabeçalhos não chegam em 300 s (`headersTimeout` do undici), seja qual for o
+ * prazo do chamador. Esta requisição é sem streaming: o servidor local só manda cabeçalho ao TERMINAR de gerar. Produção,
+ * 18/10/2026: as 9 chamadas longas ao modelo local falharam entre 302,8 e 304,6 s com `fetch failed`, enquanto o próprio
+ * provedor registrava "modelo está gerando, seguindo até o timeout do chamador". Medido no Node 24.20 e no 22.23: servidor
+ * que responde aos 310 s, prazo do chamador de 400 s → `UND_ERR_HEADERS_TIMEOUT` aos 303,9 s; com este Agent, a resposta
+ * chega. Só é usado quando o chamador tem prazo (sinal); sem ele, vale o padrão do Node.
+ */
+const TRANSPORTE_COM_PRAZO_DO_CHAMADOR = new Agent({ headersTimeout: 0, bodyTimeout: 0 });
 
 /**
  * Teto para ESTABELECER a conexão — não para a resposta inteira.
@@ -255,6 +268,7 @@ export class OpenAIProvider implements ILLMProvider {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${this.apiKey}` },
                     signal: connectAbort.signal,
+                    ...(options?.signal ? { dispatcher: TRANSPORTE_COM_PRAZO_DO_CHAMADOR } : {}),
                     body: JSON.stringify({
                         model: this.model,
                         // Imagem viaja dentro de `content` (ver toOpenAIContent) — um campo

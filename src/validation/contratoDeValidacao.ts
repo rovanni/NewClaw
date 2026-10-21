@@ -279,9 +279,24 @@ const normalizar = (s: string): string => s
     .trim()
     .toLowerCase();
 
-/** O trecho citado existe literalmente nas fontes? Fragmentos separados por "…" conferidos um a um. */
+/**
+ * O texto como ele é, sem o escape do JSON (`\\` → `\`, `\"` → `"`, `\n` → quebra, `\uXXXX` → o caractere). Os argumentos de
+ * uma chamada de ferramenta entram nas evidências como JSON (`descreverArgumentos`), e o juiz cita o VALOR — um caminho do
+ * Windows, `C:\Users\…`, que no prompt aparece como `C:\\Users\\…`. É forma de representação, não de sentido.
+ */
+const semEscapeDoJson = (s: string): string => s.replace(/\\(u[0-9a-fA-F]{4}|["\\/bfnrt])/g, (_m, c: string) =>
+    c[0] === 'u' ? String.fromCharCode(parseInt(c.slice(1), 16))
+        : ({ n: '\n', r: '\r', t: '\t', b: '\b', f: '\f' } as Record<string, string>)[c] ?? c);
+
+/**
+ * O trecho citado existe literalmente nas fontes? Fragmentos separados por "…" conferidos um a um, contra a fonte como está e
+ * contra a fonte sem o escape do JSON. Evidência (produção, 19/10/2026, "salvar na memória"): o juiz aprovou 9 de 9 itens, 2
+ * citações de caminho do Windows copiadas dos argumentos do `memory_write` não conferiam por causa do escape, e a resposta
+ * correta virou "não avaliável" para a usuária.
+ */
 export function citacaoExiste(trecho: string, fontes: string[]): boolean {
-    const alvo = normalizar(fontes.join('\n'));
+    const texto = fontes.join('\n');
+    const alvos = [normalizar(texto), normalizar(semEscapeDoJson(texto))];
     const partes = trecho.split(/…|\.\.\./).map(normalizar).filter(p => p.length >= 4);
-    return partes.length > 0 && partes.every(p => alvo.includes(p));
+    return partes.length > 0 && partes.every(p => alvos.some(a => a.includes(p)));
 }

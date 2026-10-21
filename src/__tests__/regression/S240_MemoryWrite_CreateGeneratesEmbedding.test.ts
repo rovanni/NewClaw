@@ -133,17 +133,18 @@ console.log('\n=== S240-2 — create() que atualiza nó com id colidente também
     db.close();
 }
 
-console.log('\n=== S240-3 — create() via dedup por conteúdo similar (findSimilarNode) regenera embedding ===');
+// S240-3 mudou em 21/10/2026 (S437): o nó parecido NÃO é mais sobrescrito — o create não grava nada e devolve o candidato
+// para o agente decidir entre update (mesmo fato) e create com id próprio (outro fato). Produção, 17/10: a sobrescrita
+// apagou o fato de outro assunto que tinha 3 palavras em comum. O dedup continua existindo (não cria a duplicata).
+console.log('\n=== S240-3 — create() com conteúdo similar (findSimilarNode) não duplica nem sobrescreve ===');
 {
     const db = new (Database as any)(':memory:');
     new EmbeddingService(db);
     const mm = new MemoryManager(db, 'http://mock-ollama:11434');
     const tool = new MemoryWriteTool(mm);
 
-    await tool.execute({
-        action: 'create', type: 'fact', name: 'Posição Pi',
-        content: 'Posição Pi Network corrigida quantidade tokens preço atual valor posição atualizado',
-    });
+    const primeiro = 'Posição Pi Network corrigida quantidade tokens preço atual valor posição atualizado';
+    await tool.execute({ action: 'create', type: 'fact', name: 'Posição Pi', content: primeiro });
     embeddingCalls = 0;
 
     // Conteúdo com ≥3 palavras-chave em comum (>=5 chars), mesmo tipo, tamanho comparável —
@@ -153,8 +154,10 @@ console.log('\n=== S240-3 — create() via dedup por conteúdo similar (findSimi
         content: 'Posição Pi Network corrigida quantidade tokens preço atual valor posição hoje',
     });
 
-    assert(result.output.includes('duplicata evitada'), 'o caminho de dedup por similaridade foi de fato exercitado', result.output);
-    assert(embeddingCalls === 1, 'embedding foi regenerado após o merge de conteúdo similar', embeddingCalls);
+    assert(result.success === false && /Nada foi gravado: já existe um nó parecido, "/.test(result.error ?? ''), 'o caminho de dedup por similaridade foi de fato exercitado', result);
+    const nos = db.prepare("SELECT content FROM memory_nodes WHERE type = 'fact' AND name = 'Posição Pi'").all() as Array<{ content: string }>;
+    assert(nos.length === 1 && nos[0].content === primeiro, 'nenhuma duplicata e o conteúdo existente ficou intacto', nos);
+    assert(embeddingCalls === 0, 'nada gravado → nenhum embedding gerado', embeddingCalls);
 
     db.close();
 }
@@ -166,7 +169,8 @@ console.log('\n=== S240-4 — paridade: create() agora se comporta como update()
     ) as string;
     const createBody = SOURCE.slice(SOURCE.indexOf('private async create('), SOURCE.indexOf('// ── SIMILARITY CHECK'));
     const regenCount = (createBody.match(/await this\.regenerateEmbedding\(/g) || []).length;
-    assert(regenCount === 3, 'create() chama regenerateEmbedding() nos 3 caminhos de saída com conteúdo novo/alterado', regenCount);
+    // 2 caminhos gravam (id colidente, nó novo); o do nó parecido não grava mais nada desde S437.
+    assert(regenCount === 2, 'create() chama regenerateEmbedding() nos 2 caminhos de saída que gravam conteúdo', regenCount);
 }
 
 console.log('\n=== S240-5 — execute() não pré-preenche mais args.id antes do dispatch (dedup deixou de ser código morto) ===');
