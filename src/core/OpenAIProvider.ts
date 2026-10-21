@@ -3,8 +3,21 @@ import { taskQueue, TaskPriority } from './providerQueue';
 import { createLogger } from '../shared/AppLogger';
 import { guessCapabilities } from './modelCapabilityHeuristics';
 import { assertNotSsrfTarget } from './ssrfGuard';
+import { Agent } from 'undici';
 
 const log = createLogger('OpenAIProvider');
+
+/**
+ * Transporte sem prazo próprio para os cabeçalhos — o prazo é o de quem chamou (o sinal de cancelamento da chamada).
+ *
+ * O `fetch` do Node desiste sozinho se os cabeçalhos não chegam em 300 s (`headersTimeout` do undici), seja qual for o
+ * prazo do chamador. Esta requisição é sem streaming: o servidor local só manda cabeçalho ao TERMINAR de gerar. Produção,
+ * 18/10/2026: as 9 chamadas longas ao modelo local falharam entre 302,8 e 304,6 s com `fetch failed`, enquanto o próprio
+ * provedor registrava "modelo está gerando, seguindo até o timeout do chamador". Medido no Node 24.20 e no 22.23: servidor
+ * que responde aos 310 s, prazo do chamador de 400 s → `UND_ERR_HEADERS_TIMEOUT` aos 303,9 s; com este Agent, a resposta
+ * chega. Só é usado quando o chamador tem prazo (sinal); sem ele, vale o padrão do Node.
+ */
+const TRANSPORTE_COM_PRAZO_DO_CHAMADOR = new Agent({ headersTimeout: 0, bodyTimeout: 0 });
 
 /**
  * Teto para ESTABELECER a conexão — não para a resposta inteira.
@@ -255,6 +268,7 @@ export class OpenAIProvider implements ILLMProvider {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${this.apiKey}` },
                     signal: connectAbort.signal,
+                    ...(options?.signal ? { dispatcher: TRANSPORTE_COM_PRAZO_DO_CHAMADOR } : {}),
                     body: JSON.stringify({
                         model: this.model,
                         // Imagem viaja dentro de `content` (ver toOpenAIContent) — um campo
@@ -294,6 +308,27 @@ export class OpenAIProvider implements ILLMProvider {
 
             const data = await response.json() as OpenAIChatResponse;
             const message = data.choices?.[0]?.message;
+
+            // ADR-024 (etapa 1): os números que o SERVIDOR mediu vão para a telemetria da tentativa — é deles que sai a
+            // velocidade do modelo. Antes eram descartados: na produção (18–21/10/2026), em mais de 100 chamadas ao modelo
+            // local, a velocidade nunca foi medida (`geracao=?`), e a extensão de prazo pelo trabalho nunca agiu para ele.
+            // `usage` é do contrato OpenAI; `timings` é do llama-server (llama.cpp) — ausente, os tempos ficam sem medir.
+            const tele = options?.telemetry;
+            if (tele) {
+                const timings = (data as { timings?: { prompt_n?: number; prompt_ms?: number; predicted_ms?: number } }).timings;
+                const raciocinio = (message as { reasoning_content?: unknown } | undefined)?.reasoning_content;
+                // Com cache de prompt, `prompt_ms` cobre só os `prompt_n` tokens lidos agora (não o prompt inteiro): dividir o
+                // total por ele superestimaria a leitura e encurtaria o prazo. Medido no Strata: cache_n/prompt_n em `timings`.
+                if (typeof timings?.prompt_n === 'number' && typeof timings?.prompt_ms === 'number') tele.promptTokens = timings.prompt_n;
+                else if (typeof data.usage?.prompt_tokens === 'number') tele.promptTokens = data.usage.prompt_tokens;
+                if (typeof data.usage?.completion_tokens === 'number') tele.evalTokens = data.usage.completion_tokens;
+                if (typeof timings?.prompt_ms === 'number') tele.promptEvalMs = timings.prompt_ms;
+                if (typeof timings?.predicted_ms === 'number') tele.evalMs = timings.predicted_ms;
+                tele.contentChars = (message?.content ?? '').length;
+                tele.thinkingChars = typeof raciocinio === 'string' ? raciocinio.length : 0;
+                const fim = data.choices?.[0]?.finish_reason;
+                if (typeof fim === 'string') tele.doneReason = fim;
+            }
 
             return {
                 content: message?.content || '',

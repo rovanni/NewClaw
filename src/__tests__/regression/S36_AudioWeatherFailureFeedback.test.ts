@@ -119,21 +119,25 @@ console.log('\n=== S36-4 — AgentLoop: texto real do erro chega ao LLM nos 2 ca
     assert(!/Tente uma abordagem diferente ou use seu conhecimento interno/.test(src),
         'mensagem genérica sem causa real foi removida de AMBOS os caminhos (nenhuma ocorrência restante)', null);
 
-    const hasNativeReasonVar = /const reason = errorText\.trim\(\)\.slice\(0, 300\)/.test(src);
+    // Desde 21/10/2026 os dois caminhos usam a fonte única motivoDaFalhaParaOModelo (agentLoopTypes.ts): o corte antigo de
+    // 300 chars, silencioso, escondia do modelo o fim de erros longos (validação real: as saídas do memory_write).
+    const hasNativeReasonVar = /const reason = motivoDaFalhaParaOModelo\(result\)/.test(src);
     const nativeUsesReason = (src.match(/falhou: \$\{reason\}/g) ?? []).length >= 1;
     assert(hasNativeReasonVar && nativeUsesReason, 'caminho de tool-calling nativo inclui o texto real do erro (reason) na mensagem ao LLM', { hasNativeReasonVar, nativeUsesReason });
 
-    const hasAtomicReasonVar = /const atomicReason = \(result\.error \?\? result\.output \?\? ''\)/.test(src);
+    const hasAtomicReasonVar = /const atomicReason = motivoDaFalhaParaOModelo\(result\)/.test(src);
     const atomicUsesReason = (src.match(/falhou: \$\{atomicReason\}/g) ?? []).length >= 1;
     assert(hasAtomicReasonVar && atomicUsesReason, 'caminho ATOMIC-TOOL (modelos sem function-calling nativo) TAMBÉM inclui o texto real do erro — a 2ª cópia do bug não ficou para trás', { hasAtomicReasonVar, atomicUsesReason });
 
-    // Reproduz especificamente os 2 erros observados no incidente real
+    // Reproduz especificamente os 2 erros observados no incidente real — agora pela função de produção.
+    const { motivoDaFalhaParaOModelo, LIMITE_DO_ERRO_PARA_O_MODELO } = await import('../../loop/agentLoopTypes');
     const edgeTtsError = 'Erro ao gerar áudio: spawn edge-tts ENOENT';
     const weatherError = "Erro em 'weather': Cidade não informada.";
-    const truncatedEdge = edgeTtsError.trim().slice(0, 300);
-    const truncatedWeather = weatherError.trim().slice(0, 300);
-    assert(truncatedEdge === edgeTtsError, 'erro real do edge-tts (ENOENT) cabe inteiro no truncamento de 300 chars — chegaria completo ao LLM', truncatedEdge);
-    assert(truncatedWeather === weatherError, 'erro real do weather (Cidade não informada) cabe inteiro no truncamento de 300 chars', truncatedWeather);
+    assert(motivoDaFalhaParaOModelo({ success: false, output: '', error: edgeTtsError }) === edgeTtsError, 'erro real do edge-tts (ENOENT) chega inteiro ao LLM');
+    assert(motivoDaFalhaParaOModelo({ success: false, output: '', error: weatherError }) === weatherError, 'erro real do weather (Cidade não informada) chega inteiro ao LLM');
+    const longo = 'x'.repeat(LIMITE_DO_ERRO_PARA_O_MODELO + 50);
+    assert(/\[… erro cortado pelo sistema: primeiros \d+ de \d+ caracteres\]$/.test(motivoDaFalhaParaOModelo({ success: false, output: '', error: longo })), 'erro acima do teto: o corte é declarado com os números');
+    assert(motivoDaFalhaParaOModelo({ success: false, output: '' }) === 'sem detalhes do erro retornados pela ferramenta', 'sem texto de erro: diz que não veio detalhe');
 }
 
 console.log(`\n${'─'.repeat(60)}`);

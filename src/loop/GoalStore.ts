@@ -633,6 +633,14 @@ export class GoalStore {
     /** Marca como abandoned todos os goals expirados. Retorna count. */
     expireStale(): number {
         const now = Date.now();
+        // O motivo real fica registrado para quem ainda está executando o goal (GoalExecutionLoop lê consumeAbandonReason).
+        // Sem isso, um goal em execução que vencia o prazo era relatado como "nova mensagem do usuário recebida durante
+        // execução" — produção, 18/10/2026: o objetivo do Telegram expirou aos 31 min, e a varredura foi disparada pela
+        // chegada de uma mensagem em OUTRO canal.
+        const expirando = this.db.prepare(`
+            SELECT id FROM goals WHERE expires_at < ? AND status IN ('active', 'executing', 'blocked', 'replanning')
+        `).all(now) as Array<{ id: string }>;
+        for (const { id } of expirando) this.markAbandonReason(id, 'Objetivo expirou por tempo limite.');
         // Sprint 005: mesma correção de setStatus() — este UPDATE é SQL bruto, não passa por
         // setStatus(), então precisa limpar pending_txn_id/requires_auth aqui também. Um goal
         // 'blocked' com auth pendente que expira via TTL virava 'abandoned' sem nunca limpar

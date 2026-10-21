@@ -119,6 +119,8 @@ A operadora autorizou seguir; tudo é incremental e reversível, e nenhuma etapa
 | 4 — modo pelo custo | Entre modos confiáveis, o mais barato em tokens. **Em sombra** (`[JUIZ-MODO-SOMBRA]`); age só com `JUIZ_MODO_PELO_CUSTO=1` | S424 | desligado por padrão |
 | 5 — agente | O prazo da chamada do agente também estende pelo trabalho medido; **sem** limite de tokens (a saída do agente varia demais) | S425 | reverter o commit |
 | 6 — limites globais | `LIMITE_DO_OBJETIVO_MIN` (padrão 30). Modo experimental `LIMITE_DO_OBJETIVO_COMO_AVISO=1`: avisa e prorroga até `LIMITE_DURO_DO_OBJETIVO_MIN` (padrão 3×). O teto dos comandos acompanha a prorrogação | S426 | desligado por padrão |
+| 1 (complemento, 21/10) — medição no compatível com OpenAI | `OpenAIProvider` entrega à telemetria `usage` e `timings` do llama-server (tokens lidos agora = `prompt_n`, sem o cache). Antes, a velocidade dos modelos locais nunca era medida — a etapa 5 nunca agia para eles | S440 | reverter o commit |
+| 5 (complemento, 21/10) — ponto de partida (decisão 2) | Sem histórico do modelo no tipo, o agente e o classificador de objetivos usam um ponto de partida declarado em tokens (`medidorDeTrabalho.pontoDePartidaEmTokens`: p95 medido na produção × folga). Só estende; os juízes não usam (o orçamento deles vira limite de tokens). Quebra a armadilha "cortado sempre → nunca conclui → nunca forma orçamento". Validado no modelo local real: agente 210 s → 828 s, resposta entregue após 733 s de geração | S440 | reverter o commit |
 
 **Achado na etapa 6.** Os "10 min do turno" **não cortam trabalho**. O chat web já é assíncrono: responde 202 e entrega a
 resposta depois. Os 10 min só valem para a rota de aprovação de ação perigosa (`dashboard/routes/chat.ts`). O único corte

@@ -25,7 +25,7 @@ import { GoalPlanner } from './GoalPlanner';
 import { GoalExecutionLoop } from './GoalExecutionLoop';
 import { avaliarGoal, KERNEL_ESCALATION_PREFIX } from './CognitiveKernelGate';
 import { ProviderFactory } from '../core/ProviderFactory';
-import { MemoryManager } from '../memory/MemoryManager';
+import { MemoryManager, descreverNoDaMemoria } from '../memory/MemoryManager';
 import { ContextBuilder } from './ContextBuilder';
 import { criarMotorDeValidacao } from '../validation/motorPadrao';
 import { executarNoTurno } from '../shared/turnCancellation';
@@ -737,7 +737,7 @@ export class GoalOrchestrator {
         try {
             const preferencias = ContextBuilder.blocoDePreferencias(
                 this.memory.getPreferences().map(p => ({ nome: p.name, texto: p.content })), ContextBuilder.MAX_MEMORY_CHARS_COMPLETO);
-            const memoria = this.memory.memoriaProximaDoPedido(pedido, 5).map(n => `• ${n.name}: ${n.content}`).join('\n');
+            const memoria = this.memory.memoriaProximaDoPedido(pedido, 5).map(descreverNoDaMemoria).join('\n');
             const conversa = (recentMessages ?? [])
                 .filter(m => m.role === 'user' || m.role === 'assistant')
                 .map(m => `${m.role === 'user' ? 'Usuário' : 'Assistente'}: ${m.content}`).join('\n');

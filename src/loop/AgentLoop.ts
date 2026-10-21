@@ -21,7 +21,7 @@ import type { SessionKey } from '../session/SessionManager';
 import { ModelProfileRegistry } from './ModelProfileRegistry';
 import { UnifiedIntentRouter, IntentDecision, IntentCategory } from './UnifiedIntentRouter';
 import { generationQueue, TaskPriority } from '../core/providerQueue';
-import { MemoryManager } from '../memory/MemoryManager';
+import { MemoryManager, descreverNoDaMemoria } from '../memory/MemoryManager';
 import { SkillLearner } from './SkillLearner';
 import { AgentStateManager } from '../core/AgentStateManager';
 import { extractText } from './ResponseAdapter';
@@ -53,7 +53,7 @@ import type { ContinuationContext, WorkflowStepResult, AuthDecision } from './Wo
 
 import {
     ToolResult, ToolExecutor, LoopMetrics, ChannelContext,
-    AgentLoopConfig, ProcessedResult, ContextAwareTool, toolResultForModel, GroundingBlock, ProviderFailure
+    AgentLoopConfig, ProcessedResult, ContextAwareTool, toolResultForModel, motivoDaFalhaParaOModelo, GroundingBlock, ProviderFailure
 } from './agentLoopTypes';
 import { buildMasterPrompt } from './agentPrompts';
 import { parseLLMResponse, extractFinalText } from './agentOutputParser';
@@ -1680,11 +1680,13 @@ export class AgentLoop {
         // medida) — só ESTENDE: um modelo local lento (~38 tokens/s) não é cortado pelo prazo calibrado na nuvem. Sem limite de
         // tokens aqui: a resposta do agente varia demais (metade < 750 tokens, 5% > 13 mil — escrever um arquivo grande é
         // legítimo); contra travamento seguem a inatividade da conexão e o prazo do objetivo.
+        // Sem histórico deste modelo no tipo, o ponto de partida declarado (ADR-024, decisão 2): sem ele, um modelo local cortado
+        // sempre aos ~210 s nunca formaria o próprio orçamento (validação real com o modelo local, 21/10/2026).
         const medido = typeof this.providerFactory.orcamentoPeloTrabalho === 'function'
-            ? this.providerFactory.orcamentoPeloTrabalho(chatProfile?.model, undefined, `AgentLoop:${phase}`, totalChars)
+            ? this.providerFactory.orcamentoPeloTrabalho(chatProfile?.model, undefined, `AgentLoop:${phase}`, totalChars, { pontoDePartida: true })
             : null;
         if (medido && medido.prazoMs > timeoutMs) {
-            log.info(`[${this.ts()}] [TIMEOUT] pelo trabalho medido: ${medido.tokens} tokens a ${medido.geracao.toFixed(1)} tok/s (n=${medido.amostras}, modelo=${medido.modelo}) → ${Math.round(medido.prazoMs / 1000)}s (era ${Math.round(timeoutMs / 1000)}s)`);
+            log.info(`[${this.ts()}] [TIMEOUT] pelo trabalho medido: ${medido.tokens} tokens (${medido.origem === 'historico' ? `histórico, n=${medido.amostras}` : 'ponto de partida declarado — sem histórico deste modelo'}) a ${medido.geracao.toFixed(1)} tok/s (modelo=${medido.modelo}) → ${Math.round(medido.prazoMs / 1000)}s (era ${Math.round(timeoutMs / 1000)}s)`);
             timeoutMs = medido.prazoMs;
         }
 
@@ -1756,7 +1758,7 @@ export class AgentLoop {
 
             const evidencia = [
                 ...preferencias.map(p => `• [preferência salva] ${p.name}: ${p.content}`),
-                ...rows.map(r => `• ${r.name}: ${r.content}`),
+                ...rows.map(descreverNoDaMemoria),
             ];
             if (evidencia.length === 0) return null;
 
@@ -2725,8 +2727,7 @@ export class AgentLoop {
                     // Mesma correção do caminho de tool-calling nativo acima: sem o texto real do
                     // erro (result.error), o LLM só via "tente uma abordagem diferente" e adivinhava
                     // variações de frase às cegas em vez de corrigir a causa real da falha.
-                    const atomicReason = (result.error ?? result.output ?? '').trim().slice(0, 300)
-                        || 'sem detalhes do erro retornados pela ferramenta';
+                    const atomicReason = motivoDaFalhaParaOModelo(result);
                     loopMessages.push({
                         role: 'system',
                         content: `[FALHA] A ferramenta "${resolvedToolName}" falhou: ${atomicReason}. Corrija a causa indicada antes de tentar de novo — não repita a mesma chamada sem mudar o que a causou.`
@@ -3254,7 +3255,7 @@ export class AgentLoop {
                 // genérica ("tente uma abordagem diferente") não informa POR QUE a tool falhou,
                 // fazendo o LLM adivinhar variações de frase às cegas em vez de corrigir a causa
                 // real (ex: argumento obrigatório ausente, dependência não instalada).
-                const reason = errorText.trim().slice(0, 300) || 'sem detalhes do erro retornados pela ferramenta';
+                const reason = motivoDaFalhaParaOModelo(result);
                 loopMessages.push({
                     role: 'system',
                     content: `[FALHA] A ferramenta "${resolvedToolName}" falhou: ${reason}. Corrija a causa indicada antes de tentar de novo — não repita a mesma chamada sem mudar o que a causou.`

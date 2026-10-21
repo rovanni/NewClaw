@@ -16,8 +16,8 @@ import { GroqProvider } from './GroqProvider';
 import { getBudgetAuxiliar, PerfilAuxiliar, OrcamentoAuxiliar } from '../shared/auxTimeout';
 import { OpenAIProvider, OpenRouterProvider } from './OpenAIProvider';
 import { OllamaProvider, NO_MODEL_CONFIGURED_MESSAGE } from './OllamaProvider';
-import { mascararProfundo } from '../shared/segredos';
-import { medidorDoProcesso, observacaoDaChamada, CHARS_POR_TOKEN_PTBR } from './medidorDeTrabalho';
+import { mascararProfundo, mascararSegredos } from '../shared/segredos';
+import { medidorDoProcesso, observacaoDaChamada, CHARS_POR_TOKEN_PTBR, pontoDePartidaEmTokens } from './medidorDeTrabalho';
 
 /** Folga sobre o tempo que o orçamento em tokens dá na velocidade medida (ADR-024): a velocidade varia entre chamadas. */
 const FOLGA_DE_TEMPO = 1.25;
@@ -320,19 +320,28 @@ export class ProviderFactory {
      * prompt + geração). `null` sem histórico suficiente ou sem velocidade medida: quem chama segue com o prazo de sempre.
      * O tempo nunca passa do que resta ao objetivo (ou do limite de um objetivo) — proteção contra travamento.
      */
-    orcamentoPeloTrabalho(modelo: string | undefined, modo: 'livre' | 'desligado' | undefined, tipo: string, charsDeEntrada: number):
-        { modelo: string; tokens: number; prazoMs: number; amostras: number; geracao: number; leitura?: number } | null {
+    orcamentoPeloTrabalho(modelo: string | undefined, modo: 'livre' | 'desligado' | undefined, tipo: string, charsDeEntrada: number,
+        opcoes?: { pontoDePartida?: boolean }):
+        { modelo: string; tokens: number; prazoMs: number; amostras: number; geracao: number; leitura?: number; origem: 'historico' | 'ponto_de_partida' } | null {
         const nome = modelo || this.modeloPadraoDe(this.defaultProvider);
         if (!nome) return null;
         const m = modo ?? 'padrao';
-        const orc = medidorDoProcesso.orcamento(nome, m, tipo);
         const vel = medidorDoProcesso.velocidade(nome, m);
-        if (!orc || !vel.geracao) return null;
+        if (!vel.geracao) return null;
+        // Sem histórico próprio neste tipo, quem pede usa o ponto de partida declarado (ADR-024, decisão 2) — os juízes não
+        // pedem (o orçamento deles também vira limite de tokens no provedor, e um número de outro modelo poderia cortar).
+        const historico = medidorDoProcesso.orcamento(nome, m, tipo);
+        const partida = !historico && opcoes?.pontoDePartida ? pontoDePartidaEmTokens(tipo) : undefined;
+        const orc = historico ?? (partida ? { tokens: partida, amostras: 0 } : null);
+        if (!orc) return null;
         const entradaTokens = charsDeEntrada / CHARS_POR_TOKEN_PTBR;
         const bruto = (orc.tokens / vel.geracao + (vel.leitura ? entradaTokens / vel.leitura : 0)) * 1000 * FOLGA_DE_TEMPO + 5000;
         const prazoFinal = prazoDoTurno();
         const teto = prazoFinal ? Math.max(prazoFinal - Date.now(), 5000) : GOAL_LIMITS.MAX_GOAL_TTL_MS;
-        return { modelo: nome, tokens: orc.tokens, prazoMs: Math.round(Math.min(bruto, teto)), amostras: orc.amostras, geracao: vel.geracao, leitura: vel.leitura };
+        return {
+            modelo: nome, tokens: orc.tokens, prazoMs: Math.round(Math.min(bruto, teto)), amostras: orc.amostras, geracao: vel.geracao, leitura: vel.leitura,
+            origem: historico ? 'historico' : 'ponto_de_partida',
+        };
     }
 
     getBudgetAuxiliar(perfil: PerfilAuxiliar, tamanhoDoTrabalhoChars?: number): OrcamentoAuxiliar {
@@ -798,9 +807,13 @@ export class ProviderFactory {
             // usuário esperar por algo que nunca ia responder. Sem inferir a causa (DNS, recusa,
             // TLS): o fato observado é que o provider não respondeu.
             // Issue 068: sem modelo escolhido, a mensagem diz isso — não "verifique se o serviço está em execução".
+            // A mensagem diz O QUE o provedor respondeu (AGENTS.md, regra 11), sem prescrever. Antes era sempre "verifique se o
+            // serviço está em execução": produção, 18/10/2026, o Ollama respondeu HTTP 429 (limite de uso) — o serviço estava no
+            // ar e a orientação mandava procurar o defeito no lugar errado.
             fallbackMessage: lastError === NO_MODEL_CONFIGURED_MESSAGE ? NO_MODEL_CONFIGURED_MESSAGE : isTimeoutError
                 ? 'O modelo demorou mais que o esperado. Tente novamente em alguns instantes.'
-                : `Não foi possível obter resposta do provedor "${attemptLog[attemptLog.length - 1]?.provider ?? 'desconhecido'}". Verifique se o serviço está em execução e acessível e tente novamente.`,
+                : `Não foi possível obter resposta do provedor "${attemptLog[attemptLog.length - 1]?.provider ?? 'desconhecido'}". `
+                    + (lastError ? `Resposta da última tentativa: ${mascararSegredos(lastError.replace(/\s+/g, ' ')).slice(0, 300)}` : 'A última tentativa não trouxe mensagem de erro.'),
             attempts: attemptLog
         };
     }

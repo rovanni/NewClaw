@@ -5,7 +5,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Node.js Version](https://img.shields.io/badge/node-%3E%3D%2022-green.svg)](https://nodejs.org/)
-[![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows-blue.svg)](https://github.com/rovanni/NewClaw)
+[![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows%20%7C%20macOS-blue.svg)](https://github.com/rovanni/NewClaw)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/rovanni/NewClaw/pulls)
 
 
@@ -133,10 +133,10 @@ curl -fsSL https://raw.githubusercontent.com/rovanni/NewClaw/main/install.sh | b
 | Outros assistentes | NewClaw |
 |---|---|
 | Esquece tudo ao fim de cada sessão | Memória persistente — lembra por dias, semanas, meses |
-| Seus dados ficam nos servidores de terceiros | 100% local — seus dados nunca saem da sua máquina |
+| Seus dados ficam nos servidores de terceiros | Local-first — com um modelo local, nada sai da sua máquina; com um modelo de nuvem, os pedidos vão só para o provedor que você escolheu |
 | Uma interface (geralmente só um chat) | Telegram, WhatsApp, Discord, Signal, Web — um único agente |
 | Começa do zero em toda conversa | Constrói um modelo de mundo sobre você que evolui com o tempo |
-| Exige assinaturas caras de API | Roda em modelos locais (Ollama) com cloud como fallback opcional |
+| Exige assinaturas caras de API | Roda no modelo que você escolher — local (Ollama, `.gguf`) ou de nuvem — e nunca troca por outro sem você saber |
 
 ---
 
@@ -144,8 +144,8 @@ curl -fsSL https://raw.githubusercontent.com/rovanni/NewClaw/main/install.sh | b
 
 - **Perguntar qualquer coisa sobre seu histórico** — preferências, decisões, projetos, pessoas que você mencionou
 - **Usar qualquer canal** — Telegram, WhatsApp, Discord, dashboard web, ou todos ao mesmo tempo
-- **Manter seus dados privados** — 100% local, sem cloud obrigatório
-- **Deixá-lo aprender seus padrões** — ele propõe atalhos com base em como você realmente trabalha
+- **Manter seus dados privados** — com modelo local, tudo fica na sua máquina; nuvem só se você escolher
+- **Deixá-lo aprender seus padrões** — ele cria atalhos (skills) com base em como você realmente trabalha, e avisa quando cria
 - **Rodar no seu servidor** — serviço persistente em background, suporte a SSH, multi-instância
 
 ---
@@ -157,8 +157,11 @@ curl -fsSL https://raw.githubusercontent.com/rovanni/NewClaw/main/install.sh | b
 | 🧠 **Memória Semântica** | Lembra pessoas, preferências, projetos, fatos — e as conexões entre eles |
 | 🔀 **Multi-Canal** | Telegram, Discord, WhatsApp, Signal, Web — um agente em todos os canais |
 | 🛡️ **Local-First** | Sem cloud obrigatório. Sem coleta de dados. Roda no seu hardware |
-| 🎓 **Aprendizado de Skills** | Observa como você trabalha e propõe atalhos reutilizáveis com o tempo |
-| 🔄 **Fallback de Provedores** | Ollama → Gemini → DeepSeek → Groq — troca automaticamente se um falhar |
+| 🎓 **Aprendizado de Skills** | Observa como você trabalha e cria atalhos reutilizáveis; avisa a cada skill nova (`/skills` lista, `/skill_desativar` desliga) |
+| 🎯 **Só o modelo que você escolheu** | Ollama (local ou nuvem), `.gguf`/llamafile, Gemini, DeepSeek, Groq, OpenRouter, Anthropic ou qualquer endpoint compatível com OpenAI. Sem troca automática: se o escolhido falha, o NewClaw diz o que ele respondeu |
+| 🎯 **Objetivos com conferência** | Pedidos de várias etapas viram um objetivo planejado; o que a resposta afirma como dado de ferramenta é conferido contra o que as ferramentas realmente retornaram |
+| 🔐 **Cofre de senhas** | Senha enviada com rótulo (`senha: …`) ou com `/segredo <nome> <valor>` sai da mensagem e vai para o cofre — não chega a logs, histórico nem aos modelos (`/segredos` lista, `/segredo_apagar` remove) |
+| 💾 **Backup do conhecimento** | Salva o que o NewClaw aprendeu num `.zip`, restaura ou mescla com outra instalação (`newclaw backup`, `restore`, `import`) |
 | 📊 **Dashboard Web** | Grafo de memória visual, chat em tempo real, configuração completa |
 | 🌐 **Busca Web** | Pesquisa temas e sintetiza respostas a partir de múltiplas fontes |
 | 🖥️ **SSH Exec** | Execute comandos em servidores remotos direto pelo chat |
@@ -176,16 +179,23 @@ curl -fsSL https://raw.githubusercontent.com/rovanni/NewClaw/main/install.sh | b
 
 | Comando | Descrição |
 |---|---|
-| `newclaw start` | Inicia o agente |
-| `newclaw stop` | Encerra o serviço graciosamente |
-| `newclaw status` | Health check, PID e uptime |
+| `newclaw start` | Inicia o agente (`--daemon` para rodar em segundo plano, ideal para VPS) |
+| `newclaw stop` / `newclaw restart` | Encerra / reinicia o serviço |
+| `newclaw status` | Health check, PID, uptime e configurações |
 | `newclaw logs -f` | Logs em tempo real |
-| `newclaw update` | Atualiza e recompila o projeto |
+| `newclaw doctor` | Diagnóstico completo: Node, PM2, Ollama, canais, disco |
+| `newclaw repair` | Corrige o auto-início no Windows (Tarefa Agendada) |
+| `newclaw update` | Atualiza o código do GitHub e recompila (`update restart` também reinicia; `update channel` escolhe Stable/Preview/Development) |
 | `newclaw passwd` | Define ou altera a senha do Dashboard |
 | `newclaw onboard` | Configura provedores e chaves de API |
+| `newclaw lang` | Mostra o idioma configurado (a troca é feita no Dashboard) |
 | `newclaw channels` | Status dos canais (Telegram, Discord, WhatsApp, Signal) |
-| `newclaw channels enable <nome>` | Ativa um canal |
-| `newclaw channels disable <nome>` | Desativa um canal |
+| `newclaw channels enable <nome>` / `disable <nome>` | Ativa / desativa um canal |
+| `newclaw backup` | Salva o que o NewClaw aprendeu num `.zip` (opções: `--historico`, `--workspace`, `--segredos`) |
+| `newclaw restore [arquivo.zip]` | Restaura o conhecimento de um backup (sem arquivo, abre o assistente) |
+| `newclaw import <arquivo.zip>` | Mescla o conhecimento de outra instalação, sem apagar nada |
+| `newclaw uninstall` | Remove o NewClaw e limpa o sistema |
+| `newclaw help` | Lista todos os comandos |
 
 ---
 
@@ -212,7 +222,12 @@ O NewClaw consegue inspecionar seu próprio código e comportamento em runtime u
 flowchart LR
     U["👤 Usuários"] --> C["🌐 Channel Adapters"]
     C --> B["🚌 MessageBus"]
-    B --> A["🧠 AgentLoop"]
+    B --> R["🧭 Roteador de intenção"]
+    R -->|"conversa / ferramenta"| A["🧠 AgentLoop"]
+    R -->|"várias etapas"| G["🎯 GoalOrchestrator"]
+    G -->|"cada etapa"| A
+    A --> J["⚖️ Juízes de validação"]
+    J -->|"resposta conferida"| B
 
     subgraph Adapters
         T["Telegram"]
@@ -237,7 +252,6 @@ flowchart LR
     end
 
     A3 -->|"tool_calls"| S2["🛠️ Ferramentas"]
-    A3 -->|"resposta"| B
     B --> C
     C --> U
 ```
@@ -251,18 +265,18 @@ o que é proibido importar onde, como adicionar um canal novo), veja
 | Componente | Propósito |
 |---|---|
 | **SessionTranscript** | Log JSONL append-only, cada evento gravado com número de sequência e metadados |
-| **SessionManager** | Mutex por sessão, compressão híbrida (20 msgs OU 3000 tokens) |
+| **SessionManager** | Mutex por sessão, compressão híbrida (10 msgs OU 2500 tokens) |
 | **SessionContext** | Constrói o contexto LLM: prompt → checkpoint → mensagens recentes → memória semântica |
 | **SessionLearner** | Extrai fatos das conversas para o grafo cognitivo |
 
 ### Modos de Operação
 
-O agente atua em quatro modos dependendo da complexidade da tarefa:
+Um roteador de intenção (LLM) decide, a cada mensagem, como ela é atendida:
 
-1. 💬 **Responder** — Conversa natural usando contexto de longo prazo
-2. 🔍 **Buscar** — Síntese multi-fonte e pesquisa baseada em evidências
-3. 🧭 **Explorar** — Navegação web ativa e interação profunda com páginas
-4. ⚡ **Executar** — Comandos diretos no sistema e operações de arquivo
+1. 💬 **Direto** — conversa natural usando o contexto de longo prazo, sem ferramentas
+2. 🛠️ **Ferramenta** — uma ação pontual (busca na web, memória, comando, arquivo)
+3. 🗺️ **Planejado** — várias ferramentas em sequência dentro da mesma resposta
+4. 🎯 **Objetivo** — tarefa de várias etapas: o `GoalOrchestrator` planeja, executa, confere cada etapa e replaneja quando algo falha
 
 </details>
 
