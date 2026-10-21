@@ -17,7 +17,7 @@ import { getBudgetAuxiliar, PerfilAuxiliar, OrcamentoAuxiliar } from '../shared/
 import { OpenAIProvider, OpenRouterProvider } from './OpenAIProvider';
 import { OllamaProvider, NO_MODEL_CONFIGURED_MESSAGE } from './OllamaProvider';
 import { mascararProfundo, mascararSegredos } from '../shared/segredos';
-import { medidorDoProcesso, observacaoDaChamada, CHARS_POR_TOKEN_PTBR } from './medidorDeTrabalho';
+import { medidorDoProcesso, observacaoDaChamada, CHARS_POR_TOKEN_PTBR, pontoDePartidaEmTokens } from './medidorDeTrabalho';
 
 /** Folga sobre o tempo que o orçamento em tokens dá na velocidade medida (ADR-024): a velocidade varia entre chamadas. */
 const FOLGA_DE_TEMPO = 1.25;
@@ -320,19 +320,28 @@ export class ProviderFactory {
      * prompt + geração). `null` sem histórico suficiente ou sem velocidade medida: quem chama segue com o prazo de sempre.
      * O tempo nunca passa do que resta ao objetivo (ou do limite de um objetivo) — proteção contra travamento.
      */
-    orcamentoPeloTrabalho(modelo: string | undefined, modo: 'livre' | 'desligado' | undefined, tipo: string, charsDeEntrada: number):
-        { modelo: string; tokens: number; prazoMs: number; amostras: number; geracao: number; leitura?: number } | null {
+    orcamentoPeloTrabalho(modelo: string | undefined, modo: 'livre' | 'desligado' | undefined, tipo: string, charsDeEntrada: number,
+        opcoes?: { pontoDePartida?: boolean }):
+        { modelo: string; tokens: number; prazoMs: number; amostras: number; geracao: number; leitura?: number; origem: 'historico' | 'ponto_de_partida' } | null {
         const nome = modelo || this.modeloPadraoDe(this.defaultProvider);
         if (!nome) return null;
         const m = modo ?? 'padrao';
-        const orc = medidorDoProcesso.orcamento(nome, m, tipo);
         const vel = medidorDoProcesso.velocidade(nome, m);
-        if (!orc || !vel.geracao) return null;
+        if (!vel.geracao) return null;
+        // Sem histórico próprio neste tipo, quem pede usa o ponto de partida declarado (ADR-024, decisão 2) — os juízes não
+        // pedem (o orçamento deles também vira limite de tokens no provedor, e um número de outro modelo poderia cortar).
+        const historico = medidorDoProcesso.orcamento(nome, m, tipo);
+        const partida = !historico && opcoes?.pontoDePartida ? pontoDePartidaEmTokens(tipo) : undefined;
+        const orc = historico ?? (partida ? { tokens: partida, amostras: 0 } : null);
+        if (!orc) return null;
         const entradaTokens = charsDeEntrada / CHARS_POR_TOKEN_PTBR;
         const bruto = (orc.tokens / vel.geracao + (vel.leitura ? entradaTokens / vel.leitura : 0)) * 1000 * FOLGA_DE_TEMPO + 5000;
         const prazoFinal = prazoDoTurno();
         const teto = prazoFinal ? Math.max(prazoFinal - Date.now(), 5000) : GOAL_LIMITS.MAX_GOAL_TTL_MS;
-        return { modelo: nome, tokens: orc.tokens, prazoMs: Math.round(Math.min(bruto, teto)), amostras: orc.amostras, geracao: vel.geracao, leitura: vel.leitura };
+        return {
+            modelo: nome, tokens: orc.tokens, prazoMs: Math.round(Math.min(bruto, teto)), amostras: orc.amostras, geracao: vel.geracao, leitura: vel.leitura,
+            origem: historico ? 'historico' : 'ponto_de_partida',
+        };
     }
 
     getBudgetAuxiliar(perfil: PerfilAuxiliar, tamanhoDoTrabalhoChars?: number): OrcamentoAuxiliar {

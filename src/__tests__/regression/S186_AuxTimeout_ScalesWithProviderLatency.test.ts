@@ -150,7 +150,8 @@ console.log('\n=== S186-7 — os dois pontos com evidência usam o orçamento me
     const factory = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'ProviderFactory.ts'), 'utf-8');
 
     assert(
-        /const orcamento = this\.providerFactory\.getBudgetAuxiliar\('classificacao'\);/.test(extractor),
+        // `let` desde S440 (21/10/2026): o orçamento pode ser estendido pelo trabalho medido do modelo (ADR-024).
+        /(const|let) orcamento = this\.providerFactory\.getBudgetAuxiliar\('classificacao'\);/.test(extractor),
         'GoalExtractor pede o orçamento em vez de usar constante',
     );
     assert(!/GOAL_EXTRACTOR_TIMEOUT_MS/.test(extractor), 'a constante fixa de 15s não existe mais');

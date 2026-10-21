@@ -309,6 +309,27 @@ export class OpenAIProvider implements ILLMProvider {
             const data = await response.json() as OpenAIChatResponse;
             const message = data.choices?.[0]?.message;
 
+            // ADR-024 (etapa 1): os números que o SERVIDOR mediu vão para a telemetria da tentativa — é deles que sai a
+            // velocidade do modelo. Antes eram descartados: na produção (18–21/10/2026), em mais de 100 chamadas ao modelo
+            // local, a velocidade nunca foi medida (`geracao=?`), e a extensão de prazo pelo trabalho nunca agiu para ele.
+            // `usage` é do contrato OpenAI; `timings` é do llama-server (llama.cpp) — ausente, os tempos ficam sem medir.
+            const tele = options?.telemetry;
+            if (tele) {
+                const timings = (data as { timings?: { prompt_n?: number; prompt_ms?: number; predicted_ms?: number } }).timings;
+                const raciocinio = (message as { reasoning_content?: unknown } | undefined)?.reasoning_content;
+                // Com cache de prompt, `prompt_ms` cobre só os `prompt_n` tokens lidos agora (não o prompt inteiro): dividir o
+                // total por ele superestimaria a leitura e encurtaria o prazo. Medido no Strata: cache_n/prompt_n em `timings`.
+                if (typeof timings?.prompt_n === 'number' && typeof timings?.prompt_ms === 'number') tele.promptTokens = timings.prompt_n;
+                else if (typeof data.usage?.prompt_tokens === 'number') tele.promptTokens = data.usage.prompt_tokens;
+                if (typeof data.usage?.completion_tokens === 'number') tele.evalTokens = data.usage.completion_tokens;
+                if (typeof timings?.prompt_ms === 'number') tele.promptEvalMs = timings.prompt_ms;
+                if (typeof timings?.predicted_ms === 'number') tele.evalMs = timings.predicted_ms;
+                tele.contentChars = (message?.content ?? '').length;
+                tele.thinkingChars = typeof raciocinio === 'string' ? raciocinio.length : 0;
+                const fim = data.choices?.[0]?.finish_reason;
+                if (typeof fim === 'string') tele.doneReason = fim;
+            }
+
             return {
                 content: message?.content || '',
                 toolCalls: message?.tool_calls?.map((tc: RawToolCall) => ({

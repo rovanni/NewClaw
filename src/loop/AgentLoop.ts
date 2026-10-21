@@ -1680,11 +1680,13 @@ export class AgentLoop {
         // medida) — só ESTENDE: um modelo local lento (~38 tokens/s) não é cortado pelo prazo calibrado na nuvem. Sem limite de
         // tokens aqui: a resposta do agente varia demais (metade < 750 tokens, 5% > 13 mil — escrever um arquivo grande é
         // legítimo); contra travamento seguem a inatividade da conexão e o prazo do objetivo.
+        // Sem histórico deste modelo no tipo, o ponto de partida declarado (ADR-024, decisão 2): sem ele, um modelo local cortado
+        // sempre aos ~210 s nunca formaria o próprio orçamento (validação real com o modelo local, 21/10/2026).
         const medido = typeof this.providerFactory.orcamentoPeloTrabalho === 'function'
-            ? this.providerFactory.orcamentoPeloTrabalho(chatProfile?.model, undefined, `AgentLoop:${phase}`, totalChars)
+            ? this.providerFactory.orcamentoPeloTrabalho(chatProfile?.model, undefined, `AgentLoop:${phase}`, totalChars, { pontoDePartida: true })
             : null;
         if (medido && medido.prazoMs > timeoutMs) {
-            log.info(`[${this.ts()}] [TIMEOUT] pelo trabalho medido: ${medido.tokens} tokens a ${medido.geracao.toFixed(1)} tok/s (n=${medido.amostras}, modelo=${medido.modelo}) → ${Math.round(medido.prazoMs / 1000)}s (era ${Math.round(timeoutMs / 1000)}s)`);
+            log.info(`[${this.ts()}] [TIMEOUT] pelo trabalho medido: ${medido.tokens} tokens (${medido.origem === 'historico' ? `histórico, n=${medido.amostras}` : 'ponto de partida declarado — sem histórico deste modelo'}) a ${medido.geracao.toFixed(1)} tok/s (modelo=${medido.modelo}) → ${Math.round(medido.prazoMs / 1000)}s (era ${Math.round(timeoutMs / 1000)}s)`);
             timeoutMs = medido.prazoMs;
         }
 

@@ -252,10 +252,23 @@ Regras:
             // shared/auxTimeout.ts. Com um modelo de nuvem o valor fica próximo dos 15s antigos;
             // com um .gguf local que leva ~18s por classificação, cresce o suficiente para a
             // chamada terminar em vez de abortar em todo turno (evidência de 03/08/2026).
-            const orcamento = this.providerFactory.getBudgetAuxiliar('classificacao');
+            let orcamento = this.providerFactory.getBudgetAuxiliar('classificacao');
+            // ADR-024: o prazo também respeita o TRABALHO medido deste modelo (leitura do prompt + geração na velocidade
+            // medida) — só ESTENDE. A latência do provedor com teto de 60 s não cabe num modelo local: validação real
+            // (21/10/2026), o modelo local leu este prompt a ~21 tokens/s (1.326 tokens ≈ 63 s só de leitura) e a classificação
+            // estourou os 15 s em todo turno — o pedido nunca virava objetivo.
+            const pf = this.providerFactory as unknown as Partial<Pick<ProviderFactory, 'orcamentoPeloTrabalho'>>;
+            const pelaTarefa = typeof pf.orcamentoPeloTrabalho === 'function'
+                ? pf.orcamentoPeloTrabalho(this.classifierModel, undefined, 'GoalExtractor:classifier', prompt.length, { pontoDePartida: true })
+                : null;
+            let detalheDoTrabalho = '';
+            if (pelaTarefa && pelaTarefa.prazoMs > orcamento.timeoutMs) {
+                detalheDoTrabalho = ` pelo_trabalho=${pelaTarefa.tokens}tokens(${pelaTarefa.origem === 'historico' ? `histórico n=${pelaTarefa.amostras}` : 'ponto de partida declarado'}) a ${pelaTarefa.geracao.toFixed(1)}tok/s (era ${Math.round(orcamento.timeoutMs / 1000)}s)`;
+                orcamento = { ...orcamento, timeoutMs: pelaTarefa.prazoMs, origem: 'medido' };
+            }
             log.info(
                 `[GoalExtractor] orçamento=${Math.round(orcamento.timeoutMs / 1000)}s `
-                + `origem=${orcamento.origem}`
+                + `origem=${orcamento.origem}${detalheDoTrabalho}`
                 + (orcamento.latenciaTipicaMs !== null ? ` latência_típica=${orcamento.latenciaTipicaMs}ms` : '')
             );
             const result = await this.providerFactory.chatWithFallback(

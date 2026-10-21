@@ -63,6 +63,25 @@ export const AMOSTRA_MINIMA = 5;
 export const FOLGA = 1.5;
 export const CHARS_POR_TOKEN_PTBR = 3.55;
 
+/**
+ * ADR-024, decisão 2: "sem histórico, vale um ponto de partida declarado, medido". Tokens de saída para um tipo de chamada
+ * quando ESTE modelo ainda não tem `AMOSTRA_MINIMA` conclusões nele. Sem isso há uma armadilha: chamada cortada não conta como
+ * conclusão, então um modelo lento cortado sempre pelo prazo calibrado na nuvem nunca forma o próprio orçamento (validação real,
+ * 21/10/2026: agente com o modelo local cortado aos 210 s numa instância nova). Só vale para quem pede (`pontoDePartida`), só
+ * ESTENDE o prazo e nunca vira limite de tokens no provedor. Origem: p95 medido na produção em 21/10/2026 × FOLGA —
+ * AgentLoop:loop 6.447 tokens (111 conclusões, o maior entre os modelos; o local teve 1.552 em 43); GoalExtractor:classifier
+ * 2.754 (4 conclusões — amostra pequena, declarado).
+ */
+const PONTO_DE_PARTIDA_EM_TOKENS: Record<string, number> = {
+    'AgentLoop': Math.ceil(6447 * FOLGA),
+    'GoalExtractor:classifier': Math.ceil(2754 * FOLGA),
+};
+
+/** O ponto de partida do tipo (exato, ou pelo componente antes do ":"), ou undefined se nenhum foi declarado para ele. */
+export function pontoDePartidaEmTokens(tipo: string): number | undefined {
+    return PONTO_DE_PARTIDA_EM_TOKENS[tipo] ?? PONTO_DE_PARTIDA_EM_TOKENS[tipo.split(':')[0]];
+}
+
 const mediana = (v: number[]): number | undefined => {
     if (!v.length) return undefined;
     const s = [...v].sort((a, b) => a - b);
