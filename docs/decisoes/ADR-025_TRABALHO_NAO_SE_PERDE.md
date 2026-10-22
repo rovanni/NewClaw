@@ -164,9 +164,21 @@ parou" por **"devolver o raciocínio parcial ao modelo como contexto"**, que é 
 
 **Cobertura:** `S427`. O caso da pausa legítima que voltou a trabalhar: antes seria cortado, agora segue vivo.
 
+**Situação medida em 21/10/2026 (campanha de sprints):**
+- **(5) guardar o raciocínio cortado** — no Ollama (streaming) **já acontece**: a telemetria da tentativa leva o raciocínio
+  acumulado (`thinkingText`, registrado também no corte) e o gravador de voo dos juízes o grava quando a gravação de
+  conteúdo está ligada (a mesma regra de privacidade do resto do conteúdo). No servidor compatível com OpenAI (modelo local,
+  **sem** streaming) **é impossível hoje**: numa chamada cortada nada chega ao NewClaw (as 3 tentativas cortadas registradas
+  em 18/10 são todas do modelo local, sem texto). O caminho é o streaming no `OpenAIProvider` — o mesmo que a ADR-024 (decisão
+  3, "progresso = tokens saindo") pede para a conexão. Proposta, não implementada.
+- **(4) aviso de término** e **encerramento por dono** dependem de o registro de processos saber o DONO (objetivo ou conversa)
+  e de um canal para entregar o fato fora do turno — não existe hoje. Proposta: o `exec_command` recebe o dono pelo contexto da
+  ferramenta (`setContext`, como as de envio) e o registro chama, no término, quem estiver inscrito para aquele dono.
+- **(6)** segue dependendo da medição no Ollama Cloud (cota a pedir).
+
 **Pendentes (próximas etapas):**
 - (4) avisar o usuário ou o agente quando um comando em segundo plano termina sem ninguém aguardando;
-- (5) guardar o raciocínio cortado;
+- (5) guardar o raciocínio cortado — feito para o Ollama; para o compatível com OpenAI, depende do streaming (acima);
 - (6) devolver o raciocínio parcial ao modelo (medição (a) acima);
 - encerramento por **dono** (objetivo ou conversa) no fim do objetivo — hoje fica coberto pelo teto do objetivo e pelo
   encerramento ao sair.
