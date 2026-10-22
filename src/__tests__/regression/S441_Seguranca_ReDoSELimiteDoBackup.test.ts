@@ -40,7 +40,9 @@ console.log('\n=== S441-2 — o resultado continua o mesmo ===');
 console.log('\n=== S441-3 — toda rota de backup que toca arquivo tem o limite ===');
 {
     const src = fs.readFileSync(path.join(process.cwd(), 'src', 'dashboard', 'routes', 'maintenance.ts'), 'utf-8');
-    assert(/const backupFsRateLimit = createRateLimiter\(\{/.test(src), 'limitador criado pelo helper comum (security.ts)');
+    // express-rate-limit, e não o createRateLimiter próprio: o CodeQL só reconhece limitadores de bibliotecas conhecidas
+    // (com o próprio, os alertas js/missing-rate-limiting reapareceram e reprovaram o PR #15).
+    assert(/const backupFsRateLimit = rateLimit\(\{/.test(src) && /from 'express-rate-limit'/.test(src), 'limitador do express-rate-limit (o que o CodeQL reconhece)');
     const rotas = ['/backup/list', '/backup/system', '/backup/database', '/backup/restore', '/backup/conhecimento',
         '/backup/conhecimento/inspecionar', '/backup/conhecimento/restaurar', '/backup/conhecimento/importar', '/backup/:filename'];
     for (const r of rotas) {

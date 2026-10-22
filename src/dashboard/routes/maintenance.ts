@@ -6,19 +6,25 @@ import fs from 'fs';
 import path from 'path';
 import Database from 'better-sqlite3';
 import { criarPacote, lerPacote, restaurarPacote, importarPacote } from '../../core/backupDoConhecimento';
-import { createRateLimiter } from '../security';
+import { rateLimit } from 'express-rate-limit';
 
 const log = createLogger('Maintenance');
 
 /**
- * Limite estrito para as rotas de backup, em cima do geral (mesmo padrão de `modelsFsRateLimit`, S233). Elas leem e gravam
- * arquivos grandes (zip do conhecimento, cópia do banco, upload de até 100 MB) — martelar uma delas é exaustão de disco/CPU,
- * não só de rede. Alertas CodeQL js/missing-rate-limiting #114–#118 (21/10/2026).
+ * Limite estrito para as rotas de backup, em cima do geral. Elas leem e gravam arquivos grandes (zip do conhecimento, cópia do
+ * banco, upload de até 100 MB) — martelar uma delas é exaustão de disco/CPU, não só de rede.
+ *
+ * `express-rate-limit`, e não o `createRateLimiter` de security.ts: o CodeQL (js/missing-rate-limiting) só reconhece limitadores
+ * de bibliotecas conhecidas. Com o próprio, os alertas #114–#118 reapareceram nas linhas novas (#121–#129) e reprovaram o PR —
+ * o mesmo que já tinha acontecido nas rotas de modelo (#99–#101, dispensados em 28/08 como falso positivo). Mesmo limite e
+ * mesma resposta de antes: 20/min por IP, 429 com `{ error }`.
  */
-const backupFsRateLimit = createRateLimiter({
+const backupFsRateLimit = rateLimit({
     windowMs: 60 * 1000,
-    max: 20,
-    message: 'Muitas requisições a rotas de backup — aguarde um instante.',
+    limit: 20,
+    standardHeaders: 'draft-7',
+    legacyHeaders: false,
+    message: { error: 'Muitas requisições a rotas de backup — aguarde um instante.' },
 });
 const DIR = process.cwd();
 const BACKUP_DIR = path.join(DIR, 'data', 'backups');
