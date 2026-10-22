@@ -40,7 +40,10 @@ async function main() {
     const marca = path.join(pasta, 'marca.txt');
     const script = path.join(pasta, 'escreve.js');
     // Escreve na marca a cada 100 ms, para sempre. Gera saída grande no começo para provar que o fato não é cortado.
-    fs.writeFileSync(script, `const fs=require('fs');process.stdout.write('aviso\\n'.repeat(4000));setInterval(()=>fs.appendFileSync(${JSON.stringify(marca)},'x'),100);`);
+    // O caminho vai pelo ambiente (o exec_command repassa process.env ao filho), não embutido no código gerado — alerta CodeQL
+    // js/bad-code-sanitization #119.
+    process.env.S415_MARCA = marca;
+    fs.writeFileSync(script, `const fs=require('fs');process.stdout.write('aviso\\n'.repeat(4000));setInterval(()=>fs.appendFileSync(process.env.S415_MARCA,'x'),100);`);
     // `&& echo fim` obriga o shell a ficar como pai (não troca de processo) — o node é NETO do NewClaw, como o npm era.
     const comando = `node "${script}" && echo fim`;
 

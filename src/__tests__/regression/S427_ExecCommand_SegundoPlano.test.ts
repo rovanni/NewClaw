@@ -66,7 +66,10 @@ async function main(): Promise<void> {
 
     console.log('\n=== S427-4 — em segundo plano, "sem sinal" NÃO encerra sozinho; encerrar encerra (com a árvore) ===');
     const marca = path.join(pasta, 'marca.txt');
-    const quieto = script('quieto.js', `setTimeout(()=>{setInterval(()=>require('fs').appendFileSync(${JSON.stringify(marca)},'x'),300)},6000)`);
+    // O caminho vai pelo ambiente (o exec_command repassa process.env ao filho), não embutido no código gerado — alerta CodeQL
+    // js/bad-code-sanitization #120.
+    process.env.S427_MARCA = marca;
+    const quieto = script('quieto.js', "setTimeout(()=>{setInterval(()=>require('fs').appendFileSync(process.env.S427_MARCA,'x'),300)},6000)");
     const q = await t.execute({ command: quieto, tolerancia_sem_atividade: 2 });
     const nq = q.processoEmAndamento!;
     assert(typeof nq === 'number', 'foi para segundo plano', q);

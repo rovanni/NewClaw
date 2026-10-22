@@ -6,8 +6,20 @@ import fs from 'fs';
 import path from 'path';
 import Database from 'better-sqlite3';
 import { criarPacote, lerPacote, restaurarPacote, importarPacote } from '../../core/backupDoConhecimento';
+import { createRateLimiter } from '../security';
 
 const log = createLogger('Maintenance');
+
+/**
+ * Limite estrito para as rotas de backup, em cima do geral (mesmo padrão de `modelsFsRateLimit`, S233). Elas leem e gravam
+ * arquivos grandes (zip do conhecimento, cópia do banco, upload de até 100 MB) — martelar uma delas é exaustão de disco/CPU,
+ * não só de rede. Alertas CodeQL js/missing-rate-limiting #114–#118 (21/10/2026).
+ */
+const backupFsRateLimit = createRateLimiter({
+    windowMs: 60 * 1000,
+    max: 20,
+    message: 'Muitas requisições a rotas de backup — aguarde um instante.',
+});
 const DIR = process.cwd();
 const BACKUP_DIR = path.join(DIR, 'data', 'backups');
 const DB_FILE = path.join(DIR, 'data', 'newclaw.db');
@@ -321,7 +333,7 @@ export function createMaintenanceRouter(): Router {
     });
 
     // GET /api/maintenance/backup/list
-    router.get('/backup/list', (_req: Request, res: Response) => {
+    router.get('/backup/list', backupFsRateLimit, (_req: Request, res: Response) => {
         try {
             ensureBackupDir();
             const files = fs.readdirSync(BACKUP_DIR)
@@ -339,7 +351,7 @@ export function createMaintenanceRouter(): Router {
     });
 
     // POST /api/maintenance/backup/system
-    router.post('/backup/system', (_req: Request, res: Response) => {
+    router.post('/backup/system', backupFsRateLimit, (_req: Request, res: Response) => {
         try {
             ensureBackupDir();
             const envSrc = ENV_CANDIDATES.find(f => fs.existsSync(f));
@@ -358,7 +370,7 @@ export function createMaintenanceRouter(): Router {
     });
 
     // POST /api/maintenance/backup/database
-    router.post('/backup/database', async (_req: Request, res: Response) => {
+    router.post('/backup/database', backupFsRateLimit, async (_req: Request, res: Response) => {
         try {
             ensureBackupDir();
             if (!fs.existsSync(DB_FILE)) return res.status(404).json({ success: false, error: 'Banco de dados não encontrado' });
@@ -383,7 +395,7 @@ export function createMaintenanceRouter(): Router {
     });
 
     // POST /api/maintenance/backup/restore
-    router.post('/backup/restore', async (req: Request, res: Response) => {
+    router.post('/backup/restore', backupFsRateLimit, async (req: Request, res: Response) => {
         try {
             const { filename } = req.body || {};
             if (!filename) return res.status(400).json({ success: false, error: 'filename obrigatório' });
@@ -460,7 +472,7 @@ export function createMaintenanceRouter(): Router {
     // ── ADR-020: backup do conhecimento (pacote único .zip) ─────────────────────────────────────────
 
     // POST /api/maintenance/backup/conhecimento  { historico?, workspace?, segredos? }
-    router.post('/backup/conhecimento', async (req: Request, res: Response) => {
+    router.post('/backup/conhecimento', backupFsRateLimit, async (req: Request, res: Response) => {
         try {
             const { historico, workspace, segredos } = req.body || {};
             const { arquivo, manifesto } = await criarPacote(BACKUP_DIR, { historico: historico === true, workspace: workspace === true, segredos: segredos === true });
@@ -476,7 +488,7 @@ export function createMaintenanceRouter(): Router {
     });
 
     // POST /api/maintenance/backup/conhecimento/inspecionar  { filename } — o que o pacote contém, antes de restaurar
-    router.post('/backup/conhecimento/inspecionar', async (req: Request, res: Response) => {
+    router.post('/backup/conhecimento/inspecionar', backupFsRateLimit, async (req: Request, res: Response) => {
         try {
             const safe = path.basename(String(req.body?.filename || ''));
             const filePath = path.join(BACKUP_DIR, safe);
@@ -489,7 +501,7 @@ export function createMaintenanceRouter(): Router {
     });
 
     // POST /api/maintenance/backup/conhecimento/restaurar  { filename, restaurarSegredos? }
-    router.post('/backup/conhecimento/restaurar', async (req: Request, res: Response) => {
+    router.post('/backup/conhecimento/restaurar', backupFsRateLimit, async (req: Request, res: Response) => {
         try {
             const safe = path.basename(String(req.body?.filename || ''));
             const filePath = path.join(BACKUP_DIR, safe);
@@ -505,7 +517,7 @@ export function createMaintenanceRouter(): Router {
 
     // POST /api/maintenance/backup/conhecimento/importar  { filename } — ADR-020 Sprint B: mescla, sem sobrescrever nada
     // local. Escreve no banco em uso (como qualquer operação do app); sem reinício — skills novas carregam no próximo início.
-    router.post('/backup/conhecimento/importar', async (req: Request, res: Response) => {
+    router.post('/backup/conhecimento/importar', backupFsRateLimit, async (req: Request, res: Response) => {
         try {
             const safe = path.basename(String(req.body?.filename || ''));
             const filePath = path.join(BACKUP_DIR, safe);
@@ -520,6 +532,7 @@ export function createMaintenanceRouter(): Router {
 
     // POST /api/maintenance/backup/upload
     router.post('/backup/upload',
+        backupFsRateLimit,
         (req: Request, res: Response, next) => {
             // Accept raw binary body (Content-Type: application/octet-stream)
             // express.raw is applied only for this route to avoid interfering with json body parser
@@ -571,7 +584,7 @@ export function createMaintenanceRouter(): Router {
     );
 
     // GET /api/maintenance/backup/:filename  (download)
-    router.get('/backup/:filename', (req: Request, res: Response) => {
+    router.get('/backup/:filename', backupFsRateLimit, (req: Request, res: Response) => {
         try {
             const filename = path.basename(String(req.params.filename));
             const filePath = path.join(BACKUP_DIR, filename);

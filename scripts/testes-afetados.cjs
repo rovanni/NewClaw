@@ -184,7 +184,7 @@ function selecionar(testes, alterados, { mapa = null, criadosOuRemovidos = [] } 
             else if (removidos.includes(a) && f.removidos.has(a.replace(SEM_EXTENSAO, ''))) motivos.push(`importava ${a} (removido)`);
             else if (texto && citaPeloNome(texto, a)) motivos.push(`cita ${path.posix.basename(a)}`);
             else if (lidosSet && lidosSet.has(a)) motivos.push(`leu ${a} na última suíte completa`);
-            else if (varridas && varreduraQueCobre(a, varridas)) motivos.push(`varre ${varreduraQueCobre(a, varridas).replace('|', '/*')}`);
+            else if (varridas && varreduraQueCobre(a, varridas)) motivos.push(`varre ${varreduraQueCobre(a, varridas).split('|').join('/*')}`);   // todas as "|" (CodeQL #113)
         }
         // Regra 7: arquivo CRIADO ou REMOVIDO muda o que um teste de recenseamento encontra ao listar pastas (S384: arquivo novo sem
         // consumidor; S356: chamada nova ao LLM; S195: endereço privado em arquivo novo) — esses rodam sempre que a estrutura muda.
