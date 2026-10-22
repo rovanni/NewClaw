@@ -572,6 +572,23 @@ export class AgentLoop {
         return this.profileRegistry.getClassifierModel();
     }
 
+    /** Os modelos configurados (todas as categorias + o classificador), sem repetição. */
+    modelosConfigurados(): string[] {
+        return [...new Set([...this.profileRegistry.getProfiles().map(p => p.model), this.profileRegistry.getClassifierModel()].filter(Boolean))];
+    }
+
+    /**
+     * Mede, em segundo plano, a velocidade dos modelos configurados que ainda não têm medição (ADR-024) — na partida e quando
+     * a escolha de modelos muda. Nunca bloqueia nem lança.
+     */
+    medirModelosSemVelocidade(alemDestes: Array<string | undefined> = []): void {
+        const pf = this.providerFactory as unknown as Partial<Pick<ProviderFactory, 'medirVelocidadeDosModelos'>>;
+        if (typeof pf.medirVelocidadeDosModelos !== 'function') return;
+        let modelos: string[] = [];
+        try { modelos = [...this.modelosConfigurados(), ...alemDestes.filter((m): m is string => typeof m === 'string' && !!m)]; } catch { return; }
+        pf.medirVelocidadeDosModelos(modelos).catch(() => { /* a medição nunca afeta o agente */ });
+    }
+
     /**
      * Aplica mudanças de configuração em runtime (chamado pelo dashboard após POST /api/config).
      * Reconstrói o ModelProfileRegistry quando modelRouter muda para que novos modelos/providers
@@ -594,6 +611,8 @@ export class AgentLoop {
                 this.goalOrchestrator?.updateInternalModels(plannerModel, riskModel, classifierModel);
                 log.info(`[updateConfig] internal models → planner=${plannerModel ?? '—'} risk=${riskModel ?? '—'} classifier=${classifierModel ?? '—'}`);
             }
+            // Modelo novo escolhido: mede a velocidade dele já (uma vez), antes do primeiro pedido.
+            this.medirModelosSemVelocidade([observerModel, plannerModel, riskModel, classifierModel]);
         }
     }
 
@@ -1207,7 +1226,10 @@ export class AgentLoop {
                 });
                 if (g.state === 'VALIDATED' || g.state === 'NOT_APPLICABLE') efeitoDoJuiz('resposta_liberada', { estado: g.state });
                 if (g.state !== 'VALIDATED' && g.state !== 'NOT_APPLICABLE') {
-                    log.warn(`[${this.ts()}] [GROUNDING] estado=${g.state} — bloqueando entrega (${g.reason})`);
+                    // O destino é decidido abaixo (parcial / com aviso / bloqueio) — esta linha só registra o veredito. Antes dizia
+                    // "bloqueando entrega" também para UNVALIDATED, que é ENTREGUE com aviso desde 14/10: o log contradizia o que
+                    // acontecia na linha seguinte (achado ao revisar os logs de 15–21/10/2026).
+                    log.warn(`[${this.ts()}] [GROUNDING] estado=${g.state} — resposta não confirmada pelo juiz (${g.reason})`);
                     this.reflectionMemory.record({
                         traceId: trace.id,
                         conversationId,

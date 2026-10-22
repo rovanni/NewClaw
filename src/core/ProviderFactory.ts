@@ -344,6 +344,29 @@ export class ProviderFactory {
         };
     }
 
+    /**
+     * Mede a velocidade dos modelos que ainda não têm medição (ADR-024: medir em vez de supor), com UMA chamada mínima para
+     * cada — pelo caminho normal, então a medição é registrada como qualquer outra. Sem isso, a primeira chamada de um modelo
+     * nunca medido usa o prazo calibrado na nuvem: validação real (21/10/2026), num modelo local novo o classificador de
+     * objetivos estourava 15 s no primeiro turno (era a primeira chamada) e o pedido não virava objetivo. A medição fica
+     * guardada (`data/medicao-de-tokens.json`): cada modelo é medido uma vez, não a cada partida. Nunca lança.
+     */
+    async medirVelocidadeDosModelos(modelos: string[]): Promise<void> {
+        for (const modelo of [...new Set(modelos.filter(Boolean))]) {
+            if (medidorDoProcesso.velocidade(modelo, 'padrao').geracao) continue;
+            try {
+                const r = await this.chatWithFallback([{ role: 'user', content: 'Responda apenas: ok' }], undefined, undefined, 300_000,
+                    // 128 tokens: com 32, um modelo que raciocina antes de responder gastava tudo pensando e a chamada terminava
+                    // sem conteúdo (validação real, 21/10/2026, modelo local) — a velocidade saía, mas de uma amostra pequena.
+                    undefined, modelo, { diag: { component: 'MedicaoDeVelocidade', role: 'sonda' }, limiteDeSaidaTokens: 128 });
+                const v = medidorDoProcesso.velocidade(modelo, 'padrao');
+                log.info(`[MEDICAO] modelo=${modelo} sem velocidade medida — sonda ${r.status}; ${v.geracao ? `geração ${v.geracao.toFixed(1)} tok/s${v.leitura ? `, leitura ${v.leitura.toFixed(0)} tok/s` : ''}` : 'o provedor não informou os tempos (segue sem medição)'}`);
+            } catch (e) {
+                log.warn(`[MEDICAO] modelo=${modelo} — a sonda falhou: ${String(e).slice(0, 160)}`);
+            }
+        }
+    }
+
     getBudgetAuxiliar(perfil: PerfilAuxiliar, tamanhoDoTrabalhoChars?: number): OrcamentoAuxiliar {
         return getBudgetAuxiliar(perfil, this.defaultProvider, {
             getLatenciaTipicaMs: (provedor: string) =>

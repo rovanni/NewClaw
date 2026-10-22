@@ -579,6 +579,11 @@ export class AgentController {
 
         await this.messageBus.startAll();
 
+        // ADR-024: modelo escolhido ainda sem velocidade medida → uma sonda mínima agora, em segundo plano, para que o primeiro
+        // pedido já tenha o prazo pelo trabalho (cada modelo é medido uma vez; a medição fica em data/).
+        const mr = this.config.modelRouter;
+        this.agentLoop.medirModelosSemVelocidade([mr?.observerModel, mr?.plannerModel, mr?.riskModel, mr?.classifierModel]);
+
         this.lifecycle.registerInterval('sessions.cleanup', async () => {
             try {
                 await this.sessionManager.cleanupInactiveSessions(900_000);
