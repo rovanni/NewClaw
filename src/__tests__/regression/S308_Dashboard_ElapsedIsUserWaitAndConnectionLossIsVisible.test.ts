@@ -137,8 +137,8 @@ async function main(): Promise<void> {
     let pollBody = html.slice(pollBodyStart, html.indexOf('\n      poll();', pollBodyStart));
     pollBody = pollBody.replace(/\}\s*;\s*$/, '');
     const buildPoll = (fetchImpl: () => Promise<unknown>) => new AsyncFunction(
-        'newclawFetch', 'renderPendingAuth', 'formatSemanticStatus', 'showStatus', 'stopTurnPolling', 't', 'fetchAndRenderOutbox', 'sessionId', 'turnId', pollBody,
-    ).bind(null, fetchImpl, () => {}, () => ({ type: 'processing', text: 'x' }), () => {}, () => {}, (k: string) => k, async () => {}, 'sess', 'turn') as () => Promise<{ failed: boolean } | undefined>;
+        'newclawFetch', 'renderPendingAuth', 'formatSemanticStatus', 'showStatus', 'stopTurnPolling', 't', 'fetchAndRenderOutbox', 'renderProgress', 'sessionId', 'turnId', pollBody,
+    ).bind(null, fetchImpl, () => {}, () => ({ type: 'processing', text: 'x' }), () => {}, () => {}, (k: string) => k, async () => {}, () => {}, 'sess', 'turn') as () => Promise<{ failed: boolean } | undefined>;
     {
         const ok = await buildPoll(async () => ({ status: 200, json: async () => ({ success: true, active: [{ conversationId: 'sess', elapsedMs: 1, kind: 'goal' }], pending: false }) }))();
         assert(ok?.failed === false, 'consulta que funciona → {failed:false}', ok);

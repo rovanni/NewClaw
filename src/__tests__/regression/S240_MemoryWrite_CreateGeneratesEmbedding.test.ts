@@ -133,10 +133,10 @@ console.log('\n=== S240-2 — create() que atualiza nó com id colidente também
     db.close();
 }
 
-// S240-3 mudou em 21/10/2026 (S437): o nó parecido NÃO é mais sobrescrito — o create não grava nada e devolve o candidato
-// para o agente decidir entre update (mesmo fato) e create com id próprio (outro fato). Produção, 17/10: a sobrescrita
-// apagou o fato de outro assunto que tinha 3 palavras em comum. O dedup continua existindo (não cria a duplicata).
-console.log('\n=== S240-3 — create() com conteúdo similar (findSimilarNode) não duplica nem sobrescreve ===');
+// S240-3 mudou (S437): o nó parecido NÃO é mais sobrescrito. Produção, 17/10/2026: a sobrescrita apagou o fato de outro
+// assunto que tinha 3 palavras em comum. Desde 22/10 o novo é sempre gravado e o parecido vai como fato, com a chamada de
+// merge — exigir a decisão do agente fazia o turno terminar em "a gravação falhou" (3 de 4 testes reais).
+console.log('\n=== S240-3 — create() com conteúdo similar (findSimilarNode) grava o novo e não sobrescreve ===');
 {
     const db = new (Database as any)(':memory:');
     new EmbeddingService(db);
@@ -154,10 +154,11 @@ console.log('\n=== S240-3 — create() com conteúdo similar (findSimilarNode) n
         content: 'Posição Pi Network corrigida quantidade tokens preço atual valor posição hoje',
     });
 
-    assert(result.success === false && /Nada foi gravado: já existe um nó parecido, "/.test(result.error ?? ''), 'o caminho de dedup por similaridade foi de fato exercitado', result);
+    // Desde 22/10/2026 (S437): o parecido não bloqueia — o novo é gravado e o parecido vai como fato com a chamada de merge.
+    assert(result.success === true && /Já existia um nó parecido: "/.test(result.output ?? ''), 'o caminho de dedup por similaridade foi de fato exercitado', result);
     const nos = db.prepare("SELECT content FROM memory_nodes WHERE type = 'fact' AND name = 'Posição Pi'").all() as Array<{ content: string }>;
-    assert(nos.length === 1 && nos[0].content === primeiro, 'nenhuma duplicata e o conteúdo existente ficou intacto', nos);
-    assert(embeddingCalls === 0, 'nada gravado → nenhum embedding gerado', embeddingCalls);
+    assert(nos.length === 2 && nos.some(n => n.content === primeiro), 'o existente ficou intacto e o novo foi gravado à parte', nos);
+    assert(embeddingCalls === 1, 'o nó novo ganhou embedding (fica achável na busca por significado)', embeddingCalls);
 
     db.close();
 }

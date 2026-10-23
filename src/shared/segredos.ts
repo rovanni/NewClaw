@@ -126,6 +126,19 @@ export function resolverMarcadores<T>(x: T, env: NodeJS.ProcessEnv = process.env
     return x;
 }
 
+/**
+ * O valor sem a pontuação que fecha a frase ("senha: abc123!." → "abc123"). Laço do fim para o começo, linear no tamanho.
+ * Era `replace(/[.,;:!?)\]]+$/, '')`, que é quadrático quando a pontuação NÃO está no fim (o motor tenta cada posição da
+ * sequência e falha no `$`) — alerta CodeQL js/polynomial-redos #112; medido em 21/10/2026: 40 mil "!" seguidos de uma letra
+ * levavam 1,6 s, travando o processo, e isto roda em TODA mensagem recebida (MessageBus, antes de qualquer outra coisa).
+ */
+const PONTUACAO_DE_FIM = new Set(['.', ',', ';', ':', '!', '?', ')', ']']);
+function semPontuacaoNoFim(v: string): string {
+    let fim = v.length;
+    while (fim > 0 && PONTUACAO_DE_FIM.has(v[fim - 1])) fim--;
+    return v.slice(0, fim);
+}
+
 /** Valores com cara de credencial num texto de entrada (sem decidir nada além disso). */
 export function detectarSegredos(texto: string): string[] {
     const achados = new Set<string>();
@@ -136,7 +149,7 @@ export function detectarSegredos(texto: string): string[] {
     if (PALAVRA_DE_CREDENCIAL.test(texto)) {
         for (const m of texto.match(SENHA_DE_APP) ?? []) achados.add(m);
         for (const m of texto.matchAll(VALOR_ROTULADO)) {
-            const v = m[1].replace(/[.,;:!?)\]]+$/, '');
+            const v = semPontuacaoNoFim(m[1]);
             if (temCaraDeSenha(v)) achados.add(v);
         }
     }

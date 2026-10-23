@@ -76,15 +76,16 @@ function buildPollHarness(mockResponse: { success: boolean; active: unknown[]; p
     const stopTurnPolling = () => { calls.stopTurnPollingCalled = true; };
     const t = (key: string) => key;
     const fetchAndRenderOutbox = async (id: string) => { calls.fetchAndRenderOutboxCalledWith = id; };
+    const renderProgress = (_p: unknown) => {};   // ADR-027: o cartão do relato de progresso (S446)
 
     const pollFn = new AsyncFunction(
         'newclawFetch', 'renderPendingAuth', 'formatSemanticStatus', 'showStatus', 'stopTurnPolling', 't', 'fetchAndRenderOutbox',
-        'sessionId', 'turnId',
+        'renderProgress', 'sessionId', 'turnId',
         body,
     );
 
     return {
-        call: () => pollFn(newclawFetch, renderPendingAuth, formatSemanticStatus, showStatus, stopTurnPolling, t, fetchAndRenderOutbox, sessionId, turnId) as Promise<void>,
+        call: () => pollFn(newclawFetch, renderPendingAuth, formatSemanticStatus, showStatus, stopTurnPolling, t, fetchAndRenderOutbox, renderProgress, sessionId, turnId) as Promise<void>,
         calls,
     };
 }

@@ -26,7 +26,7 @@ import * as path from 'path';
 const pasta = fs.mkdtempSync(path.join(os.tmpdir(), 'nc-s415-'));
 process.env.WORKSPACE_DIR = pasta;
 
-import { ExecCommandTool, PRAZO_PADRAO_MS } from '../../tools/exec_command';
+import { ExecCommandTool } from '../../tools/exec_command';
 
 let passed = 0;
 let failed = 0;
@@ -40,7 +40,10 @@ async function main() {
     const marca = path.join(pasta, 'marca.txt');
     const script = path.join(pasta, 'escreve.js');
     // Escreve na marca a cada 100 ms, para sempre. Gera saída grande no começo para provar que o fato não é cortado.
-    fs.writeFileSync(script, `const fs=require('fs');process.stdout.write('aviso\\n'.repeat(4000));setInterval(()=>fs.appendFileSync(${JSON.stringify(marca)},'x'),100);`);
+    // O caminho vai pelo ambiente (o exec_command repassa process.env ao filho), não embutido no código gerado — alerta CodeQL
+    // js/bad-code-sanitization #119.
+    process.env.S415_MARCA = marca;
+    fs.writeFileSync(script, `const fs=require('fs');process.stdout.write('aviso\\n'.repeat(4000));setInterval(()=>fs.appendFileSync(process.env.S415_MARCA,'x'),100);`);
     // `&& echo fim` obriga o shell a ficar como pai (não troca de processo) — o node é NETO do NewClaw, como o npm era.
     const comando = `node "${script}" && echo fim`;
 
@@ -77,9 +80,9 @@ async function main() {
     const grande = await new ExecCommandTool().execute({ command: `node -e "process.stdout.write('x'.repeat(3*1024*1024));setInterval(()=>{},1000)"`, timeout: 20000 });
     assert(grande.success === false && /^\[interrompido pelo NewClaw: a saída do comando passou de \d+ bytes/.test(grande.output || ''), 'saída gigante: falha começando pelo fato do teto (antes o exec cortava com um erro genérico)', (grande.output || '').slice(0, 200));
 
-    console.log('\n=== S415-4 — o schema anuncia o padrão usado ===');
+    console.log('\n=== S415-4 — o schema diz que, sem timeout, não há teto (ADR-027) ===');
     const desc = (new ExecCommandTool() as any).parameters?.properties?.timeout?.description ?? (new ExecCommandTool() as any).schema?.properties?.timeout?.description ?? '';
-    assert(desc.includes(String(PRAZO_PADRAO_MS)), `descrição do timeout cita ${PRAZO_PADRAO_MS}`, desc);
+    assert(/não há teto/.test(desc) && /tolerância sem atividade/.test(desc), "descrição do timeout: sem ele, não há teto — só a tolerância sem atividade", desc);
 
     try { fs.rmSync(pasta, { recursive: true, force: true }); } catch { /* arquivo preso: o SO limpa a pasta temporária */ }
     console.log(`\n=== S415: ${passed} passaram, ${failed} falharam ===`);

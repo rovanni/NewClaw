@@ -7,15 +7,19 @@
  * tokens — o orçamento medido para esse juiz era 7,3 mil. Não era trabalho demais: a nuvem estava lenta (~40 tok/s contra
  * 238 medidos). O relógio cortou um modelo que trabalhava.
  *
- * REGRESSÃO SE: um modelo gerando for cortado no prazo da vez; um modelo PARADO (sem pedaços) não for cortado; quem passou
- * do orçamento de tokens não for cortado; ou o teto do objetivo deixar de valer.
+ * ADR-027 (23/10/2026): também o orçamento em tokens e o teto do objetivo deixaram de cortar quem gera — só o silêncio corta.
+ * O limite de tokens continua indo ao provedor (o modelo para sozinho). CI Windows, 22/10: o antigo S431-3 media esse corte.
+ *
+ * REGRESSÃO SE: um modelo gerando for cortado no prazo da vez, pelo orçamento de tokens ou por um teto de objetivo; um modelo
+ * PARADO (sem pedaços) não for cortado; ou o limite de tokens deixar de chegar ao provedor.
  *
  * Execução: npx ts-node src/__tests__/regression/S431_JuizNaoCortaQuemGera.test.ts
  */
 import { PerfilDoJuiz } from '../../validation/perfilDoJuiz';
 import { ValidationEngine } from '../../validation/ValidationEngine';
 import { criarRegistroPadrao } from '../../validation/motorPadrao';
-import { executarComPrazo } from '../../shared/turnCancellation';
+import * as fs from 'fs';
+import * as path from 'path';
 
 let passed = 0;
 let failed = 0;
@@ -28,12 +32,14 @@ const VEREDITO = JSON.stringify({ estado: 'aprovado', itens: [{ item: 'x', confe
  * Provedor simulado com streaming: um pedaço a cada `intervaloMs` durante `geraPorMs`; responde ao fim de `respondeEmMs`
  * (Infinity = nunca). Preenche a telemetria AO VIVO como o OllamaProvider.
  */
+const limitesRecebidos: Array<number | undefined> = [];
 function fabrica(cfg: { geraPorMs: number; respondeEmMs: number; intervaloMs?: number; medido?: any }) {
     return {
         getBudgetAuxiliar: () => ({ timeoutMs: 1000, origem: 'padrao', latenciaTipicaMs: null }),
         ...(cfg.medido ? { orcamentoPeloTrabalho: () => cfg.medido } : {}),
         chatWithFallback: (_m: unknown, _t: unknown, _p: unknown, _timeout: number, sinal: AbortSignal | undefined, _mo: unknown, opts: any) =>
             new Promise((res) => {
+                limitesRecebidos.push(opts?.limiteDeSaidaTokens);
                 const tele: any = { provider: 'falso', model: 'm', startedAt: new Date().toISOString(), pedacosAteAgora: 0 };
                 opts.telemetry?.attempts.push(tele);
                 const t0 = Date.now();
@@ -62,23 +68,25 @@ async function main(): Promise<void> {
     const r1 = await julgar({ geraPorMs: 3000, respondeEmMs: 3000 });
     assert(r1.semVeredito === false && r1.desfecho === 'veredito', `deu veredito em ${Date.now() - t0} ms (antes: cortado em 1 s)`, r1.desfecho);
 
-    console.log('\n=== S431-2 — modelo PAROU de gerar e não responde: cortado depois da janela sem pedaços ===');
+    console.log('\n=== S431-2 — modelo PAROU de gerar e não responde: cortado depois da janela de silêncio (a mesma da chamada) ===');
+    process.env.SILENCIO_DO_MODELO_S = '3';   // ADR-027: o juiz usa silencioDoModeloMs (padrão 90 s); 3 s só para o teste
     t0 = Date.now();
     const r2 = await julgar({ geraPorMs: 300, respondeEmMs: Infinity });
     const ms2 = Date.now() - t0;
-    assert(r2.semVeredito === true && ms2 >= 1000 && ms2 < 15_000, `cortado (${ms2} ms): sem pedaços há mais de 10 s não é "trabalhando"`, r2.desfecho);
+    delete process.env.SILENCIO_DO_MODELO_S;
+    assert(r2.semVeredito === true && ms2 >= 3000 && ms2 < 15_000, `cortado (${ms2} ms): sem pedaços além da janela de silêncio (3 s) não é "trabalhando"`, r2.desfecho);
 
-    console.log('\n=== S431-3 — passou do orçamento em tokens: cortado no prazo ===');
+    console.log('\n=== S431-3 — ADR-027: passou do orçamento em tokens AINDA GERANDO: não é cortado pelo relógio ===');
     t0 = Date.now();
-    const r3 = await julgar({ geraPorMs: 60_000, respondeEmMs: Infinity, intervaloMs: 10, medido: { modelo: 'm', tokens: 50, prazoMs: 1000, amostras: 9, geracao: 100 } });
+    limitesRecebidos.length = 0;
+    const r3 = await julgar({ geraPorMs: 3000, respondeEmMs: 3000, intervaloMs: 10, medido: { modelo: 'm', tokens: 50, prazoMs: 1000, amostras: 9, geracao: 100 } });
     const ms3 = Date.now() - t0;
-    assert(r3.semVeredito === true && ms3 < 4000, `cortado logo após o prazo (${ms3} ms) — já tinha passado dos 50 tokens do orçamento`, r3.desfecho);
+    assert(r3.semVeredito === false && r3.desfecho === 'veredito', `deu veredito em ${ms3} ms — ~300 pedaços, acima dos 50 do orçamento (antes: cortado no prazo)`, r3.desfecho);
+    assert(limitesRecebidos[0] === 50, 'o limite de tokens do orçamento chega ao provedor (quem para é o modelo, não o relógio)', limitesRecebidos);
 
-    console.log('\n=== S431-4 — dentro de um objetivo: o teto é o que resta a ele ===');
-    t0 = Date.now();
-    const r4 = await executarComPrazo(Date.now() + 6000, () => julgar({ geraPorMs: 60_000, respondeEmMs: Infinity, medido: { modelo: 'm', tokens: 1_000_000, prazoMs: 1000, amostras: 9, geracao: 100 } }));
-    const ms4 = Date.now() - t0;
-    assert(r4.semVeredito === true && ms4 >= 4000 && ms4 < 9000, `gerando sem parar e abaixo do orçamento: cortado no teto do objetivo (${ms4} ms ≈ 6 s)`, r4.desfecho);
+    console.log('\n=== S431-4 — ADR-027: nenhum teto de objetivo no motor ===');
+    const motor = fs.readFileSync(path.join(process.cwd(), 'src', 'validation', 'ValidationEngine.ts'), 'utf-8');
+    assert(!/tetoDoObjetivo|prazoDoTurno|abaixoDoOrcamento/.test(motor), 'o motor não corta por teto do objetivo nem por orçamento de tokens');
 
     console.log(`\n=== S431: ${passed} passaram, ${failed} falharam ===`);
     process.exit(failed > 0 ? 1 : 0);

@@ -29,6 +29,9 @@
  * Autoridade reusada, não criado mecanismo paralelo — mesma `GracefulDeliveryOrchestrator` da 020,
  * mesmo padrão `buildFailureMessage(goal, state.cognitiveContext, reason)` já validado.
  *
+ * ADR-027 (23/10/2026): os pontos 1 e 2 (expiração) deixaram de existir — o objetivo não tem mais relógio. O S283.2 passa a
+ * provar o contrário do que provava: um prazo vencido NÃO encerra um goal que está executando. O ponto 3 (abandono) segue.
+ *
  * Execução: npx ts-node src/__tests__/regression/S283_ExpiredAbandonedGoals_PreservePartialSummary.test.ts
  */
 
@@ -59,33 +62,28 @@ function spyAuthority(loop: any) {
 async function main(): Promise<void> {
     const loopSrc = fs.readFileSync(path.resolve(__dirname, '../../loop/GoalExecutionLoop.ts'), 'utf8');
 
-    console.log('\n=== S283.1 [estrutural] — os 3 pontos de expiração/abandono chamam a autoridade com o motivo ===');
+    console.log('\n=== S283.1 [estrutural] — abandono chama a autoridade com o motivo; expiração não existe mais (ADR-027) ===');
     {
         const calls = loopSrc.match(/this\.gracefulDelivery\.buildFailureMessage\(/g) ?? [];
-        // 9 = 5 (issue 020) + 3 (issue 028) + 1 (S375: cancelamento no início do ciclo — a MESMA autoridade, não uma segunda).
-        assert(calls.length === 9, 'total de chamadas à autoridade = 5 (issue 020) + 3 (issue 028) + 1 (cancelamento no início do ciclo)', calls.length);
-        assert(/buildFailureMessage\(goal, state\.cognitiveContext, 'Objetivo expirou por tempo limite\.'\)/.test(loopSrc),
-            'expiração (runValidationNotAchievedPhase) chama a autoridade com o motivo');
-        assert(/buildFailureMessage\(currentGoal, state\.cognitiveContext, 'Objetivo expirou por tempo limite\.'\)/.test(loopSrc),
-            'expiração (laço principal) chama a autoridade com o motivo');
+        // 7 = 5 (issue 020) + 1 (issue 028, abandono) + 1 (S375: cancelamento no início do ciclo). Os 2 da expiração saíram.
+        assert(calls.length === 7, 'total de chamadas à autoridade = 5 (issue 020) + 1 (abandono) + 1 (cancelamento no início do ciclo)', calls.length);
+        assert(!/Objetivo expirou por tempo limite/.test(loopSrc), 'nenhum ponto do laço encerra o objetivo por expiração');
         assert(/buildFailureMessage\(goal, state\.cognitiveContext, abandonReason\)/.test(loopSrc),
             'abandono/interrupção chama a autoridade com o motivo real (abandonReason)');
-        // Nenhuma string fixa de expiração/abandono sobrevive como overrideOutput direto de buildResult.
-        assert(!/buildResult\([^)]*'Objetivo expirou por tempo limite\.'\)/.test(loopSrc),
-            "'Objetivo expirou por tempo limite.' não é mais passada crua para buildResult() em nenhum ponto");
     }
 
     permissionRegistry.setMode(OperationalMode.DEVELOPER, 'test-s283', true);
     try {
-        console.log('\n=== S283.2 — expiração REAL (laço principal): artefato já enviado não é perdido ===');
+        console.log('\n=== S283.2 — ADR-027: prazo vencido NÃO encerra o goal em execução; ele conclui ===');
         {
             const TOOL = '__s283_expired__';
             ToolRegistry.register({ name: TOOL, description: 'test', parameters: {}, execute: async () => ({ success: true, output: 'ok' }) });
-            const { loop, goalStore } = makeLoop({ achieved: true });
+            // Juiz de conclusão no formato do motor: antes a validação nunca chegava a rodar (o goal expirava antes).
+            const { loop, goalStore } = makeLoop({ achieved: true, summary: 'relatório entregue' }, { formatoDoMotor: true });
             const spy = spyAuthority(loop);
             const goal = makeGoal(goalStore, [step(TOOL)], {
                 toolsTried: [TOOL],
-                expiresAt: Date.now() - 1000, // já expirado ANTES do primeiro ciclo
+                expiresAt: Date.now() - 1000, // prazo já vencido ANTES do primeiro ciclo — não importa mais
                 attempts: [{ id: 'w1', planStepId: 'sx', toolName: 'write', args: { path: 'tmp/relatorio-parcial.pdf' }, result: 'success', durationMs: 1, executedAt: Date.now() }],
             });
             // Padrão REAL de produção: sentArtifacts nunca nasce preenchido na criação — é marcado
@@ -95,13 +93,10 @@ async function main(): Promise<void> {
             goalStore.update(goal.id, { sentArtifacts: ['tmp/relatorio-parcial.pdf'] });
             const res: any = await (loop as any).runLoopInternal(goal, channelContext, undefined, 0, 0, undefined, emptyState(goal.id));
 
-            assert(goalStore.getById(goal.id)!.status === 'abandoned', 'o goal termina abandoned (expirado)', goalStore.getById(goal.id)!.status);
-            assert(res.finalOutput.startsWith('Consegui gerar e enviar: tmp/relatorio-parcial.pdf.'),
-                'REGRESSÃO CORRIGIDA: o artefato já enviado abre a mensagem — não se perde na expiração', res.finalOutput);
-            assert(!res.finalOutput.startsWith('Objetivo expirou por tempo limite.'),
-                'a mensagem NÃO é mais só a frase crua de expiração', res.finalOutput);
-            assert(/expirou/i.test(res.finalOutput), 'mas o motivo real (expirou) continua presente, como fato de entrada', res.finalOutput);
-            assert(spy.calls === 1 && res.finalOutput.includes(spy.last), 'PROVA: a autoridade foi chamada exatamente 1 vez e é ela quem produziu o texto final', spy);
+            const status = goalStore.getById(goal.id)!.status;
+            assert(status === 'completed', 'o goal com prazo vencido segue e CONCLUI (não é abandonado por tempo)', status);
+            assert(res.success === true && !/expirou/i.test(res.finalOutput), 'nenhuma mensagem de expiração', res.finalOutput);
+            assert(spy.calls === 0, 'a autoridade de falha não é chamada (não houve falha)', spy);
         }
 
         console.log('\n=== S283.3 — abandono/interrupção REAL (runStepExecutionPhase): mesma cobertura ===');

@@ -200,29 +200,17 @@ export class MemoryWriteTool implements ToolExecutor {
         // Auto-generate id if missing — but first check for a similar existing node, to avoid creating duplicates of the same
         // fact with different timestamps.
         //
-        // Parecido NÃO é o mesmo fato, e quem decide isso é o agente (AGENTS.md, regra 9). Antes, o nó parecido era
-        // SOBRESCRITO aqui: produção, 17/10/2026, "salvar os dados do e-mail e da agenda" trocou nome e conteúdo de um nó sobre
-        // a VPS (3 palavras em comum) — o fato da VPS se perdeu e o agente leu "duplicata evitada". Agora nada é gravado: o
-        // candidato volta como fato, com as duas saídas possíveis.
+        // Parecido NÃO é o mesmo fato, e quem decide isso é o agente (AGENTS.md, regra 9). Histórico:
+        // - até 17/10/2026 o nó parecido era SOBRESCRITO aqui: "salvar os dados do e-mail e da agenda" trocou nome e conteúdo de
+        //   um nó sobre a VPS (3 palavras em comum) — o fato da VPS se perdeu;
+        // - de 21/10 a 22/10 nada era gravado e o agente tinha de decidir (update × create com id). Em 3 de 4 testes reais o
+        //   modelo NÃO decidiu: encerrou o turno dizendo "a gravação falhou" (produção, 21/10 22:07, grade do 2º semestre).
+        // Agora a gravação SEMPRE acontece (nó novo — nada se perde, nada é sobrescrito) e o nó parecido vai como fato, com a
+        // chamada exata para mesclar se for o mesmo. Se o agente não fizer nada, o pior caso é uma duplicata recuperável.
+        let parecido: MemoryNode | null = null;
         if (!id) {
-            const similar = this.findSimilarNode(content as string, type as string);
+            parecido = this.findSimilarNode(content as string, type as string);
             const slug = (name || content || 'node').toLowerCase().replace(/[^a-z0-9]+/g, '_').slice(0, 30);
-            if (similar) {
-                const atual = (similar.content ?? '').replace(/\s+/g, ' ');
-                // A decisão vem PRIMEIRO, com a chamada exata de cada saída; o trecho do nó existente, por último. Validação real
-                // (21/10/2026, "É outro programa, não o de voz"): com as saídas no fim, depois de 400 caracteres do conteúdo, o
-                // agente repetiu a mesma chamada duas vezes e desistiu — o AgentLoop devolvia ao modelo só os primeiros 300
-                // caracteres do erro. A escolha continua do agente; só deixa de depender do que sobra de um corte.
-                return {
-                    success: false,
-                    output: '',
-                    error: `Nada foi gravado: já existe um nó parecido, "${similar.id}" (${similar.type}, "${similar.name}"). Decida: `
-                        + `(1) é o MESMO fato → memory_write action="update" id="${similar.id}" com o conteúdo novo (substitui o atual); `
-                        + `(2) é OUTRO fato → memory_write action="create" id="${slug}_${Date.now()}" com os mesmos type/name/content `
-                        + `(com id informado, a gravação acontece e o nó existente não é tocado). `
-                        + `Conteúdo atual de "${similar.id}": "${atual.length > 400 ? `${atual.slice(0, 400)}…` : atual}"`,
-                };
-            }
             id = `${slug}_${Date.now()}`;
         }
 
@@ -289,7 +277,11 @@ export class MemoryWriteTool implements ToolExecutor {
         // Without this, CognitiveMemoryIndex only indexes lazily → race condition.
         try { this.getCognitiveIndex().getSummaries([id]); } catch { /* non-fatal */ }
 
-        return { success: true, output: `✅ Nó "${id}" (${type}) criado e auto-conectado ao grafo. Use action=connect para ligações adicionais.` };
+        const avisoDeParecido = parecido
+            ? ` ⚠️ Já existia um nó parecido: "${parecido.id}" (${parecido.type}, "${parecido.name}"). Se for o MESMO fato, mescle os dois `
+              + `(nada se perde): memory_write action="merge" id="${id}" merge_ids=["${parecido.id}"]. Se for outro fato, não faça nada.`
+            : '';
+        return { success: true, output: `✅ Nó "${id}" (${type}) criado e auto-conectado ao grafo. Use action=connect para ligações adicionais.${avisoDeParecido}` };
     }
 
     // ── SIMILARITY CHECK ──────────────────────────────────────

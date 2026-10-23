@@ -15,22 +15,14 @@ import { errorMessage } from '../shared/errors';
 import { createLogger } from '../shared/AppLogger';
 import { resolvePath, semPrefixoDoWorkspace } from '../utils/crossPlatform';
 import { extractVerifiedArtifacts } from '../loop/planning/artifactContract';
-import { GOAL_LIMITS } from '../loop/GoalLimits';
 import { amostradorDaPlataforma, AmostraDeAtividade } from './atividadeDoProcesso';
-import { prazoDoTurno, sinalDoTurno, aguardarComandos } from '../shared/turnCancellation';
+import { sinalDoTurno, aguardarComandos } from '../shared/turnCancellation';
 import { registroDeProcessos, ProcessoRegistrado } from './registroDeProcessos';
 
 const log = createLogger('ExecCommandTool');
 
 /** Teto da saída guardada de um comando (o mesmo `maxBuffer` padrão que o `exec` usava). */
 const MAX_SAIDA_BYTES = 1024 * 1024;
-
-/**
- * Teto de um comando quando o chamador não informa outro: o MESMO limite do objetivo (GOAL_LIMITS.MAX_GOAL_TTL_MS) — um
- * comando nunca dura mais que o objetivo que o pediu, e nenhum número novo é criado (ADR-023). Não é a regra do dia a dia:
- * quem encerra um comando parado é a tolerância sem atividade, abaixo.
- */
-export const PRAZO_PADRAO_MS = GOAL_LIMITS.MAX_GOAL_TTL_MS;
 
 /**
  * Segundos SEM NENHUM sinal (saída, CPU, disco/rede) até o comando ser considerado parado (ADR-023, escolha da operadora em
@@ -535,7 +527,7 @@ export class ExecCommandTool implements ToolExecutor {
         properties: {
             command: { type: 'string', description: 'Shell command. Use ssh://HOST/cmd para execução remota' },
             tolerancia_sem_atividade: { type: 'number', description: `Segundos SEM NENHUM sinal de atividade (saída, CPU, disco/rede) até o comando ser considerado parado e encerrado (padrão: ${TOLERANCIA_PADRAO_S}). Aumente quando souber que haverá espera longa sem atividade.` },
-            timeout: { type: 'number', description: `Teto opcional em ms, mesmo com o comando trabalhando (sem ele: ${PRAZO_PADRAO_MS} ms, o limite do objetivo). Ao passar dele, o comando é encerrado junto com os processos que abriu.` },
+            timeout: { type: 'number', description: 'Teto opcional em ms, mesmo com o comando trabalhando (sem ele: não há teto — só a tolerância sem atividade). Ao passar dele, o comando é encerrado junto com os processos que abriu.' },
             workdir: { type: 'string', description: 'Diretório de trabalho (padrão: workspace)' },
             acompanhar: { type: 'number', description: 'Número de um comando que segue em segundo plano (o "nº" devolvido quando ele não terminou a tempo). Com ele, "command" é dispensado.' },
             acao: { type: 'string', enum: ['consultar', 'aguardar', 'encerrar'], description: 'Com "acompanhar": consultar (estado e saída até agora), aguardar (espera mais um pouco pelo fim) ou encerrar (encerra o comando e o que ele abriu).' }
@@ -545,12 +537,10 @@ export class ExecCommandTool implements ToolExecutor {
 
     async execute(args: Record<string, any>): Promise<ToolResult> {
         let command = args.command as string;
-        // Teto (ADR-023): o pedido explícito do agente; senão, o que RESTA ao objetivo em que o comando roda; fora de um objetivo,
-        // o limite de um objetivo. Nunca é a regra do dia a dia — quem encerra comando parado é a tolerância sem atividade.
-        const prazoDoObjetivo = prazoDoTurno();
-        const origemDoTeto: 'pedido' | 'objetivo' | 'padrao' = args.timeout ? 'pedido' : prazoDoObjetivo ? 'objetivo' : 'padrao';
-        const timeout = (args.timeout as number)
-            || (prazoDoObjetivo ? Math.max(prazoDoObjetivo - Date.now(), 5000) : PRAZO_PADRAO_MS);
+        // Teto: só o pedido explícito do agente. ADR-027: sem ele, não há teto de duração — quem encerra um comando é a
+        // tolerância sem atividade (travado), o "Parar" ou o agente (acompanhar/encerrar). Antes: o que restava ao objetivo,
+        // ou 30 min fora dele.
+        const timeout = Number(args.timeout) > 0 ? Number(args.timeout) : undefined;
         const toleranciaS = Number(args.tolerancia_sem_atividade) > 0 ? Number(args.tolerancia_sem_atividade) : TOLERANCIA_PADRAO_S;
         const workdir = args.workdir as string;
 
@@ -749,11 +739,9 @@ Saída até a interrupção (final):
 ${saida.slice(-12000)}` : fato,
                     }));
                 };
-                const fatoDoPrazo = () => (origemDoTeto === 'objetivo'
-                    ? `[interrompido pelo NewClaw: o comando chegou ao fim do tempo que restava ao objetivo (${Math.round(timeout / 1000)} s) `
-                    : `[interrompido pelo NewClaw: o comando passou do limite de ${timeout} ms do exec_command `) +
+                const fatoDoPrazo = () => `[interrompido pelo NewClaw: o comando passou do limite de ${timeout} ms do exec_command ` +
                     `(${Math.round((Date.now() - t0) / 1000)} s decorridos) e foi encerrado junto com os processos que abriu; ` +
-                    `o comando NÃO terminou.${origemDoTeto === 'objetivo' ? '' : ' O limite é o parâmetro "timeout" do exec_command.'}]`;
+                    'o comando NÃO terminou. O limite é o parâmetro "timeout" do exec_command.]';
                 let cancelado = false;
                 const fatoDoCancelamento = () => `[interrompido pelo NewClaw: o usuário cancelou o pedido ("Parar") e o comando foi ` +
                     `encerrado junto com os processos que abriu, após ${Math.round((Date.now() - t0) / 1000)} s; o comando NÃO terminou.]`;
@@ -801,7 +789,8 @@ ${saida.slice(-12000)}` : fato,
                         exitCode: typeof exitCode === 'number' ? exitCode : undefined,
                     }));
                 });
-                const relogio = setTimeout(() => {
+                // Só existe quando o agente pediu um teto (ADR-027).
+                const relogio = timeout === undefined ? undefined : setTimeout(() => {
                     estourouPrazo = true;
                     log.warn(`[EXEC-PRAZO] limite de ${timeout} ms atingido — encerrando a árvore do processo pid=${filho.pid}`);
                     encerrarArvore(filho.pid);

@@ -156,10 +156,25 @@ function discover(dir, filter) {
 
 const segundos = (ms) => (ms / 1000).toFixed(1) + 's';
 
+/**
+ * 0xC0000409 (STATUS_STACK_BUFFER_OVERRUN): o PRÓPRIO processo do Node abortou — não é asserção, exceção nem process.exit do
+ * teste. Medido no CI (30 execuções por versão, 01–22/10/2026): Windows + Node 22.22.2, 0 vezes; Windows + Node 24.15.0, 3
+ * vezes (S365, S166, S294 — testes curtos que acabaram de fazer chamadas de rede), sempre passando na repetição; Node 24.20
+ * local, nunca. Uma repetição, só neste código e só no Windows; ela PRECISA passar, e fica registrada no teste e no resumo.
+ */
+const CRASH_NATIVO_DO_NODE_NO_WINDOWS = 3221226505;
+const ehCrashNativo = (r) => process.platform === 'win32' && r.exitCode === CRASH_NATIVO_DO_NODE_NO_WINDOWS;
+
 function runSuite(files, timeoutMs) {
     const results = [];
     for (const file of files) {
-        const r = runOne(file, timeoutMs);
+        let r = runOne(file, timeoutMs);
+        if (ehCrashNativo(r)) {
+            console.error(`  CRASH NATIVO DO NODE (0xC0000409) em ${path.basename(file)} — repetindo uma vez`);
+            const primeira = { durationMs: r.durationMs, stderrFinal: (r.stderr || '').split('\n').slice(-8).join('\n') };
+            r = runOne(file, timeoutMs);
+            r.repetidoPorCrashNativo = primeira;
+        }
         results.push(r);
         const label = path.basename(r.file);
         const inicio = r.startupMs != null ? ` (início ${segundos(r.startupMs)})` : '';
@@ -214,12 +229,15 @@ function montarRelatorio(results, descobertos, duracaoTotalMs, opcoes) {
             timeouts: contar('timeout'),
             ignorados: contar('skipped'),
             pendentes: 0,
+            // Testes que o Node abortou (0xC0000409) na 1ª execução e foram repetidos — o status acima é o da repetição.
+            repetidosPorCrashNativo: results.filter((r) => r.repetidoPorCrashNativo).length,
         },
         duracaoTotalMs,
         testes: results.map((r) => ({
             arquivo: path.basename(r.file), status: r.status, exitCode: r.exitCode, duracaoMs: r.durationMs,
             inicioMs: r.startupMs, corpoMs: r.startupMs != null ? r.durationMs - r.startupMs : null,
             memoriaMB: r.rssMB, marcadoresDeFalha: r.failMarkers, motivoIgnorado: r.motivoIgnorado,
+            ...(r.repetidoPorCrashNativo ? { repetidoPorCrashNativo: r.repetidoPorCrashNativo } : {}),
         })),
     };
 }
@@ -303,6 +321,11 @@ function executar(opcoes) {
     console.log('Mais lentos:');
     for (const r of lentos) console.log(`  ${segundos(r.durationMs).padStart(7)}  ${path.basename(r.file)}`);
     console.log('');
+    const repetidos = results.filter((r) => r.repetidoPorCrashNativo);
+    if (repetidos.length) {
+        console.log(`REPETIDOS POR CRASH NATIVO DO NODE (0xC0000409) (${repetidos.length}): ${repetidos.map((r) => `${path.basename(r.file)} → ${r.status}`).join(', ')}`);
+        console.log('');
+    }
     const rotulo = opcoes.selecao ? `AFETADOS (${t.descobertos} de ${opcoes.selecao.testesNaSuite} — não é a suíte completa)` : 'SUÍTE';
     console.log(`${rotulo}: ${t.aprovados}/${t.descobertos} passaram | executados=${t.executados} falhos=${t.falhos} inconsistentes=${t.inconsistentes} timeouts=${t.timeouts} ignorados=${t.ignorados} pendentes=${t.pendentes} | duração ${segundos(duracaoTotalMs)}`);
 
@@ -419,9 +442,29 @@ function selfTest() {
         verifica(/IGNORADOS \(1\)/.test(rIgn.out),'o resumo lista os ignorados com o motivo (não ficam escondidos)');
         verifica(rIgnEstrito.code === 1, '--strict-skips: um ignorado conta como falha', rIgnEstrito.code);
         verifica(rSemMotivo.code === 1 && rSemMotivo.json && rSemMotivo.json.totais.falhos === 1 && rSemMotivo.json.totais.ignorados === 0, 'exit 77 SEM a linha "SKIP: motivo" é FALHA (não dá para ignorar em silêncio)', rSemMotivo.json && rSemMotivo.json.totais);
+        // ── Cenário 5 (só Windows): crash nativo do Node (0xC0000409) é repetido UMA vez, à vista; se repetir, é falha ──────
+        let linhasDoCrash = [];
+        if (process.platform === 'win32') {
+            const cr = path.join(tmpDir, 'crash_nativo');
+            const marca = path.join(cr, 'ja-crashou.txt').replace(/\\/g, '/');
+            escrever(cr, 'a_crasha_uma_vez.test.ts', `const fs = require('fs'); if (!fs.existsSync('${marca}')) { fs.writeFileSync('${marca}', 'x'); process.exit(-1073740791); } console.log('ok na repetição'); process.exit(0);
+`);
+            const rCr = rodarRunner(cr);
+            const crSempre = path.join(tmpDir, 'crash_sempre');
+            escrever(crSempre, 'a_crasha_sempre.test.ts', `process.exit(-1073740791);
+`);
+            const rCrSempre = rodarRunner(crSempre);
+            const tCr = rCr.json && rCr.json.totais;
+            linhasDoCrash = [
+                ['crash nativo do Node uma vez (Windows)', 'exit 0, 1 repetido', `exit ${rCr.code}, ${tCr ? tCr.repetidosPorCrashNativo : '?'} repetido`, rCr.code === 0 && tCr && tCr.repetidosPorCrashNativo === 1 && /REPETIDOS POR CRASH NATIVO/.test(rCr.out)],
+                ['crash nativo do Node de novo na repetição', 'exit 1 (falha)', `exit ${rCrSempre.code}`, rCrSempre.code === 1],
+            ];
+        }
+
         // ── Evidência: cada cenário controlado, o que se esperava e o que o processo PRINCIPAL do runner fez ─────────────
         const stt = (nome) => (m.json && m.json.testes.find((t) => t.arquivo === nome)) || {};
         const linhas = [
+            ...linhasDoCrash,
             ['pasta de testes ausente', 'exit 1', `exit ${rAusente.code}`, rAusente.code === 1],
             ['zero testes descobertos', 'exit 1', `exit ${rVazia.code}`, rVazia.code === 1],
             ['zero testes + --allow-empty (exceção explícita)', 'exit 0', `exit ${rVaziaOk.code}`, rVaziaOk.code === 0],

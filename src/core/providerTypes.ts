@@ -145,6 +145,12 @@ export interface ILLMProvider {
     setModel(model: string): void;
     /** Lista os modelos disponíveis no endpoint deste provider, quando suportado. */
     discoverModels?(): Promise<ModelInfo[]>;
+    /**
+     * ADR-027: o provedor detecta TRAVAMENTO sozinho (silêncio no streaming: nenhum pedaço por um tempo) e não corta por
+     * duração. Com `true`, o `ProviderFactory` não arma relógio próprio para a chamada — quem chama não corta um modelo que
+     * gera. Sem o campo (provedor sem streaming), não há sinal de progresso, e o prazo de quem chamou continua valendo.
+     */
+    readonly vigiaSilencio?: boolean;
 }
 
 /** Heurísticas de capacidade — inferidas do nome do modelo, não garantidas pelo provider. */
@@ -314,6 +320,16 @@ export const TELEMETRY_SAMPLE_MS = 15_000;
  * timeout de tentativa), que hoje coincidem em valor mas não são a mesma coisa por definição.
  */
 export const REASONING_INTENSIVE_TIMEOUT_FLOOR_MS = 240_000;
+
+/**
+ * ADR-027: quanto SILÊNCIO (nenhum pedaço desde o último) faz uma chamada com streaming ser tida como travada. Padrão 90 s — o
+ * mesmo piso que o ACTIVITY_TIMEOUT do OllamaProvider já tinha. Configurável: SILENCIO_DO_MODELO_S. Lido a cada chamada (o
+ * .env pode chegar depois). Fonte única: o provedor (streaming) e o motor de validação (juiz no fim da fatia) usam este valor.
+ */
+export function silencioDoModeloMs(): number {
+    const s = Number(process.env.SILENCIO_DO_MODELO_S);
+    return (Number.isFinite(s) && s > 0 ? s : 90) * 1000;
+}
 
 /**
  * Teto de caracteres do prompt de uma DECISÃO do LLM (juiz, validadores). Não é limite de estilo nem economia de

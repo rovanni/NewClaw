@@ -337,14 +337,19 @@ export class AgentController {
                 await this.messageBus.sendToChat(channel as import('../channels/ChannelAdapter').ChannelType, userId, { text: texto, format: 'markdown' });
             },
         });
-        // ADR-024 etapa 6: aviso no meio do pedido (modo experimental do limite do objetivo) — mesmo caminho do aviso de skill.
+        // ADR-027: relato de progresso de um objetivo longo — mesmo caminho do aviso de skill, marcado como andamento (o canal
+        // web o mostra durante o trabalho em vez de juntá-lo à resposta final).
         this.goalOrchestrator.setAvisoAoUsuario(async (sessionKey, texto) => {
             const { channel, userId } = parseSessionKey(sessionKey);
             if (!channel || !userId) return;
-            await this.messageBus.sendToChat(channel as import('../channels/ChannelAdapter').ChannelType, userId, { text: texto, format: 'markdown' });
+            await this.messageBus.sendToChat(channel as import('../channels/ChannelAdapter').ChannelType, userId, { text: texto, format: 'markdown', progresso: true });
         });
         this.messageBus.setGoalOrchestrator(this.goalOrchestrator);
         this.agentLoop.setGoalOrchestrator(this.goalOrchestrator);
+        // ADR-027: relato de progresso do turno de conversa longo — o canal/conversa vêm do contexto do turno.
+        this.agentLoop.setAvisoAoUsuario(async (canal, chatId, texto) => {
+            await this.messageBus.sendToChat(canal as import('../channels/ChannelAdapter').ChannelType, chatId, { text: texto, format: 'markdown', progresso: true });
+        });
 
         this.auditor = new AuditorService({
             ollamaUrl: config.ollamaUrl || 'http://localhost:11434',
@@ -578,6 +583,11 @@ export class AgentController {
         }, 24 * 60 * 60 * 1000);
 
         await this.messageBus.startAll();
+
+        // ADR-024: modelo escolhido ainda sem velocidade medida → uma sonda mínima agora, em segundo plano, para que o primeiro
+        // pedido já tenha o prazo pelo trabalho (cada modelo é medido uma vez; a medição fica em data/).
+        const mr = this.config.modelRouter;
+        this.agentLoop.medirModelosSemVelocidade([mr?.observerModel, mr?.plannerModel, mr?.riskModel, mr?.classifierModel]);
 
         this.lifecycle.registerInterval('sessions.cleanup', async () => {
             try {

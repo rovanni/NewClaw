@@ -35,6 +35,10 @@
  * S290.3 — auditoria de código: a elevação do teto duro só existe dentro do ramo
  *   `reasoningIntensive ? ... : ...` — não pode vazar para o caso base.
  *
+ * ADR-027 (23/10/2026): o teto duro (MAX_TIMEOUT) saiu por inteiro — com ou sem reasoningIntensive, o prazo de quem chama não
+ * corta mais um modelo que gera; só o silêncio. O S290.2 passa a cobrar o contrário do que cobrava (antes: chamada rápida
+ * desistia no prazo curto; agora a resposta que chega depois dele é entregue), e o S290.3, a ausência do teto.
+ *
  * Execução: npx ts-node src/__tests__/regression/S290_ReasoningIntensive_HardTimeoutRespectsThinkingBudget.test.ts
  */
 
@@ -117,11 +121,10 @@ console.log('\n=== S290.1 — CASO POSITIVO: reasoningIntensive=true não aborta
     assert(!!done, 'stream completou normalmente (chunk "done" recebido)', chunks);
 }
 
-console.log('\n=== S290.2 — CONTROLE NEGATIVO: sem reasoningIntensive, customTimeoutMs curto continua abortando no prazo original ===');
+console.log('\n=== S290.2 — ADR-027: sem reasoningIntensive, o prazo curto também não corta o modelo gerando ===');
 {
-    // Mesmo cenário, MAS sem reasoningIntensive — reproduz uma chamada rápida de classificação
-    // (GoalExtractor/UnifiedIntentRouter) que passa customTimeoutMs propositalmente curto para
-    // desistir cedo. O conteúdo NUNCA deve chegar (aborta antes dos 600ms).
+    // Mesmo cenário, MAS sem reasoningIntensive — uma chamada rápida de classificação (GoalExtractor/UnifiedIntentRouter)
+    // com customTimeoutMs curto. Antes ela desistia no prazo; pela ADR-027 o modelo gerando não é cortado: o conteúdo chega.
     global.fetch = makeDelayedContentFetch(600);
     const provider = new OllamaProvider('http://fake-ollama.invalid', 'glm-5.3-flash:cloud', '');
     const messages: LLMMessage[] = [{ role: 'user', content: 'classifique esta mensagem' }];
@@ -132,20 +135,13 @@ console.log('\n=== S290.2 — CONTROLE NEGATIVO: sem reasoningIntensive, customT
     );
 
     const content = chunks.find(c => c.type === 'content');
-    assert(!content, `SEM reasoningIntensive, customTimeoutMs=300ms continua sendo o teto real — conteúdo (chegaria só aos 600ms) NÃO foi entregue — chunks: ${JSON.stringify(chunks)}`, chunks);
+    assert(!!content, `SEM reasoningIntensive, customTimeoutMs=300ms não é teto — o conteúdo que chega aos 600ms é entregue — chunks: ${JSON.stringify(chunks)}`, chunks);
 }
 
-console.log('\n=== S290.3 — auditoria de código: elevação do teto duro só dentro do ramo reasoningIntensive ===');
+console.log('\n=== S290.3 — ADR-027: o streaming não tem teto de duração; o que corta é o silêncio ===');
 {
     const src = require('fs').readFileSync(require('path').join(process.cwd(), 'src', 'core', 'OllamaProvider.ts'), 'utf-8') as string;
-    const trecho = src.slice(src.indexOf('const MAX_TIMEOUT = reasoningIntensive'), src.indexOf('const ACTIVITY_TIMEOUT'));
-    assert(
-        // Issue 064: o teto suave de "thinking" saiu; o piso agora é a constante única REASONING_INTENSIVE_TIMEOUT_FLOOR_MS
-        // (mesmo valor, 240 s, já usada pelo timer de tentativa do ProviderFactory — issue 047).
-        /reasoningIntensive\s*\n?\s*\?\s*Math\.max\(customTimeoutMs \|\| 300_000, REASONING_INTENSIVE_TIMEOUT_FLOOR_MS\)\s*\n?\s*:\s*\(customTimeoutMs \|\| 300_000\)/.test(trecho),
-        'MAX_TIMEOUT só eleva o teto quando reasoningIntensive é true; caso contrário é customTimeoutMs || 300_000, sem alteração',
-        trecho,
-    );
+    assert(!/MAX_TIMEOUT\s*=/.test(src) && /const ACTIVITY_TIMEOUT = silencioDoModeloMs\(\);/.test(src), 'sem MAX_TIMEOUT; ACTIVITY_TIMEOUT vem da janela de silêncio');
 }
 
 global.fetch = originalFetch;

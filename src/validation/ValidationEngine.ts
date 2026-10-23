@@ -16,14 +16,14 @@
  * Princípios: "Informação Completa para Decidir" (garantido pela estrutura) e "determinismo valida / LLM interpreta".
  */
 import type { ProviderFactory } from '../core/ProviderFactory';
-import { DECISION_PROMPT_MAX_CHARS, type CallTelemetry } from '../core/providerTypes';
+import { DECISION_PROMPT_MAX_CHARS, silencioDoModeloMs, type CallTelemetry } from '../core/providerTypes';
 import { createLogger } from '../shared/AppLogger';
-import { combinarSinais, sinalDoTurno, prazoDoTurno } from '../shared/turnCancellation';
-import { GOAL_LIMITS } from '../loop/GoalLimits';
+import { combinarSinais, sinalDoTurno } from '../shared/turnCancellation';
 import { tetoDoPerfilAuxiliar } from '../shared/auxTimeout';
 
-/** No prazo da vez, o modelo conta como "ainda gerando" se chegou um pedaço nos últimos N ms (ADR-024). */
-const JANELA_GERANDO_MS = 10_000;
+// ADR-027: no prazo da vez, o modelo conta como "ainda gerando" se chegou um pedaço dentro da MESMA janela de silêncio que
+// define travamento na chamada (silencioDoModeloMs, padrão 90 s). Antes era uma janela própria de 10 s: uma pausa de 15–30 s
+// depois da fatia (fila do provedor, passagem do raciocínio para a resposta) cortava o juiz como se estivesse travado.
 import { PerfilDoJuiz } from './perfilDoJuiz';
 import { descreverAgora } from '../shared/dataEHora';
 import { descreverAmbienteDeExecucao } from '../shared/ambienteDeExecucao';
@@ -235,20 +235,21 @@ export class ValidationEngine {
                 if (ativo) modos = pelosTokens;
             }
         }
-        const prazoFinalDoObjetivo = prazoDoTurno();
-        const tetoDoObjetivo = prazoFinalDoObjetivo ? Math.max(prazoFinalDoObjetivo - Date.now(), 5000) : GOAL_LIMITS.MAX_GOAL_TTL_MS;
+        // ADR-027: sem teto do objetivo — o objetivo não tem mais relógio.
         const somaMedida = [...pelaMedicao.values()].reduce((n, o) => n + o.prazoMs, 0);
-        const prazoTotal = Math.max(orcamento.timeoutMs, Math.min(somaMedida, tetoDoObjetivo));
+        const prazoTotal = Math.max(orcamento.timeoutMs, somaMedida);
         if (prazoTotal > orcamento.timeoutMs) {
             orcamentoMs = prazoTotal;
             log.info(`[VALIDACAO] tipo=${d.tipo} prazo pelo trabalho medido: ${[...pelaMedicao].map(([m, o]) => `${m}=${o.tokens} tokens a ${o.geracao.toFixed(1)} tok/s (n=${o.amostras}) → ${Math.round(o.prazoMs / 1000)} s`).join('; ')} — prazo ${Math.round(orcamento.timeoutMs / 1000)} s → ${Math.round(prazoTotal / 1000)} s`);
         }
         const limite = t0 + prazoTotal;
         let lido: ReturnType<typeof lerSaidaDoModelo> = null;
-        let falha: { porque: string; desfecho: string } = { porque: 'sem tempo para chamar o modelo', desfecho: 'llm_timeout' };
+        // ADR-027: o laço não desiste mais por tempo — este valor só vale se não houver modo nenhum para tentar.
+        let falha: { porque: string; desfecho: string } = { porque: 'nenhum modo de chamada para tentar', desfecho: 'juiz_indisponivel' };
         for (let i = 0; i < modos.length; i++) {
-            const restante = limite - Date.now();
-            if (restante < Math.min(5000, orcamento.timeoutMs * 0.1)) break;
+            // ADR-027: o modo seguinte é tentado sempre que o anterior não deu veredito — o anterior pode ter trabalhado além
+            // do orçamento (gerando, não é cortado). A fatia dele parte do orçamento, não do que "sobrou" no relógio.
+            const restante = Math.max(limite - Date.now(), orcamento.timeoutMs);
             const ultimo = i === modos.length - 1;
             const confiavel = i === 0 && this.perfil.confiavel(chaveDoModelo, modos[0]);
             const medidoDoModo = pelaMedicao.get(modos[i]);
@@ -261,25 +262,23 @@ export class ValidationEngine {
             if (medidoDoModo && !ultimo) fatia = Math.max(fatia, Math.min(restante, medidoDoModo.prazoMs));
             const ctrl = new AbortController();
             const t1 = Date.now();
-            // ADR-024: o prazo da vez (fatia) NÃO corta um modelo que AINDA ESTÁ GERANDO e não passou do orçamento em tokens —
-            // reteste do GenOffice (16/10/2026): juiz cortado aos 59 s com 2,3 mil tokens (orçamento medido: 7,3 mil) porque a
-            // nuvem estava lenta (~40 tok/s, contra 238 medidos). No prazo, olha a telemetria AO VIVO: chegou pedaço nos últimos
-            // JANELA_GERANDO_MS e ainda abaixo do orçamento → confere de novo a cada 2 s. Proteções: com orçamento medido, o
-            // próprio provedor para no limite de tokens e o teto é o que resta ao objetivo; sem histórico, o teto de sempre do
-            // juiz (perfil 'validacao'); sem telemetria ao vivo (provedor que não informa), corta no prazo como antes.
-            const tetoDaChamada = Math.max(fatia, Math.min(medidoDoModo ? tetoDoObjetivo : Math.max(fatia, tetoDoPerfilAuxiliar('validacao')), tetoDoObjetivo));
+            // ADR-024/027: o prazo da vez (fatia) NÃO corta um modelo que AINDA ESTÁ GERANDO — reteste do GenOffice (16/10/2026):
+            // juiz cortado aos 59 s com 2,3 mil tokens porque a nuvem estava lenta (~40 tok/s, contra 238 medidos). No prazo, olha
+            // a telemetria AO VIVO: chegou pedaço dentro da janela de silêncio (silencioDoModeloMs) → confere de novo a cada 2 s, sem teto de duração
+            // (ADR-027: o orçamento em tokens e o teto do objetivo deixaram de cortar; o limite de tokens continua indo ao
+            // provedor, que para sozinho). Em silêncio na fatia, é travamento: corta. Sem telemetria ao vivo (provedor sem
+            // streaming), não há sinal de progresso: corta no prazo como antes, e o teto abaixo é o do provedor sem streaming.
+            const tetoDaChamada = Math.max(fatia, tetoDoPerfilAuxiliar('validacao'));
             const tentativasAntes = telemetria.attempts.length;
             let continuouGerando = false;
             let timer: NodeJS.Timeout;
             const decidirNoPrazo = (): void => {
                 const t = telemetria.attempts.length > tentativasAntes ? telemetria.attempts[telemetria.attempts.length - 1] : undefined;
-                const agora = Date.now();
-                const gerando = !!t?.ultimoPedacoEm && agora - t.ultimoPedacoEm < JANELA_GERANDO_MS;
-                const abaixoDoOrcamento = !medidoDoModo || (t?.pedacosAteAgora ?? 0) < medidoDoModo.tokens;
-                if (gerando && abaixoDoOrcamento && agora - t1 < tetoDaChamada) {
+                const gerando = !!t?.ultimoPedacoEm && Date.now() - t.ultimoPedacoEm < silencioDoModeloMs();
+                if (gerando) {
                     if (!continuouGerando) {
                         continuouGerando = true;
-                        log.info(`[VALIDACAO] tipo=${d.tipo} modelo=${chaveDoModelo} modo=${modos[i]} prazo da vez (${Math.round(fatia / 1000)} s) chegou com o modelo AINDA GERANDO (${t?.pedacosAteAgora ?? 0} pedaços${medidoDoModo ? ` de ${medidoDoModo.tokens} do orçamento` : ''}) — não corta; teto ${Math.round(tetoDaChamada / 1000)} s`);
+                        log.info(`[VALIDACAO] tipo=${d.tipo} modelo=${chaveDoModelo} modo=${modos[i]} prazo da vez (${Math.round(fatia / 1000)} s) chegou com o modelo AINDA GERANDO (${t?.pedacosAteAgora ?? 0} pedaços${medidoDoModo ? `; orçamento ${medidoDoModo.tokens}` : ''}) — não corta; só o silêncio corta`);
                     }
                     timer = setTimeout(decidirNoPrazo, 2000);
                     return;

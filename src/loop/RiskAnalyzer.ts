@@ -778,12 +778,20 @@ OU
 {"risks": [], "plan": null, "faltou": "(omita ou descreva a lacuna)", "dificuldade": "(omita ou descreva o problema)"}`;
 
         try {
-            // gemma4:31b-cloud: gera JSON rápido sem extended thinking (60s é sobra).
-            // chatWithFallback usava kimi-k2.6 que travava em 150s de thinking sem output.
+            // 60 s era um número fixo pensado para um modelo que respondia sem raciocinar ("gemma4:31b-cloud gera JSON
+            // rápido") — receita presa a um modelo (AGENTS.md, regra 11). Produção, outubro/2026: 50 revisões, 31 cortadas aos
+            // 60 s; cortada, o plano original seguia e os riscos apontados pelo juiz eram ignorados. Agora o prazo também
+            // respeita o trabalho medido do modelo (ADR-024; ponto de partida declarado sem histórico) — só ESTENDE os 60 s.
             sink.prompt = prompt;
+            const pf = this.providerFactory as unknown as Partial<Pick<ProviderFactory, 'orcamentoPeloTrabalho'>>;
+            const pelaTarefa = typeof pf.orcamentoPeloTrabalho === 'function'
+                ? pf.orcamentoPeloTrabalho(this.model || undefined, undefined, 'RiskAnalyzer:risk', prompt.length, { pontoDePartida: true })
+                : null;
+            const prazoDoRevisor = Math.max(60_000, pelaTarefa?.prazoMs ?? 0);
+            if (prazoDoRevisor > 60_000) log.info(`${tag} prazo do revisor pelo trabalho medido: ${Math.round(prazoDoRevisor / 1000)} s (${pelaTarefa?.origem === 'historico' ? `histórico n=${pelaTarefa?.amostras}` : 'ponto de partida declarado'})`);
             const result = await this.callRiskLLM(
                 [{ role: 'user', content: prompt }] as LLMMessage[],
-                60_000,
+                prazoDoRevisor,
                 goal.id,
                 shadow ? 'shadow-review' : undefined,
                 sink.telemetria,

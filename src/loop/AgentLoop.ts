@@ -28,6 +28,7 @@ import { extractText } from './ResponseAdapter';
 import { AuthorizationManager } from './AuthorizationManager';
 import { ProtocolParser } from './ProtocolParser';
 import { createLogger } from '../shared/AppLogger';
+import { intervaloDoRelatoMs, montarRelatoDoTurno } from './relatoDeProgresso';
 import { gravarEfeito } from '../shared/evaluatorFlightRecorder';
 import type { ValidationEngine } from '../validation/ValidationEngine';
 import { criarMotorDeValidacao } from '../validation/motorPadrao';
@@ -458,6 +459,11 @@ export interface TurnState {
     providerFailure?: ProviderFailure;
     /** O roteador declarou que este pedido exige ferramenta (`IntentDecision.requiresTools`) — portão de `verificarAcaoAfirmada`. */
     exigeFerramenta?: boolean;
+    /**
+     * ADR-027 (code-review de 23/10/2026): sinal das validações que rodam em SEGUNDO PLANO neste turno (tryValidateTool). Sem o
+     * abort de 60 s, elas podiam disputar a GPU/fila com o pedido seguinte; o próximo `run()` da conversa aborta este sinal.
+     */
+    validacoesEmSegundoPlano?: AbortController;
 }
 
 /** S5: marca literal da linha em que a resposta parcial avisa o que NÃO foi confirmado (o resto da resposta é o que foi sustentado). */
@@ -572,6 +578,23 @@ export class AgentLoop {
         return this.profileRegistry.getClassifierModel();
     }
 
+    /** Os modelos configurados (todas as categorias + o classificador), sem repetição. */
+    modelosConfigurados(): string[] {
+        return [...new Set([...this.profileRegistry.getProfiles().map(p => p.model), this.profileRegistry.getClassifierModel()].filter(Boolean))];
+    }
+
+    /**
+     * Mede, em segundo plano, a velocidade dos modelos configurados que ainda não têm medição (ADR-024) — na partida e quando
+     * a escolha de modelos muda. Nunca bloqueia nem lança.
+     */
+    medirModelosSemVelocidade(alemDestes: Array<string | undefined> = []): void {
+        const pf = this.providerFactory as unknown as Partial<Pick<ProviderFactory, 'medirVelocidadeDosModelos'>>;
+        if (typeof pf.medirVelocidadeDosModelos !== 'function') return;
+        let modelos: string[] = [];
+        try { modelos = [...this.modelosConfigurados(), ...alemDestes.filter((m): m is string => typeof m === 'string' && !!m)]; } catch { return; }
+        pf.medirVelocidadeDosModelos(modelos).catch(() => { /* a medição nunca afeta o agente */ });
+    }
+
     /**
      * Aplica mudanças de configuração em runtime (chamado pelo dashboard após POST /api/config).
      * Reconstrói o ModelProfileRegistry quando modelRouter muda para que novos modelos/providers
@@ -594,6 +617,8 @@ export class AgentLoop {
                 this.goalOrchestrator?.updateInternalModels(plannerModel, riskModel, classifierModel);
                 log.info(`[updateConfig] internal models → planner=${plannerModel ?? '—'} risk=${riskModel ?? '—'} classifier=${classifierModel ?? '—'}`);
             }
+            // Modelo novo escolhido: mede a velocidade dele já (uma vez), antes do primeiro pedido.
+            this.medirModelosSemVelocidade([observerModel, plannerModel, riskModel, classifierModel]);
         }
     }
 
@@ -763,25 +788,16 @@ export class AgentLoop {
         toolInput?: unknown,
     ): Promise<void> {
         try {
-            // AbortController tied to the 60 s timeout.
-            // Passing the signal to observer.validate() ensures the underlying provider
-            // call is cancelled when the timeout fires, preventing the orphaned
-            // "approved=false" log that appeared after the turn had already ended.
-            const abortCtrl = new AbortController();
-            const timeoutHandle = setTimeout(() => abortCtrl.abort(), 60_000);
-
-            let validation: import('./ObserverValidator').ValidationResult;
-            try {
-                validation = await this.observer.validate(
-                    userText, intent, toolName, toolOutput, finalResponse ?? '', abortCtrl.signal,
-                    [{ tool: toolName, input: descreverArgumentos(toolInput), output: toolOutput }],
-                );
-            } finally {
-                clearTimeout(timeoutHandle);
-            }
-
-            if (abortCtrl.signal.aborted) {
-                log.info(`[OBSERVER] Validation timed out for ${toolName}`);
+            // ADR-027: sem o abort aos 60 s — ele cortava o juiz gerando. O juiz para por silêncio (motor de validação e
+            // provedor), pelo "Parar" do turno e, por rodar em segundo plano, quando o PRÓXIMO pedido desta conversa começa
+            // (sinal abortado em run()).
+            const sinalDoTurnoAtual = this.getTurnState(conversationId).validacoesEmSegundoPlano?.signal;
+            const validation = await this.observer.validate(
+                userText, intent, toolName, toolOutput, finalResponse ?? '', sinalDoTurnoAtual,
+                [{ tool: toolName, input: descreverArgumentos(toolInput), output: toolOutput }],
+            );
+            if (sinalDoTurnoAtual?.aborted) {
+                log.info(`[OBSERVER] validação de ${toolName} interrompida: um pedido novo chegou nesta conversa (resultado descartado)`);
                 return;
             }
             log.info(`[OBSERVER] ${validation.validationSkipped ? '⚠️ skipped' : validation.approved ? '✅' : '❌'} ${toolName} confidence=${validation.confidence} reason="${validation.reason}"`);
@@ -1098,8 +1114,6 @@ export class AgentLoop {
         if (!last) return await this.verificarAcaoAfirmada(response, userText, conversationId, toolFailureCount, signal, channelContext);
 
         try {
-            const COMMIT_TIMEOUT_MS = 12_000;
-
             // S3c — Opção B (conexão conservadora, com escopo limitado e documentado):
             // ResponseCommit não tem failureType confiável (ver S2c) — não dá pra saber
             // SE este tool tende a "alegar sucesso falso" vs. "responder truncado" vs.
@@ -1114,23 +1128,17 @@ export class AgentLoop {
                 log.info(`[${this.ts()}] [COMMIT] Padrão histórico conhecido para tool=${last.toolName} (correlação observacional, não altera a decisão de commit): ${toolHistoryHint.split('\n')[1] ?? ''}`);
             }
 
-            const commit = await Promise.race<ResponseCommit>([
-                this.observer.validateResponseCommit(
-                    userText,
-                    last.toolName,
-                    last.toolOutput,
-                    response,
-                    signal,
-                    // Sprint V6: o julgamento de qualidade vê todas as ferramentas do turno, não só a última.
-                    AgentLoop.evidencesFromTrace(trace).map(e => ({ tool: e.tool, input: descreverArgumentos(e.input), output: e.output })),
-                ),
-                new Promise<ResponseCommit>(resolve =>
-                    setTimeout(
-                        () => resolve({ valid: true, hallucinationRisk: 0, blocked: false, validationMs: COMMIT_TIMEOUT_MS }),
-                        COMMIT_TIMEOUT_MS,
-                    )
-                ),
-            ]);
+            // ADR-027: espera o juiz. Antes, aos 12 s a conferência desistia e APROVAVA por padrão — 72 de 422 vezes no Windows
+            // (17%) e 24 de 282 na VPS (9%), o juiz ainda trabalhando. Ele para por silêncio (motor e provedor) e pelo "Parar".
+            const commit: ResponseCommit = await this.observer.validateResponseCommit(
+                userText,
+                last.toolName,
+                last.toolOutput,
+                response,
+                signal,
+                // Sprint V6: o julgamento de qualidade vê todas as ferramentas do turno, não só a última.
+                AgentLoop.evidencesFromTrace(trace).map(e => ({ tool: e.tool, input: descreverArgumentos(e.input), output: e.output })),
+            );
 
             log.info(`[${this.ts()}] [COMMIT] Q4 tool=${last.toolName} valid=${commit.valid} risk=${commit.hallucinationRisk.toFixed(2)} blocked=${commit.blocked} ms=${commit.validationMs}`);
 
@@ -1207,7 +1215,10 @@ export class AgentLoop {
                 });
                 if (g.state === 'VALIDATED' || g.state === 'NOT_APPLICABLE') efeitoDoJuiz('resposta_liberada', { estado: g.state });
                 if (g.state !== 'VALIDATED' && g.state !== 'NOT_APPLICABLE') {
-                    log.warn(`[${this.ts()}] [GROUNDING] estado=${g.state} — bloqueando entrega (${g.reason})`);
+                    // O destino é decidido abaixo (parcial / com aviso / bloqueio) — esta linha só registra o veredito. Antes dizia
+                    // "bloqueando entrega" também para UNVALIDATED, que é ENTREGUE com aviso desde 14/10: o log contradizia o que
+                    // acontecia na linha seguinte (achado ao revisar os logs de 15–21/10/2026).
+                    log.warn(`[${this.ts()}] [GROUNDING] estado=${g.state} — resposta não confirmada pelo juiz (${g.reason})`);
                     this.reflectionMemory.record({
                         traceId: trace.id,
                         conversationId,
@@ -1471,11 +1482,29 @@ export class AgentLoop {
     }
 
     public async run(conversationId: string, userText: string, userId?: string, context?: ChannelContext, options?: { onStatus?: (event: SemanticStatusEvent) => void }): Promise<string | ProcessedResult> {
+        // ADR-027: um pedido NOVO nesta conversa interrompe a validação em segundo plano do turno anterior — ela não disputa a
+        // GPU/fila com ele. Não no fim do turno: ela começa no meio dele e quase sempre termina depois da resposta (é por isso
+        // que roda em segundo plano); abortá-la ali apagaria o que ela grava na ReflectionMemory.
+        // Só um pedido DO USUÁRIO interrompe (turno sem goalTrace): os passos de um objetivo se sucedem em segundos e, abortando
+        // a validação do passo anterior, quase nenhuma terminaria dentro de um objetivo — os sinais deles se acumulam e o próximo
+        // pedido do usuário os interrompe de uma vez. E só sem turno ativo na conversa: uma chamada que será rejeitada como
+        // concorrente (S224: Scheduler durante um passo) não pode apagar as validações do turno legítimo.
+        // ?.: objetos parciais de teste (S101, S229) chamam run() sem o mapa — o mesmo cuidado de ferramentasDoTurno.
+        const pendentes = this.validacoesPorConversa?.get(conversationId) ?? [];
+        if (!context?.goalTrace && !this.activeTurns.has(conversationId)) {
+            for (const anterior of pendentes) anterior.abort();
+            pendentes.length = 0;
+        }
+        const validacoesEmSegundoPlano = new AbortController();
+        pendentes.push(validacoesEmSegundoPlano);
+        this.validacoesPorConversa?.set(conversationId, pendentes);
         this.activeTurnStates.set(conversationId, {
             cognitiveWorkspace: new CognitiveWorkspace(),
             lastToolExecution: null,
             pendingObserverFeedback: [],
+            validacoesEmSegundoPlano,
         });
+        const pararRelato = this.iniciarRelatoDoTurno(conversationId, context);
         try {
             const result = await this.runWithTools(conversationId, userText, 0, userId, context, options);
             // Issues 049/053: bloqueio de grounding e falha do provedor saem como fato estruturado, não só
@@ -1497,8 +1526,40 @@ export class AgentLoop {
             // esses mapas (clearActiveTurn() existia mas não era chamado em lugar nenhum),
             // deixando o guard de turno concorrente preso até TURN_STALE_MS (7min) — causa raiz
             // do incidente River #2 (ver S223) e da regressão em S101.
+            pararRelato();
             this.clearActiveTurn(conversationId);
         }
+    }
+
+    /** ADR-027: os sinais das validações em segundo plano ainda não interrompidas de cada conversa (ver run()). */
+    private readonly validacoesPorConversa = new Map<string, AbortController[]>();
+
+    /** Entrega uma mensagem ao usuário no canal/conversa do turno (ligado pelo AgentController ao MessageBus). */
+    private avisarUsuario?: (canal: string, chatId: string, texto: string) => Promise<void>;
+    setAvisoAoUsuario(avisar: (canal: string, chatId: string, texto: string) => Promise<void>): void {
+        this.avisarUsuario = avisar;
+    }
+
+    /**
+     * ADR-027 (code-review de 23/10/2026): relato de progresso também no turno de CONVERSA longo — sem teto, um comando que
+     * trabalha sem parar deixava o usuário só com "Pensando...". Turno que é passo de objetivo (`goalTrace`) não relata: o
+     * objetivo já relata o dele. Devolve a função que para o relato.
+     */
+    private iniciarRelatoDoTurno(conversationId: string, context?: ChannelContext): () => void {
+        const intervalo = intervaloDoRelatoMs();
+        const canal = context?.channel;
+        const chatId = context?.chatId;
+        if (!intervalo || !this.avisarUsuario || !canal || !chatId || context?.goalTrace) return () => { /* sem relato */ };
+        const inicio = Date.now();
+        const timer = setInterval(() => {
+            if (!this.activeTurns.has(conversationId)) return;
+            const agora = Date.now();
+            log.info(`[RELATO-PROGRESSO] turno=${conversationId} há ${Math.round((agora - inicio) / 60_000)} min`);
+            this.avisarUsuario?.(canal, chatId, montarRelatoDoTurno(inicio, agora, this.activeTurnStates.get(conversationId)?.semanticStatus))
+                .catch(() => { /* relato nunca derruba o turno */ });
+        }, intervalo);
+        timer.unref?.();
+        return () => clearInterval(timer);
     }
 
     public clearActiveTurn(conversationId: string): void {

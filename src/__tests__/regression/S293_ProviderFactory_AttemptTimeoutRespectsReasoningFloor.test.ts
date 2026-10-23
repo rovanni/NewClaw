@@ -86,10 +86,12 @@ console.log('\n=== S293.3 — auditoria estrutural: o código real usa o valor e
     assert(/const prazoFinal = prazoTotalMs \? startTime \+ prazoTotalMs/.test(src) && /const restanteDoPrazo = \(\)[^\n]*prazoFinal - Date\.now\(\)/.test(src),
         'o restante é medido contra o prazo total (com piso) desde o início da chamada');
 
-    const idx1 = src.indexOf('const effectiveTimeoutMs = restanteDaTentativa');
-    assert(idx1 > 0, 'attemptTimeout/safetyTimeoutMs: effectiveTimeoutMs vem do restante do prazo total', idx1);
+    // ADR-027: provedor que vigia o silêncio (streaming) não tem esse timer; para os demais, a regra abaixo continua.
+    const idx1 = src.indexOf('const effectiveTimeoutMs = vigiaSilencio ? undefined');
+    assert(idx1 > 0, 'attemptTimeout/safetyTimeoutMs: sem timer para quem vigia o silêncio; senão, do restante do prazo total', idx1);
     const trecho1 = src.slice(idx1, idx1 + 900);
-    assert(/: prazoTotalMs;/.test(trecho1.split('\n')[0]), 'sem prazo restante calculável, cai no prazo total (com piso), não no timeoutMs bruto', trecho1.split('\n')[0]);
+    assert(/: restanteDaTentativa !== undefined \? Math\.max\(1, restanteDaTentativa\) : prazoTotalMs;/.test(trecho1.split('\n').slice(0, 2).join(' ')),
+        'sem prazo restante calculável, cai no prazo total (com piso), não no timeoutMs bruto', trecho1.split('\n').slice(0, 2).join(' '));
     // 064b: o corpo do timer também marca o prazo esgotado — o que importa aqui é o prazo ser effectiveTimeoutMs.
     assert(/const attemptTimeout = setTimeout\(\(\) => \{?[^}]*currentAbort\.abort\(\);? ?\}?, effectiveTimeoutMs\)/.test(trecho1), 'attemptTimeout usa effectiveTimeoutMs, não o timeoutMs bruto', trecho1);
     assert(/const safetyTimeoutMs = effectiveTimeoutMs \+ 15000/.test(trecho1), 'safetyTimeoutMs deriva de effectiveTimeoutMs, não do timeoutMs bruto', trecho1);
