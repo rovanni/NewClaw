@@ -637,7 +637,15 @@ export class ProviderFactory {
                             clearTimeout(attemptTimeout);
                         }
                     } else {
-                        result = await chatPromise;
+                        // ADR-027: sem relógio, o "Parar" ainda precisa valer NA HORA — inclusive com a chamada esperando vaga na
+                        // fila do provedor (taskQueue), onde abortar o sinal não tira a tarefa da fila nem resolve a promessa. A
+                        // tarefa que sair da fila depois encontra o sinal abortado e encerra sozinha (streamChat checa antes do fetch).
+                        result = await new Promise<LLMResponse>((resolve, reject) => {
+                            const aoParar = () => reject(new Error('Cancelled by external signal'));
+                            if (externalSignal?.aborted) { aoParar(); return; }
+                            externalSignal?.addEventListener('abort', aoParar, { once: true });
+                            chatPromise.then(resolve, reject).finally(() => externalSignal?.removeEventListener('abort', aoParar));
+                        });
                     }
 
                     if (onExternalAbort) externalSignal!.removeEventListener('abort', onExternalAbort);

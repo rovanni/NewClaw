@@ -653,10 +653,13 @@ export class GoalStore {
             WHERE id = ? AND expires_at < ? AND status IN ('active', 'executing', 'blocked', 'replanning')
         `);
         let changes = 0;
-        for (const { id } of expirando) {
-            this.markAbandonReason(id, 'O pedido ficou parado à espera por mais tempo que o permitido e foi encerrado.');
-            changes += abandonar.run(now, id, now).changes;
-        }
+        // Uma transação só: as N escritas viram um commit (isto roda a cada mensagem recebida).
+        this.db.transaction(() => {
+            for (const { id } of expirando) {
+                this.markAbandonReason(id, 'O pedido ficou parado à espera por mais tempo que o permitido e foi encerrado.');
+                changes += abandonar.run(now, id, now).changes;
+            }
+        })();
         if (changes > 0) {
             log.info(`[GoalStore] expired ${changes} stale goals (parados à espera)`);
         }

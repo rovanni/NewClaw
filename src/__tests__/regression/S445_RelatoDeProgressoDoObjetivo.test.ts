@@ -64,6 +64,12 @@ async function main(): Promise<void> {
     assert(/\/cancelar/.test(texto), 'como interromper', texto);
     const nada = montarRelatoDeProgresso({ currentPlan: [], attempts: [] } as any, agora - 60_000, agora - 30_000, agora);
     assert(/Nenhum passo novo concluído/.test(nada), 'sem novidade, diz isso (não inventa progresso)', nada);
+    // Teste real (23/10): o passo do agente termina 'partial' — antes nunca aparecia como concluído.
+    const parcial = montarRelatoDeProgresso({
+        currentPlan: [{ id: 'p1', description: 'rodar o script longo.js', status: 'completed', executedAt: agora - 60_000 }],
+        attempts: [{ planStepId: 'p1', result: 'partial', executedAt: agora - 60_000 }],
+    } as any, agora - 6 * 60_000, agora - 5 * 60_000, agora);
+    assert(/Concluído desde o último aviso: rodar o script longo\.js\./.test(parcial), 'passo concluído com tentativa "partial" aparece como concluído', parcial);
     delete process.env.SEGREDO_S445;
 
     console.log('\n=== S445-3 — no laço real: relata enquanto roda e para quando termina ===');

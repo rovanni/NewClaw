@@ -68,11 +68,13 @@ async function main(): Promise<void> {
     const r1 = await julgar({ geraPorMs: 3000, respondeEmMs: 3000 });
     assert(r1.semVeredito === false && r1.desfecho === 'veredito', `deu veredito em ${Date.now() - t0} ms (antes: cortado em 1 s)`, r1.desfecho);
 
-    console.log('\n=== S431-2 — modelo PAROU de gerar e não responde: cortado depois da janela sem pedaços ===');
+    console.log('\n=== S431-2 — modelo PAROU de gerar e não responde: cortado depois da janela de silêncio (a mesma da chamada) ===');
+    process.env.SILENCIO_DO_MODELO_S = '3';   // ADR-027: o juiz usa silencioDoModeloMs (padrão 90 s); 3 s só para o teste
     t0 = Date.now();
     const r2 = await julgar({ geraPorMs: 300, respondeEmMs: Infinity });
     const ms2 = Date.now() - t0;
-    assert(r2.semVeredito === true && ms2 >= 1000 && ms2 < 15_000, `cortado (${ms2} ms): sem pedaços há mais de 10 s não é "trabalhando"`, r2.desfecho);
+    delete process.env.SILENCIO_DO_MODELO_S;
+    assert(r2.semVeredito === true && ms2 >= 3000 && ms2 < 15_000, `cortado (${ms2} ms): sem pedaços além da janela de silêncio (3 s) não é "trabalhando"`, r2.desfecho);
 
     console.log('\n=== S431-3 — ADR-027: passou do orçamento em tokens AINDA GERANDO: não é cortado pelo relógio ===');
     t0 = Date.now();

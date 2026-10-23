@@ -322,6 +322,16 @@ export const TELEMETRY_SAMPLE_MS = 15_000;
 export const REASONING_INTENSIVE_TIMEOUT_FLOOR_MS = 240_000;
 
 /**
+ * ADR-027: quanto SILÊNCIO (nenhum pedaço desde o último) faz uma chamada com streaming ser tida como travada. Padrão 90 s — o
+ * mesmo piso que o ACTIVITY_TIMEOUT do OllamaProvider já tinha. Configurável: SILENCIO_DO_MODELO_S. Lido a cada chamada (o
+ * .env pode chegar depois). Fonte única: o provedor (streaming) e o motor de validação (juiz no fim da fatia) usam este valor.
+ */
+export function silencioDoModeloMs(): number {
+    const s = Number(process.env.SILENCIO_DO_MODELO_S);
+    return (Number.isFinite(s) && s > 0 ? s : 90) * 1000;
+}
+
+/**
  * Teto de caracteres do prompt de uma DECISÃO do LLM (juiz, validadores). Não é limite de estilo nem economia de
  * tokens: é a fronteira a partir da qual deixa de ser possível afirmar que o LLM recebeu o objeto da decisão inteiro.
  * Acima dele, a decisão é "não avaliável" — nunca um veredito sobre um pedaço (princípio "Informação Completa para

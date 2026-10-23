@@ -265,6 +265,8 @@ export class WebChannelAdapter implements ChannelAdapter {
         }
         clearTimeout(timedOut.cleanupTimer);
         this.timedOutRequests.delete(requestId);
+        // A resposta final desta conversa chegou (atrasada): o relato de andamento deixa de valer, como em mergeOrphaned.
+        this.progressoPorConversa.delete(timedOut.chatId);
         this.queueOrphaned(timedOut.chatId, response);
         log.info(
             'response_queued_orphaned',

@@ -1,6 +1,6 @@
 import { createLogger } from '../shared/AppLogger';
 import { errorMessage } from '../shared/errors';
-import { ILLMProvider, LLMMessage, LLMResponse, ToolDefinition, ChatOptions, StreamChunk, OpenAIChatResponse, RawApiChunk, RawToolCall, ModelInfo, AttemptTelemetry, TELEMETRY_SAMPLE_MS, mensagemSemModeloEscolhido } from './providerTypes';
+import { ILLMProvider, LLMMessage, LLMResponse, ToolDefinition, ChatOptions, StreamChunk, OpenAIChatResponse, RawApiChunk, RawToolCall, ModelInfo, AttemptTelemetry, TELEMETRY_SAMPLE_MS, mensagemSemModeloEscolhido, silencioDoModeloMs } from './providerTypes';
 import { guessCapabilities, mapOllamaCapabilities } from './modelCapabilityHeuristics';
 import { taskQueue, TaskPriority } from './providerQueue';
 import { assertNotSsrfTarget } from './ssrfGuard';
@@ -91,15 +91,8 @@ export type AbortReason = typeof AbortReason[keyof typeof AbortReason];
  * escolher pelo operador. A mesma frase volta ao usuário (ProviderFactory) e não é retentada (não é falha transitória).
  */
 export const NO_MODEL_CONFIGURED_MESSAGE = mensagemSemModeloEscolhido('ollama', 'OLLAMA_MODEL');
-
-/**
- * ADR-027: quanto SILÊNCIO (nenhum pedaço desde o último) faz uma chamada com streaming ser tida como travada. Padrão 90 s — o
- * mesmo piso que o ACTIVITY_TIMEOUT já tinha. Configurável: SILENCIO_DO_MODELO_S. Lido a cada chamada (o .env pode chegar depois).
- */
-export function silencioDoModeloMs(): number {
-    const s = Number(process.env.SILENCIO_DO_MODELO_S);
-    return (Number.isFinite(s) && s > 0 ? s : 90) * 1000;
-}
+// A janela de silêncio vive em providerTypes (módulo-folha): o motor de validação usa a mesma regra sem depender do provedor.
+export { silencioDoModeloMs };
 
 export class OllamaProvider implements ILLMProvider {
     name = 'ollama';

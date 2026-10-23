@@ -35,6 +35,13 @@ async function main(): Promise<void> {
     assert(final?.text === 'O script concluiu 48 etapas.', 'a resposta final sai limpa, sem "Entrega pendente" nem relatos colados', final?.text);
     assert(web.progressoAtual('conversa-1') === undefined, 'o relato some quando a resposta final sai');
 
+    console.log('\n=== S446-1b — resposta final pelo caminho da requisição já expirada: o relato também some ===');
+    const espera = web.waitForResponse('req-exp', 'conversa-exp', 50).catch(() => 'expirou');
+    await web.sendToChat('conversa-exp', { text: '⏳ relato', format: 'markdown', progresso: true });
+    assert(await espera === 'expirou', 'a espera HTTP expirou antes do fim do goal');
+    await web.send({ text: 'Resposta atrasada', format: 'markdown' }, 'req-exp');
+    assert(web.progressoAtual('conversa-exp') === undefined, 'a resposta atrasada também limpa o relato da conversa');
+
     console.log('\n=== S446-2 — mensagem do sistema que NÃO é relato: chega como antes (na próxima resposta) ===');
     web.registerAsyncTurn('turno-2', 'conversa-2');
     await web.sendToChat('conversa-2', { text: '🧠 Aprendi algo novo.', format: 'markdown' });
