@@ -80,6 +80,17 @@ a segunda agiu 77 vezes.
   (agora "limite só para espera"), `S431`, `S349`, `S290`, `S283`, `S421`, `S423`, `S415`, `S438`, `S352`, `S376`,
   `S186`, `S156`, `S293`. Suíte completa: 433/440 com o código final, e os 5 restantes reescritos e passando.
 
+**Decisões do code-review (23/10/2026, aprovadas pela operadora):**
+- **Validação em segundo plano** (`tryValidateTool`): sem o abort de 60 s, ela podia disputar a GPU/fila com o pedido
+  seguinte. Ela é interrompida quando o **próximo pedido do usuário na mesma conversa** começa (não no fim do turno: começa no
+  meio dele e quase sempre termina depois da resposta; abortá-la ali apagaria o que grava na `ReflectionMemory`). Passos de
+  objetivo não interrompem (eles se sucedem em segundos — quase nenhuma validação terminaria), nem uma chamada que será
+  rejeitada como concorrente. Resultado de uma validação interrompida é descartado. Cobertura: `S447`.
+- **Conferência Q4**: continua esperando o juiz (coerente com esta ADR). A acompanhar: a demora da resposta com ferramenta.
+- **Turno de conversa longo** (fora de objetivo): também relata o progresso a cada `RELATO_DE_PROGRESSO_MIN`, com o status do
+  turno (ferramenta em uso, pensando, montando a resposta). Turno que é passo de objetivo (`goalTrace`) não relata — o
+  objetivo já relata. Cobertura: `S447`.
+
 **Riscos que ficam (registrados, não resolvidos aqui):**
 - **Espera na fila do provedor** (`taskQueue`, 15 vagas): sem o relógio de fora, uma chamada na fila espera a vez sem
   prazo. Só acontece com mais de 15 chamadas simultâneas; o "Parar" vale quando ela começa.

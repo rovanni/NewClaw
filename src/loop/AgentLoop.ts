@@ -28,6 +28,7 @@ import { extractText } from './ResponseAdapter';
 import { AuthorizationManager } from './AuthorizationManager';
 import { ProtocolParser } from './ProtocolParser';
 import { createLogger } from '../shared/AppLogger';
+import { intervaloDoRelatoMs, montarRelatoDoTurno } from './relatoDeProgresso';
 import { gravarEfeito } from '../shared/evaluatorFlightRecorder';
 import type { ValidationEngine } from '../validation/ValidationEngine';
 import { criarMotorDeValidacao } from '../validation/motorPadrao';
@@ -458,6 +459,11 @@ export interface TurnState {
     providerFailure?: ProviderFailure;
     /** O roteador declarou que este pedido exige ferramenta (`IntentDecision.requiresTools`) — portão de `verificarAcaoAfirmada`. */
     exigeFerramenta?: boolean;
+    /**
+     * ADR-027 (code-review de 23/10/2026): sinal das validações que rodam em SEGUNDO PLANO neste turno (tryValidateTool). Sem o
+     * abort de 60 s, elas podiam disputar a GPU/fila com o pedido seguinte; o próximo `run()` da conversa aborta este sinal.
+     */
+    validacoesEmSegundoPlano?: AbortController;
 }
 
 /** S5: marca literal da linha em que a resposta parcial avisa o que NÃO foi confirmado (o resto da resposta é o que foi sustentado). */
@@ -783,11 +789,17 @@ export class AgentLoop {
     ): Promise<void> {
         try {
             // ADR-027: sem o abort aos 60 s — ele cortava o juiz gerando. O juiz para por silêncio (motor de validação e
-            // provedor) e pelo "Parar" do turno (o sinal do turno chega a toda chamada pelo ProviderFactory).
+            // provedor), pelo "Parar" do turno e, por rodar em segundo plano, quando o PRÓXIMO pedido desta conversa começa
+            // (sinal abortado em run()).
+            const sinalDoTurnoAtual = this.getTurnState(conversationId).validacoesEmSegundoPlano?.signal;
             const validation = await this.observer.validate(
-                userText, intent, toolName, toolOutput, finalResponse ?? '', undefined,
+                userText, intent, toolName, toolOutput, finalResponse ?? '', sinalDoTurnoAtual,
                 [{ tool: toolName, input: descreverArgumentos(toolInput), output: toolOutput }],
             );
+            if (sinalDoTurnoAtual?.aborted) {
+                log.info(`[OBSERVER] validação de ${toolName} interrompida: um pedido novo chegou nesta conversa (resultado descartado)`);
+                return;
+            }
             log.info(`[OBSERVER] ${validation.validationSkipped ? '⚠️ skipped' : validation.approved ? '✅' : '❌'} ${toolName} confidence=${validation.confidence} reason="${validation.reason}"`);
 
             // S2b: outcome binário — ValidationResult só tem {approved, reason, confidence},
@@ -1470,11 +1482,29 @@ export class AgentLoop {
     }
 
     public async run(conversationId: string, userText: string, userId?: string, context?: ChannelContext, options?: { onStatus?: (event: SemanticStatusEvent) => void }): Promise<string | ProcessedResult> {
+        // ADR-027: um pedido NOVO nesta conversa interrompe a validação em segundo plano do turno anterior — ela não disputa a
+        // GPU/fila com ele. Não no fim do turno: ela começa no meio dele e quase sempre termina depois da resposta (é por isso
+        // que roda em segundo plano); abortá-la ali apagaria o que ela grava na ReflectionMemory.
+        // Só um pedido DO USUÁRIO interrompe (turno sem goalTrace): os passos de um objetivo se sucedem em segundos e, abortando
+        // a validação do passo anterior, quase nenhuma terminaria dentro de um objetivo — os sinais deles se acumulam e o próximo
+        // pedido do usuário os interrompe de uma vez. E só sem turno ativo na conversa: uma chamada que será rejeitada como
+        // concorrente (S224: Scheduler durante um passo) não pode apagar as validações do turno legítimo.
+        // ?.: objetos parciais de teste (S101, S229) chamam run() sem o mapa — o mesmo cuidado de ferramentasDoTurno.
+        const pendentes = this.validacoesPorConversa?.get(conversationId) ?? [];
+        if (!context?.goalTrace && !this.activeTurns.has(conversationId)) {
+            for (const anterior of pendentes) anterior.abort();
+            pendentes.length = 0;
+        }
+        const validacoesEmSegundoPlano = new AbortController();
+        pendentes.push(validacoesEmSegundoPlano);
+        this.validacoesPorConversa?.set(conversationId, pendentes);
         this.activeTurnStates.set(conversationId, {
             cognitiveWorkspace: new CognitiveWorkspace(),
             lastToolExecution: null,
             pendingObserverFeedback: [],
+            validacoesEmSegundoPlano,
         });
+        const pararRelato = this.iniciarRelatoDoTurno(conversationId, context);
         try {
             const result = await this.runWithTools(conversationId, userText, 0, userId, context, options);
             // Issues 049/053: bloqueio de grounding e falha do provedor saem como fato estruturado, não só
@@ -1496,8 +1526,40 @@ export class AgentLoop {
             // esses mapas (clearActiveTurn() existia mas não era chamado em lugar nenhum),
             // deixando o guard de turno concorrente preso até TURN_STALE_MS (7min) — causa raiz
             // do incidente River #2 (ver S223) e da regressão em S101.
+            pararRelato();
             this.clearActiveTurn(conversationId);
         }
+    }
+
+    /** ADR-027: os sinais das validações em segundo plano ainda não interrompidas de cada conversa (ver run()). */
+    private readonly validacoesPorConversa = new Map<string, AbortController[]>();
+
+    /** Entrega uma mensagem ao usuário no canal/conversa do turno (ligado pelo AgentController ao MessageBus). */
+    private avisarUsuario?: (canal: string, chatId: string, texto: string) => Promise<void>;
+    setAvisoAoUsuario(avisar: (canal: string, chatId: string, texto: string) => Promise<void>): void {
+        this.avisarUsuario = avisar;
+    }
+
+    /**
+     * ADR-027 (code-review de 23/10/2026): relato de progresso também no turno de CONVERSA longo — sem teto, um comando que
+     * trabalha sem parar deixava o usuário só com "Pensando...". Turno que é passo de objetivo (`goalTrace`) não relata: o
+     * objetivo já relata o dele. Devolve a função que para o relato.
+     */
+    private iniciarRelatoDoTurno(conversationId: string, context?: ChannelContext): () => void {
+        const intervalo = intervaloDoRelatoMs();
+        const canal = context?.channel;
+        const chatId = context?.chatId;
+        if (!intervalo || !this.avisarUsuario || !canal || !chatId || context?.goalTrace) return () => { /* sem relato */ };
+        const inicio = Date.now();
+        const timer = setInterval(() => {
+            if (!this.activeTurns.has(conversationId)) return;
+            const agora = Date.now();
+            log.info(`[RELATO-PROGRESSO] turno=${conversationId} há ${Math.round((agora - inicio) / 60_000)} min`);
+            this.avisarUsuario?.(canal, chatId, montarRelatoDoTurno(inicio, agora, this.activeTurnStates.get(conversationId)?.semanticStatus))
+                .catch(() => { /* relato nunca derruba o turno */ });
+        }, intervalo);
+        timer.unref?.();
+        return () => clearInterval(timer);
     }
 
     public clearActiveTurn(conversationId: string): void {

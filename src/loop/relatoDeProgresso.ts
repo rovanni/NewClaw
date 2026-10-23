@@ -5,6 +5,7 @@
  * chamada de modelo — não gasta cota e não pode inventar progresso.
  */
 import type { Goal } from '../shared/domainTypes';
+import type { SemanticStatusEvent } from '../shared/SemanticStatus';
 import { mascararSegredos } from '../shared/segredos';
 
 /** Minutos entre relatos: RELATO_DE_PROGRESSO_MIN (padrão 5; 0 desliga; inválido = o padrão). Lido a cada uso (o .env pode chegar depois). */
@@ -52,4 +53,17 @@ export function montarRelatoDeProgresso(goal: Goal, inicioMs: number, desde: num
     if (atual) linhas.push(`▶ Agora: ${descricaoParaOUsuario(atual.description)}.`);
     linhas.push('Para interromper, envie /cancelar.');
     return linhas.join('\n');
+}
+
+/**
+ * O relato de um turno de CONVERSA longo (fora de objetivo — o objetivo tem o seu, acima). Não há plano: o fato disponível é o
+ * status do turno (a ferramenta em uso, ou que o modelo está pensando/montando a resposta). Code-review de 23/10/2026: sem
+ * teto, um comando que trabalha sem parar deixava o turno só com "Pensando..." até o "Parar".
+ */
+export function montarRelatoDoTurno(inicioMs: number, agora: number, status?: SemanticStatusEvent): string {
+    const minutos = Math.max(1, Math.round((agora - inicioMs) / 60_000));
+    const fazendo = status?.status === 'executing_tool' && status.tool
+        ? `usando a ferramenta ${status.tool}`
+        : status?.status === 'synthesizing' ? 'montando a resposta' : 'pensando no próximo passo';
+    return [`⏳ Ainda estou trabalhando no seu pedido (há ${minutos} min).`, `▶ Agora: ${fazendo}.`, 'Para interromper, envie /cancelar.'].join('\n');
 }

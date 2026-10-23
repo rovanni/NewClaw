@@ -346,6 +346,10 @@ export class AgentController {
         });
         this.messageBus.setGoalOrchestrator(this.goalOrchestrator);
         this.agentLoop.setGoalOrchestrator(this.goalOrchestrator);
+        // ADR-027: relato de progresso do turno de conversa longo — o canal/conversa vêm do contexto do turno.
+        this.agentLoop.setAvisoAoUsuario(async (canal, chatId, texto) => {
+            await this.messageBus.sendToChat(canal as import('../channels/ChannelAdapter').ChannelType, chatId, { text: texto, format: 'markdown', progresso: true });
+        });
 
         this.auditor = new AuditorService({
             ollamaUrl: config.ollamaUrl || 'http://localhost:11434',

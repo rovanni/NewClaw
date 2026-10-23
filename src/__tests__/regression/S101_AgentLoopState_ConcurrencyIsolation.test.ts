@@ -61,6 +61,8 @@ async function main() {
         // precisa do método real (mesmo padrão já usado aqui para getTurnState/run), senão a
         // chamada falha com "this.clearActiveTurn is not a function".
         clearActiveTurn: AgentLoop.prototype['clearActiveTurn'],
+        // ADR-027: run() inicia o relato de progresso do turno — mesmo padrão (método real; sem aviso ligado, não relata).
+        iniciarRelatoDoTurno: AgentLoop.prototype['iniciarRelatoDoTurno'],
         postTurnCallback: null,
         runWithTools: async (conversationId: string, _userText: string, _step: number, _userId?: string, _context?: any) => {
             runWithToolsCalled = true;
