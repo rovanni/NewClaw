@@ -166,7 +166,12 @@ export function createChatRouter(ctx: DashboardContext): Router {
         const turnId = typeof _req.query.turnId === 'string' ? _req.query.turnId : undefined;
         const pending = !!(turnId && ctx.controller?.getWebAdapter().hasPendingAsyncTurn(turnId));
 
-        res.json({ success: true, active, pendingAuth, pending });
+        // ADR-027: o último relato de progresso desta conversa (objetivo longo), lido no mesmo polling que já mostra o
+        // status — o canal web não tem push. Some quando a resposta final sai (WebChannelAdapter.mergeOrphaned).
+        const webAdapter = (ctx.controller as { getWebAdapter?: () => { progressoAtual?: (id: string) => { texto: string; em: number } | undefined } } | undefined)?.getWebAdapter?.();
+        const progresso = conversationId ? webAdapter?.progressoAtual?.(conversationId) : undefined;
+
+        res.json({ success: true, active, pendingAuth, pending, ...(progresso ? { progresso } : {}) });
     });
 
     /**

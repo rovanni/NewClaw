@@ -263,6 +263,14 @@
     .auth-approve-btn { border-color: var(--accent-color, currentColor); font-weight: 600; }
     .auth-approve-btn:disabled, .auth-reject-btn:disabled { opacity: 0.5; cursor: default; }
 
+    /* ── Relato de progresso de um objetivo longo (ADR-027) ──── */
+    .progress-report-slot { max-width: 768px; margin: 0 auto; padding: 0 24px; }
+    .progress-report-card {
+      border: 1px solid var(--border-color); border-radius: var(--radius-md, 10px);
+      background: var(--bg-input); padding: 10px 14px; margin-bottom: 8px;
+      font-size: 0.8rem; color: var(--text-muted); line-height: 1.5;
+    }
+
     .status-indicator-slot { max-width: 768px; margin: 0 auto; padding: 0 24px; }
     #statusIndicator {
       display: none; align-items: center; gap: 8px; font-size: 0.78rem; color: var(--text-muted);
@@ -407,6 +415,8 @@
            estado do servidor, não histórico: renderChat() reconstrói as mensagens do zero a cada
            atualização e apagaria os botões. -->
       <div class="auth-pending-slot" id="authPendingSlot"></div>
+      <!-- Relato de progresso de um objetivo longo (ADR-027): estado do servidor, como o slot acima — some ao terminar. -->
+      <div class="progress-report-slot" id="progressReportSlot"></div>
       <div class="status-indicator-slot" id="statusIndicatorSlot"></div>
 
       <div class="composer-outer">
@@ -615,6 +625,10 @@
         // ressincronizadas por ele — fonte de verdade, mesmo ramo de sempre.
         const UTC_FIX_KEY = SKEY + SKEY_VERSION + 'ts_utc_resynced';
         const forceUtcResync = localStorage.getItem(UTC_FIX_KEY) !== '1';
+        // A conversa ABERTA recebeu mensagens do servidor: a tela precisa ser redesenhada, não só a lista lateral (teste
+        // real, 23/10/2026: goal longo, página recarregada durante o trabalho — a resposta chegou ao banco e à contagem da
+        // lista, "2 msgs", mas não à conversa na tela até um novo recarregamento).
+        let abertaMudou = false;
         // Merge server convs into local (keep local if newer).
         //
         // `sc.id` é a CHAVE DE SESSÃO composta (`canal:usuário`); `sc.sessionId` é o que o
@@ -650,12 +664,14 @@
               if (msgData.success) {
                 local.messages = (msgData.messages || []).map(mapServerMessage);
                 local.updatedAt = serverUpdatedAt;
+                if (localId === currentConvId) abertaMudou = true;
               }
             } catch (e) { console.warn('[SYNC] Falha ao ressincronizar conversa existente:', localId, e); }
           }
         }
         if (forceUtcResync) localStorage.setItem(UTC_FIX_KEY, '1');
         save(); renderSidebar();
+        if (abertaMudou) renderChat();
       } catch (e) { console.warn('[SYNC] Failed:', e); }
     }
 
@@ -1187,10 +1203,11 @@
         try {
           const sid = encodeURIComponent(sessionId);
           const res = await newclawFetch('/api/chat/active?sessionId=' + sid + '&turnId=' + encodeURIComponent(turnId));
-          const { active = [], pendingAuth = [], pending = false } = await res.json();
+          const { active = [], pendingAuth = [], pending = false, progresso = null } = await res.json();
           renderPendingAuth(pendingAuth);
 
           const mine = active.find(a => a.conversationId === sessionId) || (active.length > 0 ? active[0] : null);
+          renderProgress((mine || pending) ? progresso : null);
 
           // S227: pending=true (WebChannelAdapter.asyncTurns, via S226) cobre a janela entre o
           // 202 de POST /api/chat e o turno virar algo rastreável em activeTurns/GoalStore —
@@ -1240,6 +1257,13 @@
       renderSidebar();
       renderChat();
       restoreActiveTurn();
+    }
+
+    /** ADR-027: o último relato de progresso do objetivo em andamento (texto montado no servidor, passado pelo md(), que escapa HTML). */
+    function renderProgress(progresso) {
+      const slot = document.getElementById('progressReportSlot');
+      if (!slot) return;
+      slot.innerHTML = progresso && progresso.texto ? `<div class="progress-report-card">${md(progresso.texto)}</div>` : '';
     }
 
     function renderPendingAuth(pending) {
@@ -1399,6 +1423,7 @@
     function hideStatus() {
       const indicator = document.getElementById('statusIndicator');
       if (indicator) { clearInterval(indicator._dotInterval); indicator.style.display = 'none'; }
+      renderProgress(null);   // o turno acabou (ou foi parado): o relato de andamento sai junto com o status
     }
 
     // Markdown mínimo: escapa HTML antes de aplicar as transformações (o texto do

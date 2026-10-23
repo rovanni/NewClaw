@@ -337,11 +337,12 @@ export class AgentController {
                 await this.messageBus.sendToChat(channel as import('../channels/ChannelAdapter').ChannelType, userId, { text: texto, format: 'markdown' });
             },
         });
-        // ADR-024 etapa 6: aviso no meio do pedido (modo experimental do limite do objetivo) — mesmo caminho do aviso de skill.
+        // ADR-027: relato de progresso de um objetivo longo — mesmo caminho do aviso de skill, marcado como andamento (o canal
+        // web o mostra durante o trabalho em vez de juntá-lo à resposta final).
         this.goalOrchestrator.setAvisoAoUsuario(async (sessionKey, texto) => {
             const { channel, userId } = parseSessionKey(sessionKey);
             if (!channel || !userId) return;
-            await this.messageBus.sendToChat(channel as import('../channels/ChannelAdapter').ChannelType, userId, { text: texto, format: 'markdown' });
+            await this.messageBus.sendToChat(channel as import('../channels/ChannelAdapter').ChannelType, userId, { text: texto, format: 'markdown', progresso: true });
         });
         this.messageBus.setGoalOrchestrator(this.goalOrchestrator);
         this.agentLoop.setGoalOrchestrator(this.goalOrchestrator);

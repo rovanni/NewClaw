@@ -65,6 +65,12 @@ export interface NormalizedResponse {
     replyToId?: string;
     /** Opções interativas (botões) */
     options?: ResponseOption[];
+    /**
+     * ADR-027: aviso de ANDAMENTO (relato de progresso de um objetivo longo), não uma entrega. Canal com envio direto
+     * (Telegram, Discord…) o manda como qualquer mensagem; o canal web, que não tem push, mostra só o último enquanto o
+     * trabalho roda — nunca o junta à resposta final.
+     */
+    progresso?: boolean;
 }
 
 export interface ResponseOption {
