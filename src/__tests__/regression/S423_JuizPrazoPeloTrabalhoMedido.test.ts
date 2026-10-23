@@ -8,7 +8,7 @@
  * ~38 tokens/s (232 s). Histórico de produção: a maioria dos cortes do relógio caberia no orçamento por tokens.
  *
  * REGRESSÃO SE: sem histórico o comportamento mudar; com histórico, o prazo de um modelo lento continuar o de um rápido;
- * o limite de tokens não chegar ao provedor; o prazo passar do que resta ao objetivo; ou o prazo encurtar.
+ * o limite de tokens não chegar ao provedor; o prazo voltar a ter teto do objetivo (ADR-027: não há mais); ou o prazo encurtar.
  *
  * Execução: npx ts-node src/__tests__/regression/S423_JuizPrazoPeloTrabalhoMedido.test.ts
  */
@@ -16,7 +16,6 @@ import { PerfilDoJuiz } from '../../validation/perfilDoJuiz';
 import { ValidationEngine } from '../../validation/ValidationEngine';
 import { criarRegistroPadrao } from '../../validation/motorPadrao';
 import { medidorDoProcesso, AMOSTRA_MINIMA, FOLGA } from '../../core/medidorDeTrabalho';
-import { executarComPrazo } from '../../shared/turnCancellation';
 
 let passed = 0;
 let failed = 0;
@@ -67,7 +66,7 @@ async function main(): Promise<void> {
         assert(r.orcamentoMs === 1000, 'orçamento continua o de sempre (1 s), não os 0,2 s medidos', r.orcamentoMs);
     }
 
-    console.log('\n=== S423-4 — no ProviderFactory real: tokens ÷ velocidade MEDIDA, por modelo e modo, e teto do objetivo ===');
+    console.log('\n=== S423-4 — no ProviderFactory real: tokens ÷ velocidade MEDIDA, por modelo e modo, sem teto do objetivo (ADR-027) ===');
     {
         const { ProviderFactory } = require('../../core/ProviderFactory') as typeof import('../../core/ProviderFactory');
         const pf = new ProviderFactory({ defaultProvider: 'ollama', ollamaUrl: 'http://127.0.0.1:1' } as any);
@@ -80,8 +79,9 @@ async function main(): Promise<void> {
         const esperado = ((8000 * FOLGA) / 40 + (7100 / 3.55) / 500) * 1000 * 1.25 + 5000;
         assert(o !== null && o.tokens === 8000 * FOLGA && Math.abs(o.prazoMs - esperado) < 50, `prazo = (tokens ÷ geração + entrada ÷ leitura) × folga — ${Math.round(o.prazoMs / 1000)} s para 40 tok/s`, o);
         assert(pf.orcamentoPeloTrabalho('modelo-lento-s423', 'desligado', tipoChave, 7100) === null, 'outro modo do mesmo modelo: sem histórico próprio, null');
-        const dentro = await executarComPrazo(Date.now() + 60_000, async () => pf.orcamentoPeloTrabalho('modelo-lento-s423', 'livre', tipoChave, 7100));
-        assert(dentro !== null && dentro.prazoMs <= 60_000, `dentro de um objetivo, nunca passa do que resta a ele (${dentro?.prazoMs} ms ≤ 60 s)`, dentro);
+        // ADR-027: o objetivo não tem relógio — o prazo é só o do trabalho medido (vale para provedor sem streaming).
+        const srcPf = (require('fs') as typeof import('fs')).readFileSync((require('path') as typeof import('path')).join(process.cwd(), 'src', 'core', 'ProviderFactory.ts'), 'utf-8');
+        assert(!/prazoDoTurno|GOAL_LIMITS/.test(srcPf), 'orcamentoPeloTrabalho não tem teto do objetivo');
     }
 
     console.log('\n=== S423-5 — fiação: o limite chega aos provedores ===');

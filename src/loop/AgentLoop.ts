@@ -782,27 +782,12 @@ export class AgentLoop {
         toolInput?: unknown,
     ): Promise<void> {
         try {
-            // AbortController tied to the 60 s timeout.
-            // Passing the signal to observer.validate() ensures the underlying provider
-            // call is cancelled when the timeout fires, preventing the orphaned
-            // "approved=false" log that appeared after the turn had already ended.
-            const abortCtrl = new AbortController();
-            const timeoutHandle = setTimeout(() => abortCtrl.abort(), 60_000);
-
-            let validation: import('./ObserverValidator').ValidationResult;
-            try {
-                validation = await this.observer.validate(
-                    userText, intent, toolName, toolOutput, finalResponse ?? '', abortCtrl.signal,
-                    [{ tool: toolName, input: descreverArgumentos(toolInput), output: toolOutput }],
-                );
-            } finally {
-                clearTimeout(timeoutHandle);
-            }
-
-            if (abortCtrl.signal.aborted) {
-                log.info(`[OBSERVER] Validation timed out for ${toolName}`);
-                return;
-            }
+            // ADR-027: sem o abort aos 60 s — ele cortava o juiz gerando. O juiz para por silêncio (motor de validação e
+            // provedor) e pelo "Parar" do turno (o sinal do turno chega a toda chamada pelo ProviderFactory).
+            const validation = await this.observer.validate(
+                userText, intent, toolName, toolOutput, finalResponse ?? '', undefined,
+                [{ tool: toolName, input: descreverArgumentos(toolInput), output: toolOutput }],
+            );
             log.info(`[OBSERVER] ${validation.validationSkipped ? '⚠️ skipped' : validation.approved ? '✅' : '❌'} ${toolName} confidence=${validation.confidence} reason="${validation.reason}"`);
 
             // S2b: outcome binário — ValidationResult só tem {approved, reason, confidence},
@@ -1117,8 +1102,6 @@ export class AgentLoop {
         if (!last) return await this.verificarAcaoAfirmada(response, userText, conversationId, toolFailureCount, signal, channelContext);
 
         try {
-            const COMMIT_TIMEOUT_MS = 12_000;
-
             // S3c — Opção B (conexão conservadora, com escopo limitado e documentado):
             // ResponseCommit não tem failureType confiável (ver S2c) — não dá pra saber
             // SE este tool tende a "alegar sucesso falso" vs. "responder truncado" vs.
@@ -1133,23 +1116,17 @@ export class AgentLoop {
                 log.info(`[${this.ts()}] [COMMIT] Padrão histórico conhecido para tool=${last.toolName} (correlação observacional, não altera a decisão de commit): ${toolHistoryHint.split('\n')[1] ?? ''}`);
             }
 
-            const commit = await Promise.race<ResponseCommit>([
-                this.observer.validateResponseCommit(
-                    userText,
-                    last.toolName,
-                    last.toolOutput,
-                    response,
-                    signal,
-                    // Sprint V6: o julgamento de qualidade vê todas as ferramentas do turno, não só a última.
-                    AgentLoop.evidencesFromTrace(trace).map(e => ({ tool: e.tool, input: descreverArgumentos(e.input), output: e.output })),
-                ),
-                new Promise<ResponseCommit>(resolve =>
-                    setTimeout(
-                        () => resolve({ valid: true, hallucinationRisk: 0, blocked: false, validationMs: COMMIT_TIMEOUT_MS }),
-                        COMMIT_TIMEOUT_MS,
-                    )
-                ),
-            ]);
+            // ADR-027: espera o juiz. Antes, aos 12 s a conferência desistia e APROVAVA por padrão — 72 de 422 vezes no Windows
+            // (17%) e 24 de 282 na VPS (9%), o juiz ainda trabalhando. Ele para por silêncio (motor e provedor) e pelo "Parar".
+            const commit: ResponseCommit = await this.observer.validateResponseCommit(
+                userText,
+                last.toolName,
+                last.toolOutput,
+                response,
+                signal,
+                // Sprint V6: o julgamento de qualidade vê todas as ferramentas do turno, não só a última.
+                AgentLoop.evidencesFromTrace(trace).map(e => ({ tool: e.tool, input: descreverArgumentos(e.input), output: e.output })),
+            );
 
             log.info(`[${this.ts()}] [COMMIT] Q4 tool=${last.toolName} valid=${commit.valid} risk=${commit.hallucinationRisk.toFixed(2)} blocked=${commit.blocked} ms=${commit.validationMs}`);
 

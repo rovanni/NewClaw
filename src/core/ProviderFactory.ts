@@ -3,8 +3,7 @@
  * Suporta: Gemini, DeepSeek, Groq, OpenAI, OpenRouter, Anthropic, Ollama
  */
 
-import { combinarSinais, sinalDoTurno, prazoDoTurno } from '../shared/turnCancellation';
-import { GOAL_LIMITS } from '../loop/GoalLimits';
+import { combinarSinais, sinalDoTurno } from '../shared/turnCancellation';
 import { createLogger } from '../shared/AppLogger';
 import { errorMessage } from '../shared/errors';
 import { circuitRegistry } from './CircuitBreaker';
@@ -318,7 +317,7 @@ export class ProviderFactory {
      * ADR-024 (etapa 3): o que um trabalho deste TIPO costuma custar a ESTE modelo NESTE modo de raciocínio — em tokens
      * (p95 × folga do que concluiu, aprendido pelo uso) — e quanto tempo isso dá na velocidade MEDIDA dele (leitura do
      * prompt + geração). `null` sem histórico suficiente ou sem velocidade medida: quem chama segue com o prazo de sempre.
-     * O tempo nunca passa do que resta ao objetivo (ou do limite de um objetivo) — proteção contra travamento.
+     * ADR-027: sem teto do objetivo — este prazo só corta provedor sem streaming (sem sinal de progresso).
      */
     orcamentoPeloTrabalho(modelo: string | undefined, modo: 'livre' | 'desligado' | undefined, tipo: string, charsDeEntrada: number,
         opcoes?: { pontoDePartida?: boolean }):
@@ -336,10 +335,9 @@ export class ProviderFactory {
         if (!orc) return null;
         const entradaTokens = charsDeEntrada / CHARS_POR_TOKEN_PTBR;
         const bruto = (orc.tokens / vel.geracao + (vel.leitura ? entradaTokens / vel.leitura : 0)) * 1000 * FOLGA_DE_TEMPO + 5000;
-        const prazoFinal = prazoDoTurno();
-        const teto = prazoFinal ? Math.max(prazoFinal - Date.now(), 5000) : GOAL_LIMITS.MAX_GOAL_TTL_MS;
+        // ADR-027: sem teto do objetivo (o objetivo não tem mais relógio). Este prazo só vale para provedor sem streaming.
         return {
-            modelo: nome, tokens: orc.tokens, prazoMs: Math.round(Math.min(bruto, teto)), amostras: orc.amostras, geracao: vel.geracao, leitura: vel.leitura,
+            modelo: nome, tokens: orc.tokens, prazoMs: Math.round(bruto), amostras: orc.amostras, geracao: vel.geracao, leitura: vel.leitura,
             origem: historico ? 'historico' : 'ponto_de_partida',
         };
     }
@@ -517,9 +515,12 @@ export class ProviderFactory {
             for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
                 const attemptId = `${requestId}-${providerName}-${attempt}`;
                 const attemptStart = Date.now();
+                // ADR-027: provedor que vigia o silêncio (streaming) não tem relógio de duração — nem nesta tentativa, nem para
+                // decidir se a próxima cabe. Ele só para por travamento (sem pedaços), pelo "Parar" ou pelo próprio fim.
+                const vigiaSilencio = this.providers.get(providerName)?.vigiaSilencio === true;
 
                 // Prazo de quem chamou já acabou: nenhuma tentativa nova começa (nem neste provider, nem na reserva).
-                const restanteAntes = restanteDoPrazo();
+                const restanteAntes = vigiaSilencio ? undefined : restanteDoPrazo();
                 if (restanteAntes !== undefined && restanteAntes <= 0) {
                     prazoEsgotado = true;
                     log.info(`[${requestId}] Prazo de quem chamou esgotado (${prazoTotalMs}ms) — '${providerName}' não tentado`);
@@ -574,7 +575,7 @@ export class ProviderFactory {
                     attemptModel = modelUsed;
 
                     if (attempt > 0) {
-                        const restanteNaEspera = restanteDoPrazo();
+                        const restanteNaEspera = vigiaSilencio ? undefined : restanteDoPrazo();
                         if (restanteNaEspera !== undefined && restanteNaEspera <= RETRY_BACKOFF_MS) {
                             log.info(`[${attemptId}] Retry não cabe no prazo de quem chamou (restam ${restanteNaEspera}ms, espera ${RETRY_BACKOFF_MS}ms)`);
                             activeAbortController = null;
@@ -599,9 +600,11 @@ export class ProviderFactory {
                         tentativaTele = { provider: providerName, model: modelUsed, startedAt: new Date().toISOString(), raciocinio: opts?.raciocinio };
                         opts.telemetry.attempts.push(tentativaTele);
                     }
-                    // O que sobra do prazo de quem chamou (na primeira tentativa, o próprio `timeoutMs`).
-                    const restanteDaTentativa = restanteDoPrazo();
-                    const timeoutDaTentativa = (timeoutMs && restanteDaTentativa !== undefined) ? Math.min(timeoutMs, Math.max(1, restanteDaTentativa)) : timeoutMs;
+                    // O que sobra do prazo de quem chamou (na primeira tentativa, o próprio `timeoutMs`). Provedor que vigia o
+                    // silêncio não recebe prazo (ADR-027).
+                    const restanteDaTentativa = vigiaSilencio ? undefined : restanteDoPrazo();
+                    const timeoutDaTentativa = vigiaSilencio ? undefined
+                        : (timeoutMs && restanteDaTentativa !== undefined) ? Math.min(timeoutMs, Math.max(1, restanteDaTentativa)) : timeoutMs;
                     const chatOptions: ChatOptions = { signal: currentAbort.signal, timeoutMs: timeoutDaTentativa, reasoningIntensive: opts?.reasoningIntensive, telemetry: tentativaTele, raciocinio: opts?.raciocinio, saidaJson: opts?.saidaJson, limiteDeSaidaTokens: opts?.limiteDeSaidaTokens };
                     const chatPromise = provider.chat(mensagensDoProvider, tools, chatOptions);
                     let result: LLMResponse;
@@ -613,7 +616,9 @@ export class ProviderFactory {
                     // corretamente elevado pela issue 038 (240s) ter qualquer chance de agir.
                     // Reproduzido ao vivo: `[STREAM] maxTimeout=240000ms` seguido de
                     // `[STREAM] ABORTED ... duration=65619ms` — abortado por fora, não por dentro.
-                    const effectiveTimeoutMs = restanteDaTentativa !== undefined ? Math.max(1, restanteDaTentativa) : prazoTotalMs;
+                    // ADR-027: para o provedor que vigia o silêncio, não há timer aqui — ele cortaria o modelo gerando.
+                    const effectiveTimeoutMs = vigiaSilencio ? undefined
+                        : restanteDaTentativa !== undefined ? Math.max(1, restanteDaTentativa) : prazoTotalMs;
 
                     if (effectiveTimeoutMs) {
                         const attemptTimeout = setTimeout(() => { prazoDaTentativaEsgotado = true; currentAbort.abort(); }, effectiveTimeoutMs);
@@ -784,8 +789,10 @@ export class ProviderFactory {
                     // "thinking" interno próprio), mas o timeoutMs passado por fora precisa do mesmo
                     // piso, ou uma chamada pesada que só chegou até aqui por já ter estourado o
                     // streaming abortaria de novo, cedo demais, na última tentativa.
-                    // Campanha 09/10: e só o que sobra do prazo total de quem chamou.
-                    const restanteNaoStreaming = restanteDoPrazo();
+                    // Campanha 09/10: e só o que sobra do prazo total de quem chamou. ADR-027: o streaming do Ollama não tinha
+                    // relógio (pode ter trabalhado além do prazo antes de ficar em silêncio) — a refação sem streaming, que não
+                    // tem sinal de progresso, recebe o prazo pelo trabalho inteiro de quem chamou.
+                    const restanteNaoStreaming = this.providers.get('ollama')?.vigiaSilencio === true ? undefined : restanteDoPrazo();
                     const effectiveNonStreamingTimeoutMs = restanteNaoStreaming !== undefined ? Math.max(1, restanteNaoStreaming) : prazoTotalMs;
                     const teleNaoStreaming: AttemptTelemetry | undefined = opts?.telemetry
                         ? { provider: 'ollama', model: `${ollamaProvider.getModel()} (sem streaming)`, startedAt: new Date().toISOString() } : undefined;

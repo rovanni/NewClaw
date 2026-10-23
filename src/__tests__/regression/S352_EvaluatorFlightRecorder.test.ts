@@ -83,17 +83,20 @@ async function main(): Promise<void> {
     const logOriginal = process.env.LOG_FILE, conteudoOriginal = process.env.TRACE_CONTENT;
     process.env.LOG_FILE = path.join(base, 'newclaw-audit.log');
 
-    console.log('\n=== S352-1 — raciocínio de uma chamada abortada pelo prazo chega à telemetria ===');
+    // ADR-027: o prazo de quem chama não interrompe mais um modelo que gera — quem interrompe aqui é o "Parar" (sinal externo).
+    console.log('\n=== S352-1 — raciocínio de uma chamada interrompida chega à telemetria ===');
     const original = global.fetch;
     global.fetch = fetchQueSoPensa();
     const tele: CallTelemetry = { attempts: [] };
+    const parar = new AbortController();
+    setTimeout(() => parar.abort(), 600);
     try {
         const pf = new ProviderFactory({ defaultProvider: 'ollama', ollamaUrl: 'http://fake-ollama.invalid', ollamaModel: 'modelo-que-pensa' } as any);
-        await quiet(() => pf.chatWithFallback([{ role: 'user', content: 'julgue' }], undefined, 'ollama', 400, undefined, undefined, { telemetry: tele }));
+        await quiet(() => pf.chatWithFallback([{ role: 'user', content: 'julgue' }], undefined, 'ollama', 400, parar.signal, undefined, { telemetry: tele }));
     } finally { global.fetch = original; }
     const a = tele.attempts[0];
     assert(tele.attempts.length === 1, `uma tentativa registrada (obtido ${tele.attempts.length})`);
-    assert(a?.status === 'timeout' || a?.status === 'error', `desfecho da tentativa registrado (${a?.status})`);
+    assert(a?.status === 'cancelled' || a?.status === 'timeout' || a?.status === 'error', `desfecho da tentativa registrado (${a?.status})`);
     assert((a?.thinkingText ?? '').includes('relendo a evidência E9'), 'o TEXTO do raciocínio abortado foi preservado (antes: descartado)');
     assert((a?.thinkingChars ?? 0) > 0 && a?.contentChars === 0, `fatos do streaming: ${a?.thinkingChars} chars de raciocínio, ${a?.contentChars} de conteúdo`);
     assert(a?.firstChunkType === 'thinking' && typeof a?.firstChunkMs === 'number', `primeiro trecho: ${a?.firstChunkType} em ${a?.firstChunkMs} ms`);

@@ -4,7 +4,8 @@
  * (1) A chamada sem streaming ao provedor compatível com OpenAI (modelo local) não fica sujeita ao limite de 300 s do
  *     `fetch` do Node para os cabeçalhos: quando o chamador tem prazo, o transporte não tem prazo próprio.
  * (2) Quando o provedor responde com erro, a mensagem diz O QUE ele respondeu — não "verifique se o serviço está em execução".
- * (3) Objetivo que vence o prazo é relatado como expirado, não como "nova mensagem do usuário".
+ * (3) Objetivo que vence o prazo PARADO à espera é relatado assim, não como "nova mensagem do usuário" (ADR-027: um goal em
+ *     execução nunca vence — ver S426).
  *
  * INCIDENTES REAIS (Windows, 18/10/2026):
  *  - modelo local: 9 chamadas longas falharam entre 302,8 e 304,6 s com `fetch failed` com prazo do chamador maior.
@@ -73,7 +74,7 @@ async function main(): Promise<void> {
             'o erro do Ollama mantém o prefixo "Ollama API error: <status>" e acrescenta a explicação do servidor');
     }
 
-    console.log('\n=== S438-3 — goal vencido pelo prazo é relatado como expirado ===');
+    console.log('\n=== S438-3 — goal vencido parado à espera é relatado como tal ===');
     {
         const db = new (Database as any)(':memory:');
         const store = new GoalStore(db);
@@ -85,7 +86,7 @@ async function main(): Promise<void> {
             allowRoadmapAdjustment: true, successCriteria: [], sentArtifacts: [],
         } as any);
         assert(store.expireStale() === 1, 'a varredura expira o goal vencido');
-        assert(store.consumeAbandonReason(g.id) === 'Objetivo expirou por tempo limite.', 'o motivo registrado é a expiração (não "nova mensagem")');
+        assert(/parado à espera/.test(store.consumeAbandonReason(g.id) ?? ''), 'o motivo registrado é a espera vencida (não "nova mensagem")');
         assert(store.consumeAbandonReason(g.id) === undefined, 'o motivo é consumido uma vez só');
         db.close();
     }

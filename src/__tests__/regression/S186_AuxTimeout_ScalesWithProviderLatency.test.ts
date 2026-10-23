@@ -168,18 +168,12 @@ console.log('\n=== S186-7 — os dois pontos com evidência usam o orçamento me
     );
 }
 
-console.log('\n=== S186-8 — os tetos SEM evidência não foram tocados ===');
+console.log('\n=== S186-8 — o teto fixo da conferência (commit) saiu, com evidência (ADR-027) ===');
 {
-    // Regra 6 do operador: só corrigir com evidência concreta. Nenhum destes aparece abortando
-    // no log, então continuam como estavam — e este teste trava isso para não virar
-    // refatoração oportunista numa próxima passagem.
-    const intactos: Array<[string, string, RegExp]> = [
-        ['AgentLoop (commit)', 'src/loop/AgentLoop.ts', /const COMMIT_TIMEOUT_MS = 12_000;/],
-    ];
-    for (const [nome, arquivo, padrao] of intactos) {
-        const src = fs.readFileSync(path.join(process.cwd(), arquivo), 'utf-8');
-        assert(padrao.test(src), `${nome} permanece com seu teto fixo — sem evidência, sem mudança`);
-    }
+    // Regra 6 do operador: só corrigir com evidência concreta. Ela veio em 23/10/2026: aos 12 s a conferência desistia e
+    // APROVAVA por padrão em 72 de 422 casos no Windows (17%) e 24 de 282 na VPS (9%), com o juiz ainda trabalhando.
+    const src = fs.readFileSync(path.join(process.cwd(), 'src/loop/AgentLoop.ts'), 'utf-8');
+    assert(!/COMMIT_TIMEOUT_MS/.test(src), 'AgentLoop (commit) espera o juiz — sem teto fixo que aprova por padrão');
 }
 
 console.log('\n=== S186-8b — StepSemanticValidator: a evidência apareceu, o teto fixo saiu (campanha 09/10/2026) ===');

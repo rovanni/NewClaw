@@ -630,29 +630,37 @@ export class GoalStore {
 
     // ── TTL cleanup ───────────────────────────────────────────────────────────
 
-    /** Marca como abandoned todos os goals expirados. Retorna count. */
-    expireStale(): number {
+    /**
+     * Marca como abandoned os goals vencidos que estão PARADOS à espera (autorização, esclarecimento, resto de execução
+     * interrompida). ADR-027: `estaExecutando` diz quais um laço deste processo está executando agora — esses nunca vencem:
+     * o objetivo não para por tempo. Retorna count.
+     */
+    expireStale(estaExecutando: (goalId: string) => boolean = () => false): number {
         const now = Date.now();
         // O motivo real fica registrado para quem ainda está executando o goal (GoalExecutionLoop lê consumeAbandonReason).
         // Sem isso, um goal em execução que vencia o prazo era relatado como "nova mensagem do usuário recebida durante
         // execução" — produção, 18/10/2026: o objetivo do Telegram expirou aos 31 min, e a varredura foi disparada pela
         // chegada de uma mensagem em OUTRO canal.
-        const expirando = this.db.prepare(`
+        const expirando = (this.db.prepare(`
             SELECT id FROM goals WHERE expires_at < ? AND status IN ('active', 'executing', 'blocked', 'replanning')
-        `).all(now) as Array<{ id: string }>;
-        for (const { id } of expirando) this.markAbandonReason(id, 'Objetivo expirou por tempo limite.');
+        `).all(now) as Array<{ id: string }>).filter(({ id }) => !estaExecutando(id));
         // Sprint 005: mesma correção de setStatus() — este UPDATE é SQL bruto, não passa por
         // setStatus(), então precisa limpar pending_txn_id/requires_auth aqui também. Um goal
         // 'blocked' com auth pendente que expira via TTL virava 'abandoned' sem nunca limpar
         // esses dois campos.
-        const result = this.db.prepare(`
+        const abandonar = this.db.prepare(`
             UPDATE goals SET status = 'abandoned', updated_at = ?, pending_txn_id = NULL, requires_auth = 0
-            WHERE expires_at < ? AND status IN ('active', 'executing', 'blocked', 'replanning')
-        `).run(now, now);
-        if (result.changes > 0) {
-            log.info(`[GoalStore] expired ${result.changes} stale goals`);
+            WHERE id = ? AND expires_at < ? AND status IN ('active', 'executing', 'blocked', 'replanning')
+        `);
+        let changes = 0;
+        for (const { id } of expirando) {
+            this.markAbandonReason(id, 'O pedido ficou parado à espera por mais tempo que o permitido e foi encerrado.');
+            changes += abandonar.run(now, id, now).changes;
         }
-        return result.changes;
+        if (changes > 0) {
+            log.info(`[GoalStore] expired ${changes} stale goals (parados à espera)`);
+        }
+        return changes;
     }
 
     // ── Conversão ─────────────────────────────────────────────────────────────

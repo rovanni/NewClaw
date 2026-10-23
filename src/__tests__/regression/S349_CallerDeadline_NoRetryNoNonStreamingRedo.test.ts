@@ -1,13 +1,16 @@
 /// <reference types="node" />
 /**
- * TESTE DE REGRESSÃO — S349 (issue 064b)
+ * TESTE DE REGRESSÃO — S349 (issue 064b; reescrito pela ADR-027)
  *
- * Produção, 07/10/2026: o RiskAnalyzer pediu 60 s e gastou 192 s — o streaming chegou ao PRAZO de quem chamou
- * (MAX TIMEOUT), o ProviderFactory tratou o "aborted" como falha transitória e retentou (mais 60 s + 12 s de espera) e
- * depois refez sem streaming (mais 60 s). Antes da issue 064 o orçamento de raciocínio abortava aos ~10 s e o custo era
- * ~70 s; sem ele, o prazo virou o limite — e a refação com o mesmo prazo triplicava a espera.
+ * Histórico: produção, 07/10/2026, o RiskAnalyzer pediu 60 s e gastou 192 s — o streaming chegou ao PRAZO de quem chamou
+ * (MAX TIMEOUT), o ProviderFactory retentou e refez sem streaming. A issue 064b passou a cortar uma vez só, no prazo.
  *
- * REGRESSÃO SE: uma chamada que esgota o prazo de quem chamou voltar a ser retentada ou refeita sem streaming.
+ * ADR-027 (23/10/2026): o prazo de quem chamou não corta mais um modelo que GERA (VPS, 23/10: cortado aos 32,6 s com 866
+ * pedaços chegando). O que encerra uma geração longa é o tamanho, o "Parar" ou o silêncio. Este teste passa a cobrar:
+ * gerando além do prazo pedido, a chamada continua; o "Parar" a encerra na hora; e não há retentativa nem refação sem
+ * streaming de uma chamada cancelada.
+ *
+ * REGRESSÃO SE: o prazo de quem chamou voltar a cortar o streaming gerando; ou o cancelamento gerar retentativa/refação.
  *
  * Execução: npx ts-node src/__tests__/regression/S349_CallerDeadline_NoRetryNoNonStreamingRedo.test.ts
  */
@@ -46,26 +49,30 @@ function fetchQueSoPensa(contagem: { streaming: number; naoStreaming: number }):
 }
 
 async function main(): Promise<void> {
-    console.log('\n=== S349 — prazo de quem chamou esgotado: uma tentativa só, sem refação sem streaming ===');
+    console.log('\n=== S349 — gerando além do prazo pedido (400 ms): não é cortado; o "Parar" encerra; sem retentativa ===');
     const contagem = { streaming: 0, naoStreaming: 0 };
     const original = global.fetch;
     global.fetch = fetchQueSoPensa(contagem);
+    const parar = new AbortController();
+    const PARAR_EM_MS = 1500;
+    setTimeout(() => parar.abort(), PARAR_EM_MS);
     const t0 = Date.now();
     let r: any;
     try {
         const pf = new ProviderFactory({ defaultProvider: 'ollama', ollamaUrl: 'http://fake-ollama.invalid', ollamaModel: 'modelo-que-pensa' } as any);
-        r = await quiet(() => pf.chatWithFallback([{ role: 'user', content: 'revise o plano' }], undefined, 'ollama', 400));
+        r = await quiet(() => pf.chatWithFallback([{ role: 'user', content: 'revise o plano' }], undefined, 'ollama', 400, parar.signal));
     } finally {
         global.fetch = original;
     }
     const ms = Date.now() - t0;
-    assert(r?.status !== 'success', `a chamada não termina em sucesso (status=${r?.status})`);
-    assert(contagem.streaming === 1, `uma única tentativa por streaming (antes: 2) — obtido ${contagem.streaming}`);
-    assert(contagem.naoStreaming === 0, `nenhuma refação sem streaming (antes: 1) — obtido ${contagem.naoStreaming}`);
-    assert(ms < 3000, `desiste perto do prazo pedido (400 ms), não 3× ele — levou ${ms} ms`);
+    assert(ms >= PARAR_EM_MS - 50, `o prazo pedido (400 ms) não cortou o modelo gerando — durou ${ms} ms, até o "Parar"`);
+    assert(ms < PARAR_EM_MS + 2000, `o "Parar" encerra na hora (${ms} ms)`);
+    assert(r?.status === 'cancelled', `termina como cancelada pelo usuário (status=${r?.status})`);
+    assert(contagem.streaming === 1, `uma única tentativa por streaming — obtido ${contagem.streaming}`);
+    assert(contagem.naoStreaming === 0, `nenhuma refação sem streaming — obtido ${contagem.naoStreaming}`);
 
     console.log(`\n${'─'.repeat(60)}`);
     console.log(`S349 RESULTADO: ✅ ${passed} passou | ❌ ${failed} falhou`);
-    if (failed > 0) process.exitCode = 1;
+    process.exit(failed > 0 ? 1 : 0);
 }
-main().catch((err) => { console.error('S349 erro inesperado:', err); process.exitCode = 1; });
+main().catch((err) => { console.error('S349 erro inesperado:', err); process.exit(1); });

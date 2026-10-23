@@ -1,6 +1,6 @@
 import { createLogger } from '../shared/AppLogger';
 import { errorMessage } from '../shared/errors';
-import { ILLMProvider, LLMMessage, LLMResponse, ToolDefinition, ChatOptions, StreamChunk, OpenAIChatResponse, RawApiChunk, RawToolCall, ModelInfo, REASONING_INTENSIVE_TIMEOUT_FLOOR_MS, AttemptTelemetry, TELEMETRY_SAMPLE_MS, mensagemSemModeloEscolhido } from './providerTypes';
+import { ILLMProvider, LLMMessage, LLMResponse, ToolDefinition, ChatOptions, StreamChunk, OpenAIChatResponse, RawApiChunk, RawToolCall, ModelInfo, AttemptTelemetry, TELEMETRY_SAMPLE_MS, mensagemSemModeloEscolhido } from './providerTypes';
 import { guessCapabilities, mapOllamaCapabilities } from './modelCapabilityHeuristics';
 import { taskQueue, TaskPriority } from './providerQueue';
 import { assertNotSsrfTarget } from './ssrfGuard';
@@ -92,8 +92,19 @@ export type AbortReason = typeof AbortReason[keyof typeof AbortReason];
  */
 export const NO_MODEL_CONFIGURED_MESSAGE = mensagemSemModeloEscolhido('ollama', 'OLLAMA_MODEL');
 
+/**
+ * ADR-027: quanto SILÊNCIO (nenhum pedaço desde o último) faz uma chamada com streaming ser tida como travada. Padrão 90 s — o
+ * mesmo piso que o ACTIVITY_TIMEOUT já tinha. Configurável: SILENCIO_DO_MODELO_S. Lido a cada chamada (o .env pode chegar depois).
+ */
+export function silencioDoModeloMs(): number {
+    const s = Number(process.env.SILENCIO_DO_MODELO_S);
+    return (Number.isFinite(s) && s > 0 ? s : 90) * 1000;
+}
+
 export class OllamaProvider implements ILLMProvider {
     name = 'ollama';
+    /** ADR-027: o streaming para só por silêncio (CONNECTION_TIMEOUT / ACTIVITY_TIMEOUT em streamChat). */
+    readonly vigiaSilencio = true;
     private baseUrl: string;
     private model: string;
     private apiKey: string;
@@ -175,17 +186,9 @@ export class OllamaProvider implements ILLMProvider {
         return await taskQueue.add(
             () => {
                 const queueWaitMs = Date.now() - queueEntryTime;
-                // Subtract queue wait from the timeout budget so the stream's MAX_TIMEOUT
-                // reflects time actually available from this point, not from when the
-                // attempt timer started in chatWithFallback. Floor at 30s to avoid
-                // immediately timing out tasks that waited a very long time in the queue.
-                const remainingMs = options?.timeoutMs
-                    ? Math.max(30_000, options.timeoutMs - queueWaitMs)
-                    : undefined;
-                if (queueWaitMs > 500) {
-                    log.info(`[STREAM] Queue wait: ${queueWaitMs}ms — remaining budget: ${remainingMs ?? 'default'}ms`);
-                }
-                return this._consumeStream(messages, tools, remainingMs, options?.signal, options?.reasoningIntensive, options?.telemetry, options?.raciocinio, options?.saidaJson, options?.limiteDeSaidaTokens);
+                // ADR-027: o streaming não tem prazo de duração (só silêncio) — a espera na fila não desconta nada.
+                if (queueWaitMs > 500) log.info(`[STREAM] Queue wait: ${queueWaitMs}ms`);
+                return this._consumeStream(messages, tools, undefined, options?.signal, options?.reasoningIntensive, options?.telemetry, options?.raciocinio, options?.saidaJson, options?.limiteDeSaidaTokens);
             },
             { priority }
         );
@@ -202,10 +205,11 @@ export class OllamaProvider implements ILLMProvider {
     /**
      * Streaming generator — yields content/thinking/tool_call tokens as they arrive from Ollama SSE.
      *
-     * Timeout architecture:
-     *   - CONNECTION_TIMEOUT (90–180s dynamic): Time to first byte, scales with input token count
-     *   - ACTIVITY_TIMEOUT (90–180s dynamic): Time since last chunk, scales with MAX_TIMEOUT (×0.4)
-     *   - MAX_TIMEOUT (default 300s): Hard ceiling passed by AgentLoop, scales with context size
+     * Só para por TRAVAMENTO (ADR-027) — nunca por duração, com o modelo gerando:
+     *   - CONNECTION_TIMEOUT (150–300 s, pelo tamanho do prompt): nenhum pedaço desde o início (leitura do prompt);
+     *   - ACTIVITY_TIMEOUT (`silencioDoModeloMs`, padrão 90 s): nenhum pedaço desde o último.
+     * O prazo de quem chama (`customTimeoutMs`) não corta mais: o `ProviderFactory` sabe que este provedor vigia o silêncio
+     * (`vigiaSilencio`). Quem limita uma geração longa é o tamanho (`limiteDeSaida` → `num_predict`), o "Parar" e o `/cancelar`.
      *
      * Handles partial buffers (lines broken between chunks).
      */
@@ -230,23 +234,13 @@ export class OllamaProvider implements ILLMProvider {
         // decisão: em 85/85 abortos de produção o ProviderFactory refez a chamada sem streaming, com o MESMO modelo e
         // SEM orçamento, recomeçando do zero; em 58/85 ela terminou com sucesso — o modelo não estava travado, só
         // raciocina mais (glm-5.3: juiz com mediana de 15k chars). O aborto nunca economizou tempo, só descartou
-        // trabalho (~188 min desde 24/09). O limite é o PRAZO de quem chama (MAX_TIMEOUT/ACTIVITY/CONNECTION abaixo).
-        // O risco real do S72 — raciocínio truncado entregue como resposta — é coberto em _consumeStream: raciocínio
-        // só vira resposta quando a geração terminou normalmente.
+        // trabalho (~188 min desde 24/09). O risco real do S72 — raciocínio truncado entregue como resposta — é coberto em
+        // _consumeStream: raciocínio só vira resposta quando a geração terminou normalmente.
 
-        // Issue 044 (23/09/2026): chamadas `reasoningIntensive` (juiz, planejador, validador de conclusão) têm um PISO
-        // de prazo — achado ao vivo: o `ObserverValidator` passava um prazo preso no piso de 30 s (ver
-        // `shared/auxTimeout.ts`) e o juiz de grounding era abortado aos exatos 30000 ms, goal=weather bloqueado com
-        // UNVALIDATED mesmo com dado real e correto. O piso é `REASONING_INTENSIVE_TIMEOUT_FLOOR_MS` (providerTypes —
-        // mesmo valor usado pelo timer de tentativa do ProviderFactory, issue 047). Sem o opt-in, `MAX_TIMEOUT`
-        // continua exatamente `customTimeoutMs || 300_000` (não pode elevar o prazo de chamadas rápidas como o
-        // `GoalExtractor`, que passa 6 s de propósito para desistir cedo e cair em heurística).
-        const MAX_TIMEOUT = reasoningIntensive
-            ? Math.max(customTimeoutMs || 300_000, REASONING_INTENSIVE_TIMEOUT_FLOOR_MS)
-            : (customTimeoutMs || 300_000);
-        // Scale activity timeout with MAX_TIMEOUT so long-generation tasks (e.g. 385s budget)
-        // aren't killed after 90s of model silence. Cap at 180s to keep a safety ceiling.
-        const ACTIVITY_TIMEOUT = Math.min(180_000, Math.max(90_000, Math.floor(MAX_TIMEOUT * 0.4)));
+        // ADR-027 (23/10/2026): saiu o MAX_TIMEOUT (`customTimeoutMs || 300 s`, com piso de raciocínio). Ele cortava o modelo
+        // GERANDO — VPS, 23/10: aos 32,6 s com 866 pedaços de raciocínio chegando; 58 cortes no Windows e 42 na VPS. O que
+        // detecta travamento é o silêncio, abaixo; ele já agia sozinho (77 vezes na VPS).
+        const ACTIVITY_TIMEOUT = silencioDoModeloMs();
 
         // Validate signal BEFORE creating timers to avoid leaking them on early abort
         if (externalSignal?.aborted) {
@@ -258,7 +252,6 @@ export class OllamaProvider implements ILLMProvider {
         let stats = { content: 0, thinking: 0, reasoning: 0, delta: 0, unknown: 0, total: 0 };
 
         let activityTimer: NodeJS.Timeout | null = null;
-        let maxTimer: NodeJS.Timeout | null = null;
         let connectionTimer: NodeJS.Timeout | null = null;
 
 
@@ -276,16 +269,6 @@ export class OllamaProvider implements ILLMProvider {
                 controller.abort();
             }
         }, CONNECTION_TIMEOUT);
-
-        // Issue 064b: o prazo TOTAL é o de quem chamou — quando ele acaba, a chamada terminou (não é falha
-        // transitória). O erro sai marcado `deadlineExceeded` para o ProviderFactory não retentar nem refazer sem
-        // streaming com o mesmo prazo (RiskAnalyzer, 07/10: 60 s pedidos → 192 s gastos em 3 tentativas).
-        let deadlineReached = false;
-        maxTimer = setTimeout(() => {
-            log.warn(`[${streamId}] [STREAM] MAX TIMEOUT reached after ${MAX_TIMEOUT}ms`);
-            deadlineReached = true;
-            controller.abort();
-        }, MAX_TIMEOUT);
 
         // NOTE: activityTimer starts only after the first chunk — CONNECTION_TIMEOUT covers
         // the silent prefill period. Starting activityTimer before fetch would abort long-prefill
@@ -310,7 +293,7 @@ export class OllamaProvider implements ILLMProvider {
             })) : undefined
         };
 
-        log.info(`[${streamId}] [STREAM] START model=${this.model} inputTokens≈${approxInputTokens} connectionTimeout=${CONNECTION_TIMEOUT}ms activityTimeout=${ACTIVITY_TIMEOUT}ms maxTimeout=${MAX_TIMEOUT}ms`);
+        log.info(`[${streamId}] [STREAM] START model=${this.model} inputTokens≈${approxInputTokens} connectionTimeout=${CONNECTION_TIMEOUT}ms activityTimeout=${ACTIVITY_TIMEOUT}ms (sem teto de duração — ADR-027)`);
 
         let response: Response;
         try {
@@ -324,7 +307,6 @@ export class OllamaProvider implements ILLMProvider {
         } catch (fetchErr) {
             if (connectionTimer) clearTimeout(connectionTimer);
             if (activityTimer) clearTimeout(activityTimer);
-            if (maxTimer) clearTimeout(maxTimer);
             log.error(`[${streamId}] [STREAM] FETCH FAILED: ${errorMessage(fetchErr)}`);
             throw fetchErr;
         }
@@ -332,7 +314,6 @@ export class OllamaProvider implements ILLMProvider {
         if (!response.ok) {
             if (connectionTimer) clearTimeout(connectionTimer);
             if (activityTimer) clearTimeout(activityTimer);
-            if (maxTimer) clearTimeout(maxTimer);
             // O corpo é a explicação do servidor (no 429 da nuvem, qual limite de uso foi atingido) — antes era descartado e a
             // usuária só via o número (produção, 18/10/2026). O prefixo "Ollama API error: <status>" continua igual.
             let explicacao = '';
@@ -345,7 +326,6 @@ export class OllamaProvider implements ILLMProvider {
         if (!body) {
             if (connectionTimer) clearTimeout(connectionTimer);
             if (activityTimer) clearTimeout(activityTimer);
-            if (maxTimer) clearTimeout(maxTimer);
             throw new Error('No response body from Ollama');
         }
 
@@ -445,14 +425,10 @@ export class OllamaProvider implements ILLMProvider {
             } else {
                 log.error(`[${streamId}] [STREAM] ERROR: ${errorMessage(streamErr)}. stats=${JSON.stringify(stats)}`);
             }
-            if (deadlineReached) {
-                throw Object.assign(new Error(`Prazo da chamada esgotado (${MAX_TIMEOUT}ms) — This operation was aborted`), { deadlineExceeded: true });
-            }
             throw streamErr;
         } finally {
             if (connectionTimer) clearTimeout(connectionTimer);
             if (activityTimer) clearTimeout(activityTimer);
-            if (maxTimer) clearTimeout(maxTimer);
             reader.releaseLock();
             log.info(`[${streamId}] [STREAM] END (reader released, all timers cleared)`);
         }

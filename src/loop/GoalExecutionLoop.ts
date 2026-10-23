@@ -12,11 +12,14 @@
  *   - maxCycles: máximo de ciclos totais
  *   - retryBudget: por step
  *   - replanBudget: por goal
- *   - TTL: enforced pelo GoalStore.expireStale()
+ *   - Sem relógio (ADR-027): o objetivo só para por travamento (ciclos sem avanço, replanejamentos esgotados, silêncio do
+ *     modelo, comando sem sinal), pelo usuário ("Parar" / /cancelar) ou ao concluir. O TTL do GoalStore.expireStale() vale
+ *     só para goal PARADO à espera — nunca para o que está executando (estaExecutando).
  *   - Nenhum ciclo roda sem trigger explícito (user message ou auth callback)
  */
 
-import { executarComPrazo, executarAguardandoComandos } from '../shared/turnCancellation';
+import { executarAguardandoComandos } from '../shared/turnCancellation';
+import { intervaloDoRelatoMs, montarRelatoDeProgresso } from './relatoDeProgresso';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
@@ -57,7 +60,7 @@ import type { IntentCategory } from '../shared/domainTypes';
 import { resolveInstallCommand } from './planning/resolveInstallCommand';
 import { inferExpectedExtensions, isExpectedDeliverableFile } from './planning/inferExpectedExtensions';
 import { MIN_DELIVERABLE_SIZE, resolveArtifactPathFromEvidence } from './planning/artifactContract';
-import { GOAL_LIMITS, limiteDoObjetivoComoAviso, limiteDuroDoObjetivoMs } from './GoalLimits';
+import { GOAL_LIMITS } from './GoalLimits';
 import { ChannelContext, ContextAwareTool, GroundingBlock, ProviderFailure } from './agentLoopTypes';
 import type { EvidenceItem } from './ObserverValidator';
 import type { SessionManager } from '../session/SessionManager';
@@ -269,29 +272,32 @@ export class GoalExecutionLoop {
         this.avisarUsuario = avisar;
     }
 
+    /** Goals que um laço DESTE processo está executando agora — o TTL do GoalStore nunca os abandona (ADR-027). */
+    private readonly emExecucao = new Set<string>();
+    estaExecutando(goalId: string): boolean {
+        return this.emExecucao.has(goalId);
+    }
+
     /**
-     * ADR-024 etapa 6 (EXPERIMENTAL — LIMITE_DO_OBJETIVO_COMO_AVISO=1): ao chegar ao limite do objetivo, em vez de cortar o
-     * trabalho, prorroga por mais uma janela (nunca além do LIMITE DURO configurável) e AVISA o usuário de que continua e de
-     * como interromper. Devolve `true` se prorrogou (o loop segue); `false` = comportamento de sempre (expira).
+     * ADR-027: relato de progresso a cada `intervaloDoRelatoMs()` enquanto o objetivo roda — no lugar do aviso que o relógio
+     * dava aos 30 min. Texto montado de fatos do goal (sem modelo). Devolve a função que para o relato.
      */
-    private prorrogarPorAviso(goal: Goal): boolean {
-        if (!limiteDoObjetivoComoAviso()) return false;
-        const agora = Date.now();
-        const limiteDuro = goal.createdAt + limiteDuroDoObjetivoMs();
-        if (agora >= limiteDuro) {
-            log.warn(`[OBJETIVO-AVISO] goal=${goal.id} chegou ao LIMITE DURO (${Math.round(limiteDuroDoObjetivoMs() / 60_000)} min) — expira como sempre`);
-            return false;
-        }
-        const novoPrazo = Math.min(limiteDuro, agora + GOAL_LIMITS.MAX_GOAL_TTL_MS);
-        this.goalStore.update(goal.id, { expiresAt: novoPrazo });
-        goal.expiresAt = novoPrazo;
-        const decorridos = Math.round((agora - goal.createdAt) / 60_000);
-        const duroMin = Math.round(limiteDuroDoObjetivoMs() / 60_000);
-        log.warn(`[OBJETIVO-AVISO] goal=${goal.id} passou do limite (${decorridos} min) — continua até ${new Date(novoPrazo).toISOString()} (limite duro ${duroMin} min); usuário avisado`);
-        this.avisarUsuario?.(goal.sessionKey,
-            `⏳ Ainda estou trabalhando no seu pedido (há ${decorridos} min). Vou continuar por até ${duroMin} min no total; ` +
-            `para interromper, envie /cancelar.`).catch(() => { /* aviso nunca derruba o trabalho */ });
-        return true;
+    private iniciarRelatoDeProgresso(goal: Goal): () => void {
+        const intervalo = intervaloDoRelatoMs();
+        if (!intervalo || !this.avisarUsuario) return () => { /* relato desligado */ };
+        const inicio = Date.now();
+        let desde = inicio;
+        const timer = setInterval(() => {
+            const atual = this.goalStore.getById(goal.id);
+            if (!atual || !this.emExecucao.has(goal.id)) return;
+            const agora = Date.now();
+            const texto = montarRelatoDeProgresso(atual, inicio, desde, agora);
+            desde = agora;
+            log.info(`[RELATO-PROGRESSO] goal=${goal.id} há ${Math.round((agora - inicio) / 60_000)} min`);
+            this.avisarUsuario?.(atual.sessionKey, texto).catch(() => { /* relato nunca derruba o trabalho */ });
+        }, intervalo);
+        timer.unref?.();
+        return () => clearInterval(timer);
     }
 
     /**
@@ -884,7 +890,7 @@ export class GoalExecutionLoop {
 
     // ── Loop de ciclos (compartilhado entre executeGoal e resumeGoal) ─────────
 
-    private runLoop(
+    private async runLoop(
         goal: Goal,
         channelContext: ChannelContext,
         onProgress: ProgressCallback | undefined,
@@ -892,12 +898,26 @@ export class GoalExecutionLoop {
         initialReplans: number,
         initialFeedback?: string,
     ): Promise<GoalResult> {
-        // ADR-023: tudo o que o objetivo executa enxerga o prazo final dele — um comando nunca dura mais que o objetivo que o
-        // pediu (o exec_command usa o que resta como teto, em vez de um número próprio).
-        return executarComPrazo(() => this.goalStore.getById(goal.id)?.expiresAt ?? goal.expiresAt, () => this.runLoopNoPrazo(goal, channelContext, onProgress, initialCycles, initialReplans, initialFeedback));
+        // ADR-027: o objetivo não tem relógio — nada do que ele executa herda um prazo final (antes: executarComPrazo com o
+        // expiresAt, que cortava chamadas, juízes e comandos no fim dos 30 min). Enquanto roda, ele está no registro de
+        // execução (o TTL não o abandona) e relata o progresso.
+        this.emExecucao.add(goal.id);
+        const pararRelato = this.iniciarRelatoDeProgresso(goal);
+        try {
+            return await this.runLoopDoObjetivo(goal, channelContext, onProgress, initialCycles, initialReplans, initialFeedback);
+        } finally {
+            pararRelato();
+            this.emExecucao.delete(goal.id);
+            // Saiu do laço sem terminar (ex.: parado à espera de autorização): a janela de espera conta a partir de AGORA — o
+            // tempo que ele passou trabalhando não pode vencer a espera pelo usuário.
+            const depois = this.goalStore.getById(goal.id);
+            if (depois && !['completed', 'failed', 'abandoned'].includes(depois.status)) {
+                this.goalStore.update(goal.id, { expiresAt: Date.now() + GOAL_LIMITS.MAX_GOAL_TTL_MS });
+            }
+        }
     }
 
-    private async runLoopNoPrazo(
+    private async runLoopDoObjetivo(
         goal: Goal,
         channelContext: ChannelContext,
         onProgress: ProgressCallback | undefined,
@@ -1888,14 +1908,7 @@ export class GoalExecutionLoop {
         priorFeedback = validation.reason;
         goal = await this.planWithSpiral(goal, blocker, priorFeedback, totalReplans + 1, state, true);
         totalReplans++;
-
-        if (Date.now() > goal.expiresAt && !this.prorrogarPorAviso(goal)) {
-            this.goalStore.setStatus(goal.id, 'abandoned');
-            // issue 028: mesma autoridade única das saídas genéricas de falha (issue 020) — o
-            // motivo ("expirou") é um fato de entrada, não substitui o resumo do que já foi obtido.
-            const explanation = this.gracefulDelivery.buildFailureMessage(goal, state.cognitiveContext, 'Objetivo expirou por tempo limite.');
-            return { action: 'earlyReturn', result: this.buildResult(goal, false, totalCycles, totalReplans, explanation) };
-        }
+        // ADR-027: sem checagem de expiração — o objetivo não para por tempo.
         return { action: 'continueLoop', goal, totalReplans, priorFeedback };
     }
 
@@ -2202,8 +2215,9 @@ export class GoalExecutionLoop {
         // O limite conta só os ciclos SEM AVANÇO (passo que falhou, replanejamento, validação que não confirmou). Um passo que
         // termina com sucesso é trabalho feito, não tentativa gasta. Antes contava TODO ciclo: no reteste do GenOffice (16/10/2026)
         // um plano de 5 passos com 3 replanejamentos esgotou os 12 ciclos com os passos dando certo — o mesmo corte injusto do
-        // relógio, por contagem. Proteção contra repetição sem fim continua: replanejamentos têm orçamento próprio e o objetivo
-        // tem o seu prazo. `initialCycles` (retomada) entra como já gasto — conservador.
+        // relógio, por contagem. Proteção contra repetição sem fim continua: este limite e o orçamento próprio dos
+        // replanejamentos — é a detecção de travamento do objetivo (ADR-027: não há mais relógio). `initialCycles` (retomada)
+        // entra como já gasto — conservador.
         let ciclosSemAvanco = initialCycles;
         while (ciclosSemAvanco < GOAL_LIMITS.MAX_CYCLES) {
             totalCycles++;
@@ -2333,14 +2347,8 @@ export class GoalExecutionLoop {
                 log.warn(`[GoalLoop] goal=${currentGoal.id} recebeu complemento mas replanBudget esgotado — anexando como feedback sem replan dedicado`);
                 priorFeedback = `${priorFeedback ?? ''}\n[Complemento do usuário]: ${supplements.join('\n')}`.trim();
             }
-
-            // Verificar TTL após cada ciclo
-            if (Date.now() > currentGoal.expiresAt && !this.prorrogarPorAviso(currentGoal)) {
-                this.goalStore.setStatus(currentGoal.id, 'abandoned');
-                // issue 028: mesma autoridade única (ver o outro ponto de expiração acima).
-                const explanation = this.gracefulDelivery.buildFailureMessage(currentGoal, state.cognitiveContext, 'Objetivo expirou por tempo limite.');
-                return this.buildResult(currentGoal, false, totalCycles, totalReplans, explanation);
-            }
+            // ADR-027: sem checagem de TTL após o ciclo — o objetivo não para por tempo, só por travamento (acima: ciclos sem
+            // avanço; replanejamentos esgotados) ou pelo usuário.
         }
 
         // Max cycles atingido — mas se todos os steps completaram, ainda roda a validação final.

@@ -219,8 +219,9 @@ export class GoalOrchestrator {
         options: { onStatus?: (event: SemanticStatusEvent) => void } | undefined,
         signal: AbortSignal,
     ): Promise<string | ProcessedResult> {
-        // TTL cleanup a cada processamento (query lightweight)
-        this.goalStore.expireStale();
+        // TTL cleanup a cada processamento (query lightweight) — só dos goals parados à espera; o que está executando nunca
+        // vence (ADR-027).
+        this.goalStore.expireStale(id => this.executionLoop.estaExecutando(id));
 
         const sessionKey = composeSessionKey(
             context ? { channel: context.channel, userId: context.userId ?? userId } : { channel: 'unknown', userId }

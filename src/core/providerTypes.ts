@@ -145,6 +145,12 @@ export interface ILLMProvider {
     setModel(model: string): void;
     /** Lista os modelos disponíveis no endpoint deste provider, quando suportado. */
     discoverModels?(): Promise<ModelInfo[]>;
+    /**
+     * ADR-027: o provedor detecta TRAVAMENTO sozinho (silêncio no streaming: nenhum pedaço por um tempo) e não corta por
+     * duração. Com `true`, o `ProviderFactory` não arma relógio próprio para a chamada — quem chama não corta um modelo que
+     * gera. Sem o campo (provedor sem streaming), não há sinal de progresso, e o prazo de quem chamou continua valendo.
+     */
+    readonly vigiaSilencio?: boolean;
 }
 
 /** Heurísticas de capacidade — inferidas do nome do modelo, não garantidas pelo provider. */

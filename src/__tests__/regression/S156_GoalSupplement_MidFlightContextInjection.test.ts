@@ -175,11 +175,11 @@ async function main() {
         const switchIdx = src.indexOf("case 'failed':");
         const outcomeAssignIdx = src.indexOf('priorFeedback = outcomeHandled.priorFeedback;');
         const supplementIdx = src.indexOf('const supplements = this.goalStore.consumeSupplements(currentGoal.id);');
-        const ttlIdx = src.indexOf('// Verificar TTL após cada ciclo');
+        // ADR-027: a checagem de TTL do fim do ciclo saiu (o objetivo não para por tempo) — resta a ordem em relação ao switch.
         assert(
-            switchIdx > 0 && outcomeAssignIdx > switchIdx && supplementIdx > outcomeAssignIdx && ttlIdx > supplementIdx,
-            'consumo de complementos roda DEPOIS do switch de outcome (resultado real do step já registrado) e ANTES da checagem de TTL',
-            { switchIdx, outcomeAssignIdx, supplementIdx, ttlIdx }
+            switchIdx > 0 && outcomeAssignIdx > switchIdx && supplementIdx > outcomeAssignIdx,
+            'consumo de complementos roda DEPOIS do switch de outcome (resultado real do step já registrado)',
+            { switchIdx, outcomeAssignIdx, supplementIdx }
         );
 
         assert(/kind: 'user_supplement'/.test(src), "blocker sintético usa kind: 'user_supplement'");

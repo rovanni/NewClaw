@@ -146,7 +146,9 @@ console.log('\n=== S376-5 — modelo que não dá veredito em modo nenhum: orça
     const r1 = await motor.validar('qualidade_da_resposta', ENTRADAS);
     const ms = Date.now() - t0;
     assert(r1.semVeredito === true && r1.desfecho === 'llm_timeout', 'sem veredito, com o desfecho "timeout"', r1.desfecho);
-    assert(ms < 550, `não passou do orçamento do juiz (${ms} ms ≤ ~400 ms)`);
+    // ADR-027: em silêncio, cada modo é cortado no fim da sua fatia; o segundo recebe o orçamento inteiro (não o que "sobrou"
+    // no relógio) — no máximo a fatia do primeiro + o orçamento (~1,5 × 400 ms), nunca sem fim.
+    assert(ms < 950, `um modelo calado nos dois modos é cortado em cada um (${ms} ms ≤ fatia + orçamento ≈ 600 ms)`);
     await motor.validar('qualidade_da_resposta', ENTRADAS);
     const antes = chamadas.length;
     const r3 = await motor.validar('qualidade_da_resposta', ENTRADAS);
