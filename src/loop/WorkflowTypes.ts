@@ -33,6 +33,12 @@ export interface ContinuationContext {
     alternativeTools?: string[];
     /** Dados extras pequenos e serializáveis */
     metadata?: Record<string, string>;
+    /**
+     * ADR-028: o que o turno JÁ tinha mudado quando parou para pedir a autorização. A resposta da decisão (aprovada ou
+     * recusada) é escrita depois, sem o turno: sem isto, recusar uma mesclagem fazia o modelo dizer que nada foi gravado,
+     * com uma atualização feita minutos antes (teste real, 24/10/2026).
+     */
+    alteracoesAntes?: string[];
 }
 
 /**

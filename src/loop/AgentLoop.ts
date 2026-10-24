@@ -690,8 +690,11 @@ export class AgentLoop {
     ): Promise<string> {
         const ctx = result.continuationCtx;
         const isApproved = result.decision === 'approved';
-        // ADR-028: a ação aprovada que mudou dados diz o que mudou, qualquer que seja o texto abaixo.
-        const comRecibo = (texto: string) => result.alteracao ? AgentLoop.comAlteracoes(texto, [result.alteracao]) : texto;
+        // ADR-028: o que o turno já tinha mudado antes de parar para perguntar, mais o que a ação aprovada mudou — junto de
+        // qualquer texto abaixo, aprovada ou recusada.
+        const alteracoesAntes = ctx.alteracoesAntes ?? [];
+        const recibo = [...alteracoesAntes, ...(result.alteracao ? [result.alteracao] : [])];
+        const comRecibo = (texto: string) => AgentLoop.comAlteracoes(texto, recibo);
 
         log.info(`[WF] resume conv=${conversationId} decision=${result.decision} success=${result.success} workflow=${ctx.workflow}`);
         // Limpa o safety net legado — o WorkflowEngine já resolveu, authManager não deve disparar
@@ -708,6 +711,8 @@ export class AgentLoop {
             step: ctx.step,
             userGoal: ctx.userGoal,
             ...(ctx.activeResources?.length ? { activeResources: ctx.activeResources } : {}),
+            // Fato para o modelo não negar o que já foi gravado (ADR-028).
+            ...(alteracoesAntes.length ? { alteracoesJaGravadasNesteTurno: alteracoesAntes } : {}),
         };
 
         if (isApproved && result.success) {
@@ -740,7 +745,10 @@ export class AgentLoop {
             ? result.success
                 ? 'O comando foi executado e o resultado está no campo "toolResult" do JSON acima. Apresente esse conteúdo ao usuário de forma clara e útil. Não peça ao usuário para colar ou informar a saída — você já a possui no campo toolResult.'
                 : failTask
-            : 'Informe que a ação foi cancelada e ofereça uma alternativa sem precisar de autorização, se disponível.';
+            : 'Informe que a ação foi cancelada e ofereça uma alternativa sem precisar de autorização, se disponível.'
+              + (alteracoesAntes.length
+                  ? ' Só a ação recusada foi cancelada: o que está em "alteracoesJaGravadasNesteTurno" já tinha sido gravado antes do pedido e continua valendo — não diga que nada foi gravado.'
+                  : '');
 
         // Merge into a single system message — some Ollama models discard all but the first
         // system message, causing the toolResult JSON to be invisible to the LLM.
@@ -3060,12 +3068,14 @@ export class AgentLoop {
             // Novo fluxo: cria transaction com ID estruturado.
             // Canais com workflowCallback (Telegram, WhatsApp, Discord, Signal) rotearão o callback
             // diretamente ao WorkflowEngine — sem passar pelo LLM pipeline.
+            const alteracoesAntes = this.getTurnState(conversationId).alteracoes;
             const ctx: ContinuationContext = {
                 workflow: this.inferWorkflowName(intentDecision.intent, toolName),
                 step: toolName,
                 userGoal: userText.slice(0, 200),
                 activeResources: this.extractResourceNames(args),
                 alternativeTools: this.findSafeAlternatives(toolName),
+                ...(alteracoesAntes?.length ? { alteracoesAntes: [...alteracoesAntes] } : {}),
             };
             const txn = this.workflowEngine.createTransaction(conversationId, toolName, args, ctx);
             txnId = txn.id;

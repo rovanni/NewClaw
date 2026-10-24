@@ -85,6 +85,14 @@ padrão de `requiredArgsHint` e `deliveryFacts`), o `ToolRegistry`, o `Authoriza
 - **Markdown:** no pedido de confirmação, cada detalhe vai entre crases, como o comando do `exec_command`.
 - A limpeza devolve os nós que removeu (`CleanupResult.removed`), sem refazer a seleção.
 
+**Teste real (Strata, instância isolada, modo GOD, 24/10/2026):** apagar pediu confirmação com nome e conteúdo, e o cartão
+do painel mostrou o mesmo; aprovado, só o nó saiu e a resposta trouxe o recibo; uma verificação só de leitura não teve lista
+(certo); "atualize a cor e junte os slides" gravou a cor sem perguntar e, na mesclagem, pediu confirmação já listando a
+atualização; recusado, nada saiu. **Defeito achado e corrigido:** a resposta da recusa dizia que nada tinha sido gravado —
+quem a escreve (`resumeFromWorkflow`) roda depois do turno e não sabia da atualização. Agora a transação guarda o que o turno
+já tinha mudado (`ContinuationContext.alteracoesAntes`), o modelo recebe isso como fato, e a resposta da decisão (aprovada ou
+recusada) termina com o recibo. Cobertura: `S448-8`.
+
 **Riscos e pendências (registrados, não resolvidos aqui):**
 - **`update` sobrescreve o conteúdo** sem guardar o anterior; não pede confirmação (fora do pedido). A lista mostra o texto
   novo.

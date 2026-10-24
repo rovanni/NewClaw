@@ -185,6 +185,36 @@ async function main(): Promise<void> {
     const pedidoMd = auth.formatRequest('memory_write', { action: 'delete', id: 'wifi' }).text;
     assert(pedidoMd.includes("• `\"Wi-Fi\" (fact) — senha_do_wifi em *config* e 'cofre'`"), 'cada detalhe entre crases (sem crase interna)', pedidoMd);
 
+    console.log('\n=== S448-8 — recusa depois de uma mudança no mesmo turno (teste real, 24/10): não nega o que já foi gravado ===');
+    const wf8 = new WorkflowEngine();
+    const estado8: any = { alteracoes: ['Atualizou: "Cor preferida" (fact) — A cor preferida da dona é verde'] };
+    const fakePedido: any = {
+        workflowEngine: wf8,
+        authManager: new AuthorizationManager(),
+        getTurnState: () => estado8,
+        inferWorkflowName: () => 'memory-write',
+        extractResourceNames: () => [],
+        findSafeAlternatives: () => [],
+        ts: () => '',
+    };
+    await escrita.execute({ action: 'create', id: 'slides_c', type: 'fact', name: 'Slides da aula', content: 'Slides da aula de redes, cópia' });
+    const pedido8 = proto.pedirAutorizacao.call(fakePedido, 'conv-h', 'memory_write', { action: 'merge', id: 'slides_a', merge_ids: ['slides_c'] }, 'junte os slides', { intent: 'memory' }, 1, () => {});
+    const txn8 = wf8.getPendingByConversation('conv-h')[0];
+    assert(pedido8.options?.length === 2 && JSON.stringify(txn8?.continuationCtx.alteracoesAntes) === JSON.stringify(estado8.alteracoes),
+        'a transação guarda o que o turno já tinha mudado', txn8?.continuationCtx);
+    const r8 = await wf8.resume(txn8.id, 'rejected', (n) => ToolRegistry.get(n));
+    let mensagens8: any[] = [];
+    const fakeRecusa: any = {
+        authManager: { removePending: () => {} },
+        profileRegistry: { getProfileByCategory: () => ({ category: 'chat' }) },
+        callLLMWithFallback: async (msgs: any[]) => { mensagens8 = msgs; return { content: 'A mesclagem foi cancelada.' }; },
+    };
+    const resp8: string = await proto.resumeFromWorkflow.call(fakeRecusa, 'conv-h', r8);
+    assert(/alteracoesJaGravadasNesteTurno[\s\S]*Cor preferida/.test(mensagens8[0]?.content ?? '') && /não diga que nada foi gravado/.test(mensagens8[1]?.content ?? ''),
+        'o modelo recebe o fato do que já foi gravado e que só a ação recusada foi cancelada', mensagens8);
+    assert(/^A mesclagem foi cancelada\.\n\n📝 O que foi alterado neste turno:\n• Atualizou: "Cor preferida"/.test(resp8), 'a resposta da recusa termina com o recibo do que continua valendo', resp8);
+    assert(!!mm.getNode('slides_c'), 'recusado: nada sai');
+
     console.log('\n=== S448-6 — painel web: o cartão de aprovação descreve a ação de memória ===');
     const rota = fs.readFileSync(require.resolve('../../dashboard/routes/chat.ts'), 'utf-8');
     assert(/ToolRegistry\.confirmacaoDoDono\(t\.tool/.test(rota), 'o detalhe do cartão vem da mesma descrição do pedido');
