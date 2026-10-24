@@ -93,6 +93,11 @@ quem a escreve (`resumeFromWorkflow`) roda depois do turno e não sabia da atual
 já tinha mudado (`ContinuationContext.alteracoesAntes`), o modelo recebe isso como fato, e a resposta da decisão (aprovada ou
 recusada) termina com o recibo. Cobertura: `S448-8`.
 
+**Code-review do PR #17, corrigidos:** o passo do objetivo só lê o trace que começou nele (`startTime >= startMs`) — o do
+passo anterior não duplica a lista; o recibo "O que foi alterado" também vai entre crases (`literalNoMarkdown`, o mesmo do
+pedido de confirmação); a pergunta "há turno ativo não vencido?" mora num método só (`turnoAtivoNaoVencido`), usado pelo
+guard de `runWithTools` e pelo `run()`. Cobertura: `S448-9`.
+
 **Riscos e pendências (registrados, não resolvidos aqui):**
 - **`update` sobrescreve o conteúdo** sem guardar o anterior; não pede confirmação (fora do pedido). A lista mostra o texto
   novo.

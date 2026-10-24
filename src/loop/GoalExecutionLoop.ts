@@ -2950,8 +2950,11 @@ export class GoalExecutionLoop {
         }
 
         // ADR-028: o que o sub-turno mudou, lido ANTES das demais saídas antecipadas (bloqueio, autorização) — nelas também
-        // conta. Depois da recusa concorrente: aquela chamada não executou nada.
-        const alteracoesDoPasso = alteracoesFromTrace(traceManager.getRecentTraces(10).find(t => t.sessionId === goal.conversationId)?.steps ?? []);
+        // conta. Depois da recusa concorrente: aquela chamada não executou nada. Só o trace que começou NESTE passo: se o
+        // sub-turno voltar sem trace próprio, o mais recente da conversa é o do passo anterior, e as mudanças dele contariam
+        // duas vezes (code-review do PR #17).
+        const traceDoPasso = traceManager.getRecentTraces(10).find(t => t.sessionId === goal.conversationId && t.startTime >= startMs);
+        const alteracoesDoPasso = alteracoesFromTrace(traceDoPasso?.steps ?? []);
 
         // Issue 049: a barreira de groundedness (ADR-010 C1) não autorizou a entrega — `text` é a
         // mensagem fixa de bloqueio, escrita para o usuário, não o produto do step. Antes disto ela

@@ -60,6 +60,7 @@ async function main(): Promise<void> {
         validacoesPorConversa: new Map<string, AbortController[]>(),
         iniciarRelatoDoTurno: () => () => {},
         clearActiveTurn: (id: string) => estados.delete(id),
+        turnoAtivoNaoVencido: proto.turnoAtivoNaoVencido,
         runWithTools: async (id: string) => { sinais.push(estados.get(id)?.validacoesEmSegundoPlano?.signal); return 'ok'; },
     };
     const r = await proto.run.call(fakeRun, 'conv-r', 'oi');

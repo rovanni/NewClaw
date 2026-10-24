@@ -25,7 +25,7 @@ import { MemoryManager, descreverNoDaMemoria } from '../memory/MemoryManager';
 import { SkillLearner } from './SkillLearner';
 import { AgentStateManager } from '../core/AgentStateManager';
 import { extractText } from './ResponseAdapter';
-import { AuthorizationManager } from './AuthorizationManager';
+import { AuthorizationManager, literalNoMarkdown } from './AuthorizationManager';
 import { ProtocolParser } from './ProtocolParser';
 import { createLogger } from '../shared/AppLogger';
 import { intervaloDoRelatoMs, montarRelatoDoTurno } from './relatoDeProgresso';
@@ -996,7 +996,7 @@ export class AgentLoop {
     static comAlteracoes(texto: string, alteracoes: readonly string[], onde: 'neste turno' | 'neste objetivo' = 'neste turno'): string {
         if (alteracoes.length === 0) return texto;
         const MOSTRAR = 20;
-        const linhas = alteracoes.slice(0, MOSTRAR).map(a => `• ${a}`);
+        const linhas = alteracoes.slice(0, MOSTRAR).map(a => `• ${literalNoMarkdown(a)}`);
         if (alteracoes.length > MOSTRAR) linhas.push(`• …e mais ${alteracoes.length - MOSTRAR}`);
         return `${texto.trimEnd()}\n\n📝 O que foi alterado ${onde}:\n${linhas.join('\n')}`;
     }
@@ -1530,10 +1530,10 @@ export class AgentLoop {
         const validacoesEmSegundoPlano = new AbortController();
         pendentes.push(validacoesEmSegundoPlano);
         this.validacoesPorConversa?.set(conversationId, pendentes);
-        // ADR-028 (code-review): uma chamada que o guard de runWithTools vai recusar (turno ativo, não vencido — mesma
-        // condição de lá) não troca nem limpa o estado do turno legítimo: antes, a lista do que ele já tinha mudado sumia.
-        const concorrente = this.activeTurns.has(conversationId)
-            && Date.now() - (this.turnStartTimes?.get(conversationId) || 0) <= this.TURN_STALE_MS;
+        // ADR-028 (code-review): uma chamada que o guard de runWithTools vai recusar não troca nem limpa o estado do turno
+        // legítimo: antes, a lista do que ele já tinha mudado sumia. A MESMA pergunta do guard (turnoAtivoNaoVencido), e sem
+        // espera entre as duas, então a previsão é a decisão.
+        const concorrente = this.turnoAtivoNaoVencido(conversationId);
         if (!concorrente) {
             this.activeTurnStates.set(conversationId, {
                 cognitiveWorkspace: new CognitiveWorkspace(),
@@ -1576,6 +1576,17 @@ export class AgentLoop {
             pararRelato();
             if (!concorrente) this.clearActiveTurn(conversationId);   // o turno legítimo limpa no próprio finally
         }
+    }
+
+    /**
+     * Há um turno em andamento nesta conversa que ainda não venceu (TURN_STALE_MS)? Ponto único da pergunta: o guard de
+     * `runWithTools` recusa a chamada nova quando sim, e `run()` então preserva o estado do turno legítimo (ADR-028).
+     * `?.`: objetos parciais de teste (S447) não têm `turnStartTimes` — sem início conhecido, o turno conta como vencido.
+     */
+    private turnoAtivoNaoVencido(conversationId: string): boolean {
+        if (!this.activeTurns.has(conversationId)) return false;
+        const startedAt = this.turnStartTimes?.get(conversationId) || 0;
+        return Date.now() - startedAt <= this.TURN_STALE_MS;
     }
 
     /** ADR-027: os sinais das validações em segundo plano ainda não interrompidas de cada conversa (ver run()). */
@@ -4134,7 +4145,7 @@ export class AgentLoop {
         // but this handles any pre-existing stuck state without requiring a server restart).
         if (iteration === 0 && this.activeTurns.has(conversationId)) {
             const startedAt = this.turnStartTimes.get(conversationId) || 0;
-            if (Date.now() - startedAt > this.TURN_STALE_MS) {
+            if (!this.turnoAtivoNaoVencido(conversationId)) {
                 log.warn(`[${this.ts()}] [AGENT] Stale turn cleared for ${conversationId} (started ${Math.round((Date.now() - startedAt) / 1000)}s ago)`);
                 this.activeTurns.get(conversationId)?.abort();
                 // removed: this.activeTurns.delete(conversationId);

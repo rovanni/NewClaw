@@ -89,7 +89,7 @@ async function main(): Promise<void> {
     assert(r?.alteracao?.startsWith('Apagou: "Workspace" (context)') === true, 'a execução registra o que apagou, pelo nome', r?.alteracao);
     const fakeResume: any = { authManager: { removePending: () => {} }, profileRegistry: { getProfileByCategory: () => undefined } };
     const respostaAprovada: string = await proto.resumeFromWorkflow.call(fakeResume, 'conv-a', r);
-    assert(/📝 O que foi alterado neste turno:\n• Apagou: "Workspace"/.test(respostaAprovada), 'a resposta da aprovação traz o recibo', respostaAprovada);
+    assert(/📝 O que foi alterado neste turno:\n• `Apagou: "Workspace"/.test(respostaAprovada), 'a resposta da aprovação traz o recibo', respostaAprovada);
     const recusa = wf.createTransaction('conv-a', 'memory_write', mesclar, { workflow: 'memoria', step: 'memory_write', userGoal: 'x' });
     await wf.resume(recusa.id, 'rejected', (n) => ToolRegistry.get(n));
     assert(!!mm.getNode('slides_b'), 'recusado: nada sai');
@@ -110,14 +110,15 @@ async function main(): Promise<void> {
         validacoesPorConversa: new Map(),
         iniciarRelatoDoTurno: () => () => {},
         clearActiveTurn: () => {},
+        turnoAtivoNaoVencido: proto.turnoAtivoNaoVencido,
         runWithTools: async (id: string) => { estados.get(id).alteracoes = [...alteracoes]; return resposta; },
     });
     const bloqueada = (AgentLoop as any).groundingBlockedMessage('NOT_EVALUABLE', [{ claim: 'os dois nós foram criados 1 segundo apartados', verdict: 'NOT_EVALUABLE' }]);
     const r1 = await proto.run.call(fakeRun(bloqueada, ['Juntou em "Slides"', 'Apagou: "Workspace"']), 'conv-b', 'verifique a memória');
-    assert(typeof r1 === 'string' && r1.startsWith('Não encontrei, nas fontes') && /📝 O que foi alterado neste turno:\n• Juntou em "Slides"\n• Apagou: "Workspace"$/.test(r1),
+    assert(typeof r1 === 'string' && r1.startsWith('Não encontrei, nas fontes') && /📝 O que foi alterado neste turno:\n• `Juntou em "Slides"`\n• `Apagou: "Workspace"`$/.test(r1),
         'resposta BLOQUEADA pelo juiz: o aviso e, depois, o que mudou', r1);
     const r2 = await proto.run.call(fakeRun({ text: '🗑️ **Apagar uma informação da memória**', options: [{ label: 'Sim', value: 'auth:approve:t' }] }, ['Atualizou: "Cripto"']), 'conv-c', 'x');
-    assert(/Apagar uma informação[\s\S]*• Atualizou: "Cripto"/.test(r2.text) && r2.options?.length === 1, 'pedido de confirmação: diz o que já mudou antes dele, botões intactos', r2);
+    assert(/Apagar uma informação[\s\S]*• `Atualizou: "Cripto"`/.test(r2.text) && r2.options?.length === 1, 'pedido de confirmação: diz o que já mudou antes dele, botões intactos', r2);
     const r3 = await proto.run.call(fakeRun('Pronto, não mudei nada.', []), 'conv-d', 'x');
     assert(r3 === 'Pronto, não mudei nada.', 'turno sem mudanças: resposta intacta');
     const r4 = await proto.run.call(fakeRun('resultado do passo', ['Apagou: "X"']), 'conv-e', 'x', 'u', { channel: 'web', chatId: 'conv-e', goalTrace: { goalId: 'g', stepId: 's1' } });
@@ -149,6 +150,7 @@ async function main(): Promise<void> {
         validacoesPorConversa: new Map(),
         iniciarRelatoDoTurno: () => () => {},
         clearActiveTurn: (id: string) => estadosC.delete(id),
+        turnoAtivoNaoVencido: proto.turnoAtivoNaoVencido,
         runWithTools: async () => ({ text: 'Ainda estou processando sua mensagem anterior.', concurrentTurnRejected: true }),
     };
     const rc = await proto.run.call(fakeConc, 'conv-g', 'segundo clique');
@@ -170,7 +172,7 @@ async function main(): Promise<void> {
         gracefulDelivery: { buildFailureMessage: () => 'falhou' },
     };
     const rg = (GoalExecutionLoop.prototype as any).buildResult.call(fakeLoopG, goalFake, true, 2, 0, undefined);
-    assert(/^Memória organizada\.\n\n📝 O que foi alterado neste objetivo:\n• Atualizou: "Cripto"\n• Apagou: "Workspace"$/.test(rg.finalOutput),
+    assert(/^Memória organizada\.\n\n📝 O que foi alterado neste objetivo:\n• `Atualizou: "Cripto"`\n• `Apagou: "Workspace"`$/.test(rg.finalOutput),
         'mensagem final do objetivo traz o recibo de todos os passos (inclusive o que falhou depois de mudar)', rg.finalOutput);
     // (3) protocolo de ação em JSON: pede autorização com botões em vez de cair na recusa
     const fsJ = await import('fs');
@@ -212,8 +214,19 @@ async function main(): Promise<void> {
     const resp8: string = await proto.resumeFromWorkflow.call(fakeRecusa, 'conv-h', r8);
     assert(/alteracoesJaGravadasNesteTurno[\s\S]*Cor preferida/.test(mensagens8[0]?.content ?? '') && /não diga que nada foi gravado/.test(mensagens8[1]?.content ?? ''),
         'o modelo recebe o fato do que já foi gravado e que só a ação recusada foi cancelada', mensagens8);
-    assert(/^A mesclagem foi cancelada\.\n\n📝 O que foi alterado neste turno:\n• Atualizou: "Cor preferida"/.test(resp8), 'a resposta da recusa termina com o recibo do que continua valendo', resp8);
+    assert(/^A mesclagem foi cancelada\.\n\n📝 O que foi alterado neste turno:\n• `Atualizou: "Cor preferida"/.test(resp8), 'a resposta da recusa termina com o recibo do que continua valendo', resp8);
     assert(!!mm.getNode('slides_c'), 'recusado: nada sai');
+
+    console.log('\n=== S448-9 — achados do code-review do PR #17 ===');
+    const recibo9 = AgentLoop.comAlteracoes('ok', ['Atualizou: "Wi-Fi" (fact) — senha_do_wifi em *config* e `cofre`']);
+    assert(recibo9.endsWith("• `Atualizou: \"Wi-Fi\" (fact) — senha_do_wifi em *config* e 'cofre'`"), 'recibo: cada item entre crases (markdown do conteúdo não vira formatação)', recibo9);
+    const goalSrc9 = fsJ.readFileSync(require.resolve('../../loop/GoalExecutionLoop.ts'), 'utf-8');
+    assert(/t\.sessionId === goal\.conversationId && t\.startTime >= startMs/.test(goalSrc9), 'objetivo: só o trace que começou neste passo conta (o do passo anterior não duplica)');
+    const fakeTurno: any = { activeTurns: new Map([['a', new AbortController()], ['v', new AbortController()]]), turnStartTimes: new Map([['a', Date.now()], ['v', Date.now() - 8 * 60_000]]), TURN_STALE_MS: 7 * 60_000 };
+    assert(proto.turnoAtivoNaoVencido.call(fakeTurno, 'a') === true && proto.turnoAtivoNaoVencido.call(fakeTurno, 'v') === false && proto.turnoAtivoNaoVencido.call(fakeTurno, 'x') === false,
+        'turnoAtivoNaoVencido: ativo e recente → sim; vencido ou sem turno → não');
+    const usos9 = srcJ.split('this.turnoAtivoNaoVencido(conversationId)').length - 1;
+    assert(usos9 === 2 && !/Date\.now\(\) - startedAt > this\.TURN_STALE_MS/.test(srcJ), 'a condição mora num lugar só (run() e o guard perguntam ao mesmo método)', usos9);
 
     console.log('\n=== S448-6 — painel web: o cartão de aprovação descreve a ação de memória ===');
     const rota = fs.readFileSync(require.resolve('../../dashboard/routes/chat.ts'), 'utf-8');

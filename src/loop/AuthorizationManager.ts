@@ -12,6 +12,15 @@ import { ToolRegistry } from '../core/ToolRegistry';
 
 const log = createLogger('AuthorizationManager');
 
+/**
+ * ADR-028: texto com dado do usuário (conteúdo de nó) entre crases, como o comando do exec_command — `*` e `_` do conteúdo
+ * não viram formatação no Telegram. Crase interna vira aspa simples (fecharia o trecho). Usado no pedido de confirmação e
+ * no recibo "O que foi alterado" (`AgentLoop.comAlteracoes`).
+ */
+export function literalNoMarkdown(s: string): string {
+    return `\`${s.replace(/`/g, "'")}\``;
+}
+
 export interface PendingAction {
     toolName: string;
     arguments: Record<string, any>;
@@ -92,9 +101,7 @@ export class AuthorizationManager {
     } {
         // ADR-028: a tool que apaga dado do usuário descreve o que sairia — a mesma resposta que fez o portão perguntar.
         const confirmacao = ToolRegistry.confirmacaoDoDono(toolName, args);
-        // Entre crases, como o comando do exec_command: `*`, `_` do conteúdo do nó não viram formatação no Telegram.
-        const literal = (s: string) => `\`${s.replace(/`/g, "'")}\``;
-        if (confirmacao) return { emoji: '🗑️', action: confirmacao.acao, details: confirmacao.detalhes.map(literal), risk: 'irreversible' };
+        if (confirmacao) return { emoji: '🗑️', action: confirmacao.acao, details: confirmacao.detalhes.map(literalNoMarkdown), risk: 'irreversible' };
 
         switch (toolName) {
             case 'exec_command': {
