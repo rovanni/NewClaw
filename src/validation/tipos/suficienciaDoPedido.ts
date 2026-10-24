@@ -23,6 +23,12 @@ export interface DecisaoDeSuficiencia {
     /** Dados resolvidos, com o valor e o trecho literal de onde vieram. */
     resolvidos: Array<{ dado: string; valor?: string; trecho?: string }>;
     motivo?: string;
+    /**
+     * ADR-029: o pedido reescrito para ser entendido SEM a conversa ("Pode fazer?" → "Criar a versão estilo CamScanner em
+     * Rust e HTML…"). O padrão "standalone question" da LangChain/LlamaIndex, na chamada que já resolve o referente. Vira
+     * `goal.objective`; ausente quando o modelo não o escreveu ou sem veredito — aí vale o texto do pedido, como antes.
+     */
+    pedidoCompleto?: string;
 }
 
 export const TIPO_SUFICIENCIA_DO_PEDIDO = 'suficiencia_do_pedido';
@@ -37,7 +43,8 @@ export function adaptarSuficiencia(v: VereditoPadrao): DecisaoDeSuficiencia {
     }
     // Falta dado (nao) ou a origem citada não existe (sem_evidencia, posto pela pré-verificação): pergunta obrigatória.
     if (faltando.length > 0) return { acao: 'perguntar', pergunta, faltando, resolvidos, motivo: v.motivo };
-    return { acao: 'seguir', faltando, resolvidos, motivo: v.motivo };
+    const pedidoCompleto = (v.extras?.pedido_completo ?? '').trim();
+    return { acao: 'seguir', faltando, resolvidos, motivo: v.motivo, ...(pedidoCompleto ? { pedidoCompleto } : {}) };
 }
 
 export const descritorSuficienciaDoPedido: DescritorDeValidacao<DecisaoDeSuficiencia> = {
@@ -70,6 +77,11 @@ export const descritorSuficienciaDoPedido: DescritorDeValidacao<DecisaoDeSuficie
     camposExtras: [{
         nome: 'pergunta_ao_usuario',
         instrucao: 'Escreva sempre que houver itens: a pergunta curta e cordial que pediria ao usuário exatamente os dados listados, no MESMO IDIOMA do pedido do usuário. O sistema só a usa se algum dado não estiver comprovado. Vazio quando não há itens.',
+    }, {
+        // ADR-029 (24/10/2026): "Pode fazer?" virou um objetivo literal "Pode fazer?" — este juiz já tinha entendido, pela
+        // conversa, que era criar a versão do CamScanner em Rust+HTML, mas só a decisão seguir/perguntar era usada.
+        nome: 'pedido_completo',
+        instrucao: 'Reescreva o pedido do usuário como um pedido completo, que se entenda SEM a conversa: troque referências ("isso", "pode fazer?", "essa porta", "o mesmo") pelo que está ESCRITO na conversa recente, no MESMO IDIOMA do pedido. Não acrescente nada que não esteja escrito, não responda ao pedido e não invente detalhes. Se o pedido já se entende sozinho, copie-o igual.',
     }],
     raciocinio: 'livre',   // respeita o provedor e o modelo: com think:false o glm-5.3 escrevia ~25 mil chars de análise no CONTEÚDO (produção 10/10)
     semVeredito: 'liberar',   // ADR-015: sem veredito não bloqueia o pedido
