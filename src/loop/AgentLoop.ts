@@ -464,6 +464,8 @@ export interface TurnState {
      * abort de 60 s, elas podiam disputar a GPU/fila com o pedido seguinte; o próximo `run()` da conversa aborta este sinal.
      */
     validacoesEmSegundoPlano?: AbortController;
+    /** ADR-028: o que as ferramentas mudaram neste turno (`ToolResult.alteracao`), na ordem — `run()` anexa à resposta. */
+    alteracoes?: string[];
 }
 
 /** S5: marca literal da linha em que a resposta parcial avisa o que NÃO foi confirmado (o resto da resposta é o que foi sustentado). */
@@ -688,6 +690,8 @@ export class AgentLoop {
     ): Promise<string> {
         const ctx = result.continuationCtx;
         const isApproved = result.decision === 'approved';
+        // ADR-028: a ação aprovada que mudou dados diz o que mudou, qualquer que seja o texto abaixo.
+        const comRecibo = (texto: string) => result.alteracao ? AgentLoop.comAlteracoes(texto, [result.alteracao]) : texto;
 
         log.info(`[WF] resume conv=${conversationId} decision=${result.decision} success=${result.success} workflow=${ctx.workflow}`);
         // Limpa o safety net legado — o WorkflowEngine já resolveu, authManager não deve disparar
@@ -758,7 +762,7 @@ export class AgentLoop {
         if (!profile) {
             log.error('[WF] [PROFILE-FALLBACK] requested=chat fallback=none — no model profile available');
             const status = contextPayload.decision === 'rejected' ? 'Ação cancelada.' : 'Ação executada com sucesso.';
-            return `✅ ${status}`;
+            return comRecibo(`✅ ${status}`);
         }
 
         try {
@@ -767,10 +771,10 @@ export class AgentLoop {
             );
             const text = extractFinalText(response, null);
             log.info(`[WF] synthesis done conv=${conversationId} chars=${text.length}`);
-            return text || '⚠️ Sem resposta do modelo.';
+            return comRecibo(text || '⚠️ Sem resposta do modelo.');
         } catch (err) {
             log.error('[WF] resumeFromWorkflow LLM error:', err);
-            return '⚠️ Erro ao gerar resposta.';
+            return comRecibo('⚠️ Erro ao gerar resposta.');
         }
     }
 
@@ -974,6 +978,26 @@ export class AgentLoop {
     static comAvisoSemVeredito(resposta: string, idioma: string = process.env.APP_LANG || 'pt-BR'): string {
         const aviso = AgentLoop.AVISO_SEM_VEREDITO[idioma] ?? AgentLoop.AVISO_SEM_VEREDITO['pt-BR'];
         return `${resposta.trimEnd()}\n\n${aviso}`;
+    }
+
+    /**
+     * ADR-028: a resposta com a lista do que as ferramentas mudaram neste turno. Pedido da operadora (23/10/2026): o juiz
+     * bloqueou a resposta de um turno que tinha mesclado, atualizado e apagado nós da memória, e ela nunca soube das
+     * mudanças. Texto fixo do núcleo em pt-BR (mesmo débito de idioma do relato de progresso, ADR-027).
+     */
+    static comAlteracoes(texto: string, alteracoes: readonly string[]): string {
+        if (alteracoes.length === 0) return texto;
+        const MOSTRAR = 20;
+        const linhas = alteracoes.slice(0, MOSTRAR).map(a => `• ${a}`);
+        if (alteracoes.length > MOSTRAR) linhas.push(`• …e mais ${alteracoes.length - MOSTRAR}`);
+        return `${texto.trimEnd()}\n\n📝 O que foi alterado neste turno:\n${linhas.join('\n')}`;
+    }
+
+    /** ADR-028: guarda o que uma chamada bem-sucedida mudou, para o fim do turno contar (ver `comAlteracoes`). */
+    private registrarAlteracao(conversationId: string, result: ToolResult): void {
+        if (!result.success || !result.alteracao) return;
+        const turno = this.getTurnState(conversationId);
+        (turno.alteracoes ??= []).push(result.alteracao);
     }
 
     private static groundingBlockedMessage(state: GroundingState, unconfirmedClaims?: Array<{ claim: string; verdict: string }>): string {
@@ -1514,10 +1538,18 @@ export class AgentLoop {
                 ...(turnState?.groundingBlock ? { groundingBlock: turnState.groundingBlock } : {}),
                 ...(turnState?.providerFailure ? { providerFailure: turnState.providerFailure } : {}),
             };
-            if (Object.keys(facts).length === 0) return result;
-            return typeof result === 'string'
-                ? { text: result, ...facts }
-                : { ...result, ...facts };
+            // ADR-028: o que mudou vai junto de QUALQUER resposta do turno — a normal, a bloqueada pelo juiz, o pedido de
+            // confirmação. Anexado aqui, depois do juiz, porque é fato do sistema e não afirmação do modelo. Passo de
+            // objetivo fica de fora: o texto dele é material do objetivo, não a resposta ao usuário.
+            const alteracoes = context?.goalTrace || (typeof result !== 'string' && result.concurrentTurnRejected)
+                ? undefined : turnState?.alteracoes;
+            const comLista = !alteracoes?.length ? result
+                : typeof result === 'string' ? AgentLoop.comAlteracoes(result, alteracoes)
+                : { ...result, text: AgentLoop.comAlteracoes(result.text, alteracoes) };
+            if (Object.keys(facts).length === 0) return comLista;
+            return typeof comLista === 'string'
+                ? { text: comLista, ...facts }
+                : { ...comLista, ...facts };
         } finally {
             // S229: o comentário anterior aqui ("movido para clearActiveTurn via MessageBus para
             // suportar Outbox") não corresponde ao código real — WebChannelAdapter/chat.ts (onde
@@ -1980,7 +2012,8 @@ export class AgentLoop {
         move('TOOL_COMPLETED', { step: 1, tool: toolName, success: true });
 
         traceManager.addStep(trace, 'tool_call',   { tool: toolName, input: toolArgs });
-        traceManager.addStep(trace, 'tool_result', { tool: toolName, success: true, output: toolResult.output });
+        traceManager.addStep(trace, 'tool_result', { tool: toolName, success: true, output: toolResult.output, ...(toolResult.alteracao ? { alteracao: toolResult.alteracao } : {}) });
+        this.registrarAlteracao(conversationId, toolResult);
         this.decisionMemory.recordFromLoop(toolName, true, 0, userText);
         this.skillLearner.recordPattern(toolName, true, 0, intentDecision.topicSlug);
 
@@ -2767,7 +2800,8 @@ export class AgentLoop {
                 // (as tools retornam `{ success: false, output: '', error }`), então gravar só
                 // `output` registrava QUE falhou e perdia o PORQUÊ — e o GoalExecutionLoop, sem o
                 // motivo, acabava reusando a resposta ao usuário como se fosse erro.
-                traceManager.addStep(trace, 'tool_result', { tool: resolvedToolName, success: result.success, output: result.output, error: result.error });
+                traceManager.addStep(trace, 'tool_result', { tool: resolvedToolName, success: result.success, output: result.output, error: result.error, ...(result.alteracao ? { alteracao: result.alteracao } : {}) });
+                this.registrarAlteracao(conversationId, result);
                 this.decisionMemory.recordFromLoop(resolvedToolName, result.success, toolDuration, userText);
                 this.skillLearner.recordPattern(resolvedToolName, result.success, toolDuration, intentDecision.topicSlug);
 
@@ -3117,7 +3151,8 @@ export class AgentLoop {
         traceManager.addStep(trace, 'tool_call', { tool: resolvedToolName, input: resolvedArgs });
         // ADR-011 — mesma razão do caminho json_action acima: sem `error`, o trace registra a
         // falha e perde o motivo, que só existe em `ToolResult.error`.
-        traceManager.addStep(trace, 'tool_result', { tool: resolvedToolName, success: result.success, output: result.output, error: result.error });
+        traceManager.addStep(trace, 'tool_result', { tool: resolvedToolName, success: result.success, output: result.output, error: result.error, ...(result.alteracao ? { alteracao: result.alteracao } : {}) });
+        this.registrarAlteracao(conversationId, result);
         this.decisionMemory.recordFromLoop(resolvedToolName, result.success, toolDuration, userText);
         this.skillLearner.recordPattern(resolvedToolName, result.success, toolDuration, intentDecision.topicSlug);
 

@@ -10,11 +10,11 @@
  * - merge: Mesclar nós duplicados (análise inteligente)
  */
 
-import { ToolExecutor, ToolResult } from '../loop/agentLoopTypes';
+import { ToolExecutor, ToolResult, ConfirmacaoDoDono } from '../loop/agentLoopTypes';
 import { MemoryManager, MemoryNode } from '../memory/MemoryManager';
 import type { MemoryFacade } from '../memory/MemoryFacade';
 import { modeloDeEmbedding } from '../memory/EmbeddingService';
-import { isProtectedNode } from '../memory/MemoryFacade';
+import { isProtectedNode, descreverNo } from '../memory/MemoryFacade';
 import { errorMessage } from '../shared/errors';
 import type { ExecutionOutcome } from '../memory/ProceduralMemoryService';
 import { classifyDomain, type DomainClassifierLLM } from '../memory/DomainRegistry';
@@ -106,6 +106,42 @@ export class MemoryWriteTool implements ToolExecutor {
             this.cognitiveIndex = new CognitiveMemoryIndex(this.memoryManager.getDatabase());
         }
         return this.cognitiveIndex;
+    }
+
+    /**
+     * ADR-028: apagar e mesclar (que apaga os nós absorvidos) só com a confirmação da dona. Descreve por nome e conteúdo,
+     * para ela decidir sem conhecer ids. `null` quando a chamada não apagaria nada — inclusive quando a própria
+     * execução vai recusá-la (nó inexistente ou protegido): perguntar sobre isso seria pedir confirmação para nada.
+     */
+    confirmacaoDoDono(args: Record<string, unknown>): ConfirmacaoDoDono | null {
+        const id = typeof args.id === 'string' ? args.id : '';
+        if (args.action === 'delete') {
+            if (!id || isProtectedNode(id)) return null;
+            const node = this.memoryManager.getNode(id);
+            if (!node) return null;
+            const conexoes = this.facade.countNodeEdges(id);
+            return {
+                acao: 'Apagar uma informação da memória',
+                detalhes: [descreverNo(node), ...(conexoes > 0 ? [`${conexoes} ligação(ões) com outras informações saem junto`] : [])],
+            };
+        }
+        if (args.action === 'merge' && Array.isArray(args.merge_ids)) {
+            const alvo = id ? this.memoryManager.getNode(id) : null;
+            if (!alvo || isProtectedNode(id)) return null;
+            const absorvidos = (args.merge_ids as unknown[])
+                .filter((m): m is string => typeof m === 'string' && m !== id && !isProtectedNode(m))
+                .map(m => this.memoryManager.getNode(m))
+                .filter((n): n is MemoryNode => !!n);
+            if (absorvidos.length === 0) return null;
+            return {
+                acao: 'Juntar informações repetidas da memória',
+                detalhes: [
+                    `Fica: ${descreverNo(alvo)}`,
+                    ...absorvidos.map(n => `Sai (o texto vai para a que fica): ${descreverNo(n)}`),
+                ],
+            };
+        }
+        return null;
     }
 
     async execute(args: Record<string, any>): Promise<ToolResult> {
@@ -224,7 +260,7 @@ export class MemoryWriteTool implements ToolExecutor {
             if (domain) this.facade.setNodeDomain(id, domain as string);
             await this.regenerateEmbedding(id, existing);
 
-            return { success: true, output: `✅ Nó "${id}" atualizado (já existia).` };
+            return { success: true, output: `✅ Nó "${id}" atualizado (já existia).`, alteracao: `Atualizou: ${descreverNo(existing)}` };
         }
 
         const newNode: MemoryNode = { id, type: type as MemoryNode['type'], name, content };
@@ -281,7 +317,7 @@ export class MemoryWriteTool implements ToolExecutor {
             ? ` ⚠️ Já existia um nó parecido: "${parecido.id}" (${parecido.type}, "${parecido.name}"). Se for o MESMO fato, mescle os dois `
               + `(nada se perde): memory_write action="merge" id="${id}" merge_ids=["${parecido.id}"]. Se for outro fato, não faça nada.`
             : '';
-        return { success: true, output: `✅ Nó "${id}" (${type}) criado e auto-conectado ao grafo. Use action=connect para ligações adicionais.${avisoDeParecido}` };
+        return { success: true, output: `✅ Nó "${id}" (${type}) criado e auto-conectado ao grafo. Use action=connect para ligações adicionais.${avisoDeParecido}`, alteracao: `Guardou: ${descreverNo(newNode)}` };
     }
 
     // ── SIMILARITY CHECK ──────────────────────────────────────
@@ -345,7 +381,7 @@ export class MemoryWriteTool implements ToolExecutor {
         // Force re-indexing so updated content is visible immediately.
         try { this.getCognitiveIndex().getSummaries([id]); } catch { /* non-fatal */ }
 
-        return { success: true, output: `✅ Nó "${id}" atualizado.` };
+        return { success: true, output: `✅ Nó "${id}" atualizado.`, alteracao: `Atualizou: ${descreverNo(node)}` };
     }
 
     // ── CONNECT ────────────────────────────────────────────────
@@ -366,7 +402,7 @@ export class MemoryWriteTool implements ToolExecutor {
         // Generate embedding for from node
         await this.regenerateEmbedding(from, fromNode);
 
-        return { success: true, output: `✅ Conectado: ${from} → [${relation}] → ${to}.` };
+        return { success: true, output: `✅ Conectado: ${from} → [${relation}] → ${to}.`, alteracao: `Ligou "${fromNode.name}" a "${toNode.name}" (${relation})` };
     }
 
     // ── DELETE ────────────────────────────────────────────────
@@ -385,7 +421,7 @@ export class MemoryWriteTool implements ToolExecutor {
         const edgeCount = this.facade.countNodeEdges(id as string);
         this.facade.deleteNodeFull(id as string);
 
-        return { success: true, output: `✅ Nó "${id}" (${node.type}/${node.name}) removido com ${edgeCount} conexões.` };
+        return { success: true, output: `✅ Nó "${id}" (${node.type}/${node.name}) removido com ${edgeCount} conexões.`, alteracao: `Apagou: ${descreverNo(node)}` };
     }
 
     // ── REINFORCE ─────────────────────────────────────────────
@@ -406,6 +442,7 @@ export class MemoryWriteTool implements ToolExecutor {
         return {
             success: true,
             output: `${emoji} Execução de "${id}" (${node.type}/${node.name}) registrada como ${outcome}.`,
+            alteracao: `Registrou o resultado (${outcome}) de "${node.name}"`,
         };
     }
 
@@ -441,6 +478,7 @@ export class MemoryWriteTool implements ToolExecutor {
         }
 
         const results: string[] = [];
+        const absorvidos: string[] = [];
         let edgesTransferred = 0;
         let contentMerged = false;
 
@@ -506,6 +544,7 @@ export class MemoryWriteTool implements ToolExecutor {
             this.facade.deleteNodeFull(sourceId as string);
 
             results.push(`✅ "${sourceId}" (${source.type}/${source.name}) mesclado em "${id}"`);
+            absorvidos.push(`"${source.name}"`);
         }
 
         // Update target with merged content
@@ -520,7 +559,8 @@ export class MemoryWriteTool implements ToolExecutor {
 
         return {
             success: true,
-            output: `✅ Merge concluído: ${merge_ids.length} nós mesclados em "${id}". ${edgesTransferred} conexões transferidas.\n${results.join('\n')}`
+            output: `✅ Merge concluído: ${merge_ids.length} nós mesclados em "${id}". ${edgesTransferred} conexões transferidas.\n${results.join('\n')}`,
+            ...(absorvidos.length > 0 ? { alteracao: `Juntou em "${target.name}" (as outras foram apagadas): ${absorvidos.join(', ')}` } : {}),
         };
     }
 

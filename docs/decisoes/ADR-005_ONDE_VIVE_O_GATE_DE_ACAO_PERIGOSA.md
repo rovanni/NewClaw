@@ -158,3 +158,10 @@ mesmo pedido de apresentação que executava `bash` calado agora devolve o card 
   goal restaura o comportamento anterior.
 * **Validação exigida**: unitário + regressão + execução real do cenário exato deste documento
   (`mkdir` em SAFE pelo painel deve parar e esperar).
+
+## 7. Emenda de 23/10/2026 — apagar dado do usuário pergunta em todos os modos (ADR-028)
+
+O predicado ganhou uma segunda pergunta, anterior ao modo: a ferramenta declara, por chamada, se ela apaga dado do usuário
+(`ToolExecutor.confirmacaoDoDono`). Se apaga, pede confirmação **inclusive em DEVELOPER e GOD** — decisão da operadora, depois
+que o agente apagou e mesclou nós da memória sem perguntar, em GOD. O ponto único continua o mesmo. Detalhes, riscos e
+pendências em `ADR-028_MEMORIA_APAGAR_SO_COM_CONFIRMACAO.md`.

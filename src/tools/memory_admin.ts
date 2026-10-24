@@ -16,7 +16,8 @@
  * - inspect: Inspecionar um nó específico com suas conexões
  */
 
-import { ToolExecutor, ToolResult } from '../loop/agentLoopTypes';
+import { ToolExecutor, ToolResult, ConfirmacaoDoDono } from '../loop/agentLoopTypes';
+import { descreverNo } from '../memory/MemoryFacade';
 import { MemoryManager } from '../memory/MemoryManager';
 import type { MemoryGraphRepository } from '../memory/MemoryGraphRepository';
 import { errorMessage } from '../shared/errors';
@@ -55,6 +56,21 @@ export class MemoryAdminTool implements ToolExecutor {
     constructor(memoryManager: MemoryManager) {
         this.repo = memoryManager.getGraphRepository();
         this.memoryManager = memoryManager;
+    }
+
+    /** ADR-028: a limpeza apaga nós — só com a confirmação da dona, mostrando quais. As demais ações só leem ou recalculam. */
+    confirmacaoDoDono(args: Record<string, unknown>): ConfirmacaoDoDono | null {
+        if (args.action !== 'cleanup') return null;
+        const nos = this.repo.nosParaLimpeza();
+        if (nos.length === 0) return null;
+        const MOSTRAR = 10;
+        return {
+            acao: `Limpar a memória: apagar ${nos.length} informação(ões) vazia(s) ou solta(s)`,
+            detalhes: [
+                ...nos.slice(0, MOSTRAR).map(descreverNo),
+                ...(nos.length > MOSTRAR ? [`…e mais ${nos.length - MOSTRAR}`] : []),
+            ],
+        };
     }
 
     async execute(args: Record<string, any>): Promise<ToolResult> {
@@ -158,6 +174,8 @@ export class MemoryAdminTool implements ToolExecutor {
     // ── CLEANUP ───────────────────────────────────────────────────────────────
 
     private cleanup(): ToolResult {
+        // Os nomes antes de apagar: depois, ninguém mais sabe o que saiu (ADR-028, ToolResult.alteracao).
+        const nomes = this.repo.nosParaLimpeza().map(n => `"${n.name}"`);
         const result = this.repo.cleanupGhostsAndOrphans();
 
         if (result.removedIds.length === 0) {
@@ -166,7 +184,8 @@ export class MemoryAdminTool implements ToolExecutor {
 
         return {
             success: true,
-            output: `🧹 Cleanup concluído:\n   ${result.deletedNodes} nós removidos\n   ${result.deletedEdges} arestas removidas\n   ${result.deletedEmbeddings} embeddings removidos\n   ${result.deletedMetrics} métricas removidas\n   Protegidos: identity, core:*, core_*, pref_*`
+            output: `🧹 Cleanup concluído:\n   ${result.deletedNodes} nós removidos\n   ${result.deletedEdges} arestas removidas\n   ${result.deletedEmbeddings} embeddings removidos\n   ${result.deletedMetrics} métricas removidas\n   Protegidos: identity, core:*, core_*, pref_*`,
+            alteracao: `Apagou ${result.deletedNodes} informação(ões) vazia(s) ou solta(s): ${nomes.slice(0, 10).join(', ')}${nomes.length > 10 ? ` e mais ${nomes.length - 10}` : ''}`,
         };
     }
 

@@ -68,6 +68,8 @@ export interface WorkflowStepResult {
      * mesmo de chegar em GoalExecutionLoop, que também não a registrava em GoalAttempt.
      */
     artifactPaths?: string[];
+    /** ADR-028: o que a ação aprovada mudou (ToolResult.alteracao), repassado — a resposta da aprovação o mostra. */
+    alteracao?: string;
 }
 
 /** Callback registrado pelo AgentController nos adapters de canal */

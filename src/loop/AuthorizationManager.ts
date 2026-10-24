@@ -7,6 +7,7 @@
 import { createLogger } from '../shared/AppLogger';
 import { ResponseOption } from '../channels/ChannelAdapter';
 import { isDestructiveCommand } from '../shared/destructiveCommandPatterns';
+import { ToolRegistry } from '../core/ToolRegistry';
 
 
 const log = createLogger('AuthorizationManager');
@@ -64,7 +65,9 @@ export class AuthorizationManager {
             '',
             ...details.map(d => `• ${d}`),
             '',
-            risk === 'high'
+            risk === 'irreversible'
+                ? '⚠️ _Depois de apagado, só volta restaurando um backup. Confirme apenas se tiver certeza._'
+                : risk === 'high'
                 ? '⚠️ _Esta ação pode modificar o sistema. Confirme apenas se esperava isso._'
                 : '_Confirme para autorizar ou cancele para tentar outra abordagem._',
         ];
@@ -85,8 +88,12 @@ export class AuthorizationManager {
     }
 
     private summarize(toolName: string, args: Record<string, any>): {
-        emoji: string; action: string; details: string[]; risk: 'low' | 'medium' | 'high';
+        emoji: string; action: string; details: string[]; risk: 'low' | 'medium' | 'high' | 'irreversible';
     } {
+        // ADR-028: a tool que apaga dado do usuário descreve o que sairia — a mesma resposta que fez o portão perguntar.
+        const confirmacao = ToolRegistry.confirmacaoDoDono(toolName, args);
+        if (confirmacao) return { emoji: '🗑️', action: confirmacao.acao, details: confirmacao.detalhes, risk: 'irreversible' };
+
         switch (toolName) {
             case 'exec_command': {
                 const cmd = String(args.command || '').trim();
