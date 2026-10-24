@@ -39,6 +39,16 @@ export function isProtectedNode(id: string): boolean {
     );
 }
 
+/**
+ * ADR-028: um nó como a dona o reconhece — nome, tipo e o começo do conteúdo, nunca só o id. Usado no pedido de
+ * confirmação antes de apagar e na lista "o que foi alterado" (memory_write, memory_admin).
+ */
+export function descreverNo(node: { name?: string; type?: string; content?: string | null }): string {
+    const conteudo = (node.content || '').replace(/\s+/g, ' ').trim();
+    const trecho = conteudo.length > 120 ? `${conteudo.slice(0, 120)}…` : conteudo;
+    return `"${node.name || '(sem nome)'}" (${node.type || '?'})${trecho ? ` — ${trecho}` : ' — vazio'}`;
+}
+
 export interface EdgeRow {
     from_node: string;
     to_node: string;

@@ -42,6 +42,13 @@ export interface ToolResult {
      * turno** (ver `ToolRegistry.endsTurn`), justamente para que exista um LLM depois.
      */
     deliveryFacts?: string[];
+    /**
+     * ADR-028: o que esta chamada mudou nos dados do usuário, numa linha que ele entende (nomes, não ids). Escrito pela
+     * tool no instante da mudança — depois de apagar, só ela ainda sabia o nome do que apagou. Ausente em leitura.
+     * Vai para o trace e para a lista "o que foi alterado neste turno", que chega ao usuário mesmo quando o juiz
+     * bloqueia a resposta (antes, as mudanças sumiam junto com ela — produção, 23/10/2026).
+     */
+    alteracao?: string;
 }
 
 /**
@@ -91,7 +98,17 @@ export interface ToolExecutor {
      *  só texto de prompt, não valida nada — ver RFC_ARCH-015_SchemaGeneratedRequiredArgs.md
      *  para por que a metade de validação (detectMissingRequiredArgs) não foi aprovada. */
     requiredArgsHint?: string;
+    /** ADR-028: esta chamada apaga dado do usuário? Devolve o que seria apagado, nas palavras dela, para o pedido de
+     *  confirmação — ou `null` quando não apaga nada. Vale em TODOS os modos (decisão da operadora): quem consome é
+     *  `ToolRegistry.requiresAuthorization()`. Co-localizado na tool porque só ela sabe o que a chamada remove. */
+    confirmacaoDoDono?(args: Record<string, unknown>): ConfirmacaoDoDono | null;
     execute(args: Record<string, unknown>): Promise<ToolResult>;
+}
+
+/** ADR-028: o que uma chamada apagaria, mostrado no pedido de confirmação. */
+export interface ConfirmacaoDoDono {
+    acao: string;
+    detalhes: string[];
 }
 
 export interface LoopMetrics {

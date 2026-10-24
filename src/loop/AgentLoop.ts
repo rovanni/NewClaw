@@ -25,7 +25,7 @@ import { MemoryManager, descreverNoDaMemoria } from '../memory/MemoryManager';
 import { SkillLearner } from './SkillLearner';
 import { AgentStateManager } from '../core/AgentStateManager';
 import { extractText } from './ResponseAdapter';
-import { AuthorizationManager } from './AuthorizationManager';
+import { AuthorizationManager, literalNoMarkdown } from './AuthorizationManager';
 import { ProtocolParser } from './ProtocolParser';
 import { createLogger } from '../shared/AppLogger';
 import { intervaloDoRelatoMs, montarRelatoDoTurno } from './relatoDeProgresso';
@@ -464,6 +464,8 @@ export interface TurnState {
      * abort de 60 s, elas podiam disputar a GPU/fila com o pedido seguinte; o próximo `run()` da conversa aborta este sinal.
      */
     validacoesEmSegundoPlano?: AbortController;
+    /** ADR-028: o que as ferramentas mudaram neste turno (`ToolResult.alteracao`), na ordem — `run()` anexa à resposta. */
+    alteracoes?: string[];
 }
 
 /** S5: marca literal da linha em que a resposta parcial avisa o que NÃO foi confirmado (o resto da resposta é o que foi sustentado). */
@@ -688,6 +690,11 @@ export class AgentLoop {
     ): Promise<string> {
         const ctx = result.continuationCtx;
         const isApproved = result.decision === 'approved';
+        // ADR-028: o que o turno já tinha mudado antes de parar para perguntar, mais o que a ação aprovada mudou — junto de
+        // qualquer texto abaixo, aprovada ou recusada.
+        const alteracoesAntes = ctx.alteracoesAntes ?? [];
+        const recibo = [...alteracoesAntes, ...(result.alteracao ? [result.alteracao] : [])];
+        const comRecibo = (texto: string) => AgentLoop.comAlteracoes(texto, recibo);
 
         log.info(`[WF] resume conv=${conversationId} decision=${result.decision} success=${result.success} workflow=${ctx.workflow}`);
         // Limpa o safety net legado — o WorkflowEngine já resolveu, authManager não deve disparar
@@ -704,6 +711,8 @@ export class AgentLoop {
             step: ctx.step,
             userGoal: ctx.userGoal,
             ...(ctx.activeResources?.length ? { activeResources: ctx.activeResources } : {}),
+            // Fato para o modelo não negar o que já foi gravado (ADR-028).
+            ...(alteracoesAntes.length ? { alteracoesJaGravadasNesteTurno: alteracoesAntes } : {}),
         };
 
         if (isApproved && result.success) {
@@ -736,7 +745,10 @@ export class AgentLoop {
             ? result.success
                 ? 'O comando foi executado e o resultado está no campo "toolResult" do JSON acima. Apresente esse conteúdo ao usuário de forma clara e útil. Não peça ao usuário para colar ou informar a saída — você já a possui no campo toolResult.'
                 : failTask
-            : 'Informe que a ação foi cancelada e ofereça uma alternativa sem precisar de autorização, se disponível.';
+            : 'Informe que a ação foi cancelada e ofereça uma alternativa sem precisar de autorização, se disponível.'
+              + (alteracoesAntes.length
+                  ? ' Só a ação recusada foi cancelada: o que está em "alteracoesJaGravadasNesteTurno" já tinha sido gravado antes do pedido e continua valendo — não diga que nada foi gravado.'
+                  : '');
 
         // Merge into a single system message — some Ollama models discard all but the first
         // system message, causing the toolResult JSON to be invisible to the LLM.
@@ -758,7 +770,7 @@ export class AgentLoop {
         if (!profile) {
             log.error('[WF] [PROFILE-FALLBACK] requested=chat fallback=none — no model profile available');
             const status = contextPayload.decision === 'rejected' ? 'Ação cancelada.' : 'Ação executada com sucesso.';
-            return `✅ ${status}`;
+            return comRecibo(`✅ ${status}`);
         }
 
         try {
@@ -767,10 +779,10 @@ export class AgentLoop {
             );
             const text = extractFinalText(response, null);
             log.info(`[WF] synthesis done conv=${conversationId} chars=${text.length}`);
-            return text || '⚠️ Sem resposta do modelo.';
+            return comRecibo(text || '⚠️ Sem resposta do modelo.');
         } catch (err) {
             log.error('[WF] resumeFromWorkflow LLM error:', err);
-            return '⚠️ Erro ao gerar resposta.';
+            return comRecibo('⚠️ Erro ao gerar resposta.');
         }
     }
 
@@ -974,6 +986,26 @@ export class AgentLoop {
     static comAvisoSemVeredito(resposta: string, idioma: string = process.env.APP_LANG || 'pt-BR'): string {
         const aviso = AgentLoop.AVISO_SEM_VEREDITO[idioma] ?? AgentLoop.AVISO_SEM_VEREDITO['pt-BR'];
         return `${resposta.trimEnd()}\n\n${aviso}`;
+    }
+
+    /**
+     * ADR-028: a resposta com a lista do que as ferramentas mudaram neste turno. Pedido da operadora (23/10/2026): o juiz
+     * bloqueou a resposta de um turno que tinha mesclado, atualizado e apagado nós da memória, e ela nunca soube das
+     * mudanças. Texto fixo do núcleo em pt-BR (mesmo débito de idioma do relato de progresso, ADR-027).
+     */
+    static comAlteracoes(texto: string, alteracoes: readonly string[], onde: 'neste turno' | 'neste objetivo' = 'neste turno'): string {
+        if (alteracoes.length === 0) return texto;
+        const MOSTRAR = 20;
+        const linhas = alteracoes.slice(0, MOSTRAR).map(a => `• ${literalNoMarkdown(a)}`);
+        if (alteracoes.length > MOSTRAR) linhas.push(`• …e mais ${alteracoes.length - MOSTRAR}`);
+        return `${texto.trimEnd()}\n\n📝 O que foi alterado ${onde}:\n${linhas.join('\n')}`;
+    }
+
+    /** ADR-028: guarda o que uma chamada bem-sucedida mudou, para o fim do turno contar (ver `comAlteracoes`). */
+    private registrarAlteracao(conversationId: string, result: ToolResult): void {
+        if (!result.success || !result.alteracao) return;
+        const turno = this.getTurnState(conversationId);
+        (turno.alteracoes ??= []).push(result.alteracao);
     }
 
     private static groundingBlockedMessage(state: GroundingState, unconfirmedClaims?: Array<{ claim: string; verdict: string }>): string {
@@ -1498,26 +1530,41 @@ export class AgentLoop {
         const validacoesEmSegundoPlano = new AbortController();
         pendentes.push(validacoesEmSegundoPlano);
         this.validacoesPorConversa?.set(conversationId, pendentes);
-        this.activeTurnStates.set(conversationId, {
-            cognitiveWorkspace: new CognitiveWorkspace(),
-            lastToolExecution: null,
-            pendingObserverFeedback: [],
-            validacoesEmSegundoPlano,
-        });
+        // ADR-028 (code-review): uma chamada que o guard de runWithTools vai recusar não troca nem limpa o estado do turno
+        // legítimo: antes, a lista do que ele já tinha mudado sumia. A MESMA pergunta do guard (turnoAtivoNaoVencido), e sem
+        // espera entre as duas, então a previsão é a decisão.
+        const concorrente = this.turnoAtivoNaoVencido(conversationId);
+        if (!concorrente) {
+            this.activeTurnStates.set(conversationId, {
+                cognitiveWorkspace: new CognitiveWorkspace(),
+                lastToolExecution: null,
+                pendingObserverFeedback: [],
+                validacoesEmSegundoPlano,
+            });
+        }
         const pararRelato = this.iniciarRelatoDoTurno(conversationId, context);
         try {
             const result = await this.runWithTools(conversationId, userText, 0, userId, context, options);
             // Issues 049/053: bloqueio de grounding e falha do provedor saem como fato estruturado, não só
             // como a prosa de `text`.
-            const turnState = this.activeTurnStates.get(conversationId);
+            // A recusa concorrente não leva fatos do turno legítimo (o estado na tabela é o dele).
+            const turnState = concorrente ? undefined : this.activeTurnStates.get(conversationId);
             const facts = {
                 ...(turnState?.groundingBlock ? { groundingBlock: turnState.groundingBlock } : {}),
                 ...(turnState?.providerFailure ? { providerFailure: turnState.providerFailure } : {}),
             };
-            if (Object.keys(facts).length === 0) return result;
-            return typeof result === 'string'
-                ? { text: result, ...facts }
-                : { ...result, ...facts };
+            // ADR-028: o que mudou vai junto de QUALQUER resposta do turno — a normal, a bloqueada pelo juiz, o pedido de
+            // confirmação. Anexado aqui, depois do juiz, porque é fato do sistema e não afirmação do modelo. Passo de
+            // objetivo fica de fora: o texto dele é material do objetivo, não a resposta ao usuário.
+            const alteracoes = context?.goalTrace || (typeof result !== 'string' && result.concurrentTurnRejected)
+                ? undefined : turnState?.alteracoes;
+            const comLista = !alteracoes?.length ? result
+                : typeof result === 'string' ? AgentLoop.comAlteracoes(result, alteracoes)
+                : { ...result, text: AgentLoop.comAlteracoes(result.text, alteracoes) };
+            if (Object.keys(facts).length === 0) return comLista;
+            return typeof comLista === 'string'
+                ? { text: comLista, ...facts }
+                : { ...comLista, ...facts };
         } finally {
             // S229: o comentário anterior aqui ("movido para clearActiveTurn via MessageBus para
             // suportar Outbox") não corresponde ao código real — WebChannelAdapter/chat.ts (onde
@@ -1527,8 +1574,19 @@ export class AgentLoop {
             // deixando o guard de turno concorrente preso até TURN_STALE_MS (7min) — causa raiz
             // do incidente River #2 (ver S223) e da regressão em S101.
             pararRelato();
-            this.clearActiveTurn(conversationId);
+            if (!concorrente) this.clearActiveTurn(conversationId);   // o turno legítimo limpa no próprio finally
         }
+    }
+
+    /**
+     * Há um turno em andamento nesta conversa que ainda não venceu (TURN_STALE_MS)? Ponto único da pergunta: o guard de
+     * `runWithTools` recusa a chamada nova quando sim, e `run()` então preserva o estado do turno legítimo (ADR-028).
+     * `?.`: objetos parciais de teste (S447) não têm `turnStartTimes` — sem início conhecido, o turno conta como vencido.
+     */
+    private turnoAtivoNaoVencido(conversationId: string): boolean {
+        if (!this.activeTurns.has(conversationId)) return false;
+        const startedAt = this.turnStartTimes?.get(conversationId) || 0;
+        return Date.now() - startedAt <= this.TURN_STALE_MS;
     }
 
     /** ADR-027: os sinais das validações em segundo plano ainda não interrompidas de cada conversa (ver run()). */
@@ -1980,7 +2038,8 @@ export class AgentLoop {
         move('TOOL_COMPLETED', { step: 1, tool: toolName, success: true });
 
         traceManager.addStep(trace, 'tool_call',   { tool: toolName, input: toolArgs });
-        traceManager.addStep(trace, 'tool_result', { tool: toolName, success: true, output: toolResult.output });
+        traceManager.addStep(trace, 'tool_result', { tool: toolName, success: true, output: toolResult.output, ...(toolResult.alteracao ? { alteracao: toolResult.alteracao } : {}) });
+        this.registrarAlteracao(conversationId, toolResult);
         this.decisionMemory.recordFromLoop(toolName, true, 0, userText);
         this.skillLearner.recordPattern(toolName, true, 0, intentDecision.topicSlug);
 
@@ -2728,6 +2787,12 @@ export class AgentLoop {
                     return { action: 'continueLoop', dedupAbort, dedupAbortTool, consecutiveToolFailures, guardsTriggered, totalToolCalls, toolFailureCount };
                 }
 
+                // ADR-005/ADR-028: mesmo portão do tool-calling nativo — pede autorização com botões, em vez de deixar a
+                // chamada cair na recusa do ProactiveRecovery.
+                if (ToolRegistry.requiresAuthorization(toolName, atomicData.action.input || {})) {
+                    return { action: 'earlyReturn', result: this.pedirAutorizacao(conversationId, toolName, atomicData.action.input || {}, userText, intentDecision, stepCount, move) };
+                }
+
                 const toolStartTime = Date.now();
                 const atomicRecovery = await this.proactiveRecovery.execute(
                     toolName, atomicData.action.input || {},
@@ -2767,7 +2832,8 @@ export class AgentLoop {
                 // (as tools retornam `{ success: false, output: '', error }`), então gravar só
                 // `output` registrava QUE falhou e perdia o PORQUÊ — e o GoalExecutionLoop, sem o
                 // motivo, acabava reusando a resposta ao usuário como se fosse erro.
-                traceManager.addStep(trace, 'tool_result', { tool: resolvedToolName, success: result.success, output: result.output, error: result.error });
+                traceManager.addStep(trace, 'tool_result', { tool: resolvedToolName, success: result.success, output: result.output, error: result.error, ...(result.alteracao ? { alteracao: result.alteracao } : {}) });
+                this.registrarAlteracao(conversationId, result);
                 this.decisionMemory.recordFromLoop(resolvedToolName, result.success, toolDuration, userText);
                 this.skillLearner.recordPattern(resolvedToolName, result.success, toolDuration, intentDecision.topicSlug);
 
@@ -2993,6 +3059,48 @@ export class AgentLoop {
      * `proactiveRecovery.execute`, e todo o registro/telemetria/upgrade de step budget.
      * Extraído sem mudar lógica.
      */
+    /**
+     * Cria a transação de autorização e devolve o pedido com os botões. Comum ao tool-calling nativo e ao protocolo de
+     * ação em JSON (ADR-028, code-review: antes, o JSON caía na recusa do ProactiveRecovery — sem transação nem botões).
+     */
+    private pedirAutorizacao(
+        conversationId: string,
+        toolName: string,
+        args: Record<string, unknown>,
+        userText: string,
+        intentDecision: IntentDecision,
+        stepCount: number,
+        move: (event: AgentFSMEvent, meta?: Record<string, unknown>) => void,
+    ): ProcessedResult {
+        log.warn(`[${this.ts()}] [AUTH] Dangerous tool BLOCKED: ${toolName}. Waiting for human approval.`);
+
+        let txnId: string | undefined;
+        if (this.workflowEngine) {
+            // Novo fluxo: cria transaction com ID estruturado.
+            // Canais com workflowCallback (Telegram, WhatsApp, Discord, Signal) rotearão o callback
+            // diretamente ao WorkflowEngine — sem passar pelo LLM pipeline.
+            const alteracoesAntes = this.getTurnState(conversationId).alteracoes;
+            const ctx: ContinuationContext = {
+                workflow: this.inferWorkflowName(intentDecision.intent, toolName),
+                step: toolName,
+                userGoal: userText.slice(0, 200),
+                activeResources: this.extractResourceNames(args),
+                alternativeTools: this.findSafeAlternatives(toolName),
+                ...(alteracoesAntes?.length ? { alteracoesAntes: [...alteracoesAntes] } : {}),
+            };
+            const txn = this.workflowEngine.createTransaction(conversationId, toolName, args, ctx);
+            txnId = txn.id;
+        }
+        // Registra no authManager para: (1) guardar hasPendingAuth nos fast-paths,
+        // (2) permitir removePending() no resumeFromWorkflow() após resolução.
+        // txnId é armazenado para habilitar aprovação por texto ("sim") como fallback.
+        this.authManager.addPending(conversationId, toolName, args, txnId);
+
+        move('AUTH_REQUIRED', { step: stepCount, tool: toolName, txnId });
+        const authReq = this.authManager.formatRequest(toolName, args, txnId);
+        return { text: authReq.text, options: authReq.options };
+    }
+
     private async executeAndRecordNativeToolCall(
         toolCall: ToolCall,
         toolName: string,
@@ -3019,35 +3127,7 @@ export class AgentLoop {
         // GoalExecutionLoop faz exatamente a mesma, com a mesma resposta.
         const isDangerous = ToolRegistry.requiresAuthorization(toolName, toolCall.arguments);
         if (isDangerous) {
-            log.warn(`[${this.ts()}] [AUTH] Dangerous tool BLOCKED: ${toolName}. Waiting for human approval.`);
-
-            let txnId: string | undefined;
-            if (this.workflowEngine) {
-                // Novo fluxo: cria transaction com ID estruturado.
-                // Canais com workflowCallback (Telegram, WhatsApp, Discord, Signal) rotearão o callback
-                // diretamente ao WorkflowEngine — sem passar pelo LLM pipeline.
-                const ctx: ContinuationContext = {
-                    workflow: this.inferWorkflowName(intentDecision.intent, toolName),
-                    step: toolName,
-                    userGoal: userText.slice(0, 200),
-                    activeResources: this.extractResourceNames(toolCall.arguments),
-                    alternativeTools: this.findSafeAlternatives(toolName),
-                };
-                const txn = this.workflowEngine.createTransaction(
-                    conversationId, toolName,
-                    toolCall.arguments as Record<string, unknown>,
-                    ctx
-                );
-                txnId = txn.id;
-            }
-            // Registra no authManager para: (1) guardar hasPendingAuth nos fast-paths,
-            // (2) permitir removePending() no resumeFromWorkflow() após resolução.
-            // txnId é armazenado para habilitar aprovação por texto ("sim") como fallback.
-            this.authManager.addPending(conversationId, toolName, toolCall.arguments, txnId);
-
-            move('AUTH_REQUIRED', { step: stepCount, tool: toolName, txnId });
-            const authReq = this.authManager.formatRequest(toolName, toolCall.arguments, txnId);
-            return { action: 'earlyReturn', result: { text: authReq.text, options: authReq.options } };
+            return { action: 'earlyReturn', result: this.pedirAutorizacao(conversationId, toolName, toolCall.arguments, userText, intentDecision, stepCount, move) };
         }
 
         // Guard: bloqueia edit repetido no mesmo arquivo (previne append-loop)
@@ -3117,7 +3197,8 @@ export class AgentLoop {
         traceManager.addStep(trace, 'tool_call', { tool: resolvedToolName, input: resolvedArgs });
         // ADR-011 — mesma razão do caminho json_action acima: sem `error`, o trace registra a
         // falha e perde o motivo, que só existe em `ToolResult.error`.
-        traceManager.addStep(trace, 'tool_result', { tool: resolvedToolName, success: result.success, output: result.output, error: result.error });
+        traceManager.addStep(trace, 'tool_result', { tool: resolvedToolName, success: result.success, output: result.output, error: result.error, ...(result.alteracao ? { alteracao: result.alteracao } : {}) });
+        this.registrarAlteracao(conversationId, result);
         this.decisionMemory.recordFromLoop(resolvedToolName, result.success, toolDuration, userText);
         this.skillLearner.recordPattern(resolvedToolName, result.success, toolDuration, intentDecision.topicSlug);
 
@@ -4064,7 +4145,7 @@ export class AgentLoop {
         // but this handles any pre-existing stuck state without requiring a server restart).
         if (iteration === 0 && this.activeTurns.has(conversationId)) {
             const startedAt = this.turnStartTimes.get(conversationId) || 0;
-            if (Date.now() - startedAt > this.TURN_STALE_MS) {
+            if (!this.turnoAtivoNaoVencido(conversationId)) {
                 log.warn(`[${this.ts()}] [AGENT] Stale turn cleared for ${conversationId} (started ${Math.round((Date.now() - startedAt) / 1000)}s ago)`);
                 this.activeTurns.get(conversationId)?.abort();
                 // removed: this.activeTurns.delete(conversationId);
