@@ -1,7 +1,7 @@
 # ADR-029 — O objetivo nasce do pedido entendido pela conversa, não do texto cru
 
-Data: 24/10/2026. Status: **aceita** — incremento 1 aprovado pela operadora e implementado (S449; afetados 266/266). Teste
-real pendente: no Strata o caminho não pôde ser exercitado (ver Fase 5). Pedido dela: "ele está com problema de contexto
+Data: 24/10/2026. Status: **aceita** — incremento 1 aprovado pela operadora, implementado (S449; afetados 266/266) e
+**validado em teste real na nuvem** (ver Fase 5). Pedido dela: "ele está com problema de contexto
 entre as conversas", "não quero reinventar a roda: analise como os agentes atuais funcionam e resolvem isso".
 
 ## Fase 1 — Compreensão
@@ -138,7 +138,21 @@ não passou pelo juiz nem virou objetivo: o caminho desta correção não foi ex
 (streaming no `OpenAIProvider`). Sem veredito, o comportamento foi o de antes, como previsto. O teste real que vale fica para
 um modelo com streaming (nuvem, com cota autorizada) ou depois do streaming no provedor local.
 
+**Teste real na nuvem (24/10/2026, `glm-5.3-flash:cloud` em todos os `MODEL_*`, instância isolada, modo DEVELOPER, cota
+autorizada pela operadora; 42 chamadas) — passou.** A mesma sequência da produção:
+
+| Mensagem | Pedido completo (`[PEDIDO-COMPLETO]`) | Plano |
+|---|---|---|
+| "Pode fazer?" (depois do CamScanner em Rust e HTML) | "Pode criar uma versão do aplicativo CamScanner, utilizando Rust e HTML?" | verificar o Rust → gerar o projeto `camscanner` → compilar → subir e testar o servidor → empacotar → entregar |
+| "Essa porta é muito comum, consegue verificar nas redes 10.0.0.0/24 e 192.168.3.0/24." (depois de a conversa fixar a 8080) | "A porta 8080 é muito comum, consegue verificar nas redes 10.0.0.0/24 e 192.168.3.0/24." | script de varredura da **8080** nas duas redes → executar → identificar o serviço |
+
+Na produção, os mesmos pedidos viraram "redigir a confirmação de capacidades" (com rustscan) e a auditoria da porta 30000.
+Os dois objetivos foram cancelados logo depois do plano para poupar cota (a varredura não chegou a rodar). `userIntent`
+continuou o texto literal; 0 erros no log.
+
 **Achados do teste, fora do escopo (registrados):**
+- A mensagem de objetivo cancelado ("Não consegui completar: …") cita o texto literal ("Pode fazer?"), não o pedido
+  completo — poderia citar `objective`.
 - Recusar pelo botão a autorização de um passo de objetivo não limpa a pendência do `AuthorizationManager`: a mensagem
   seguinte ("Pode fazer?") foi tratada como aprovação por texto da transação recusada — nada executou (`[WF] not_found`),
   mas o pedido da usuária foi consumido como aprovação.
