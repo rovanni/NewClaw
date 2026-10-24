@@ -174,9 +174,9 @@ export class MemoryAdminTool implements ToolExecutor {
     // ── CLEANUP ───────────────────────────────────────────────────────────────
 
     private cleanup(): ToolResult {
-        // Os nomes antes de apagar: depois, ninguém mais sabe o que saiu (ADR-028, ToolResult.alteracao).
-        const nomes = this.repo.nosParaLimpeza().map(n => `"${n.name}"`);
         const result = this.repo.cleanupGhostsAndOrphans();
+        // Os nomes vêm da própria limpeza (lidos antes de apagar): depois, ninguém mais sabe o que saiu (ADR-028).
+        const nomes = result.removed.map(n => `"${n.name}"`);
 
         if (result.removedIds.length === 0) {
             return { success: true, output: '✅ Nenhum ghost seguro para remover (identity, core, pref são protegidos).' };

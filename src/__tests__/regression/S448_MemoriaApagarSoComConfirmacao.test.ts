@@ -137,6 +137,54 @@ async function main(): Promise<void> {
     const registros = loopSrc.split('this.registrarAlteracao(conversationId,').length - 1;
     assert(registros >= 3 && registros === pontos - 2, `todo despacho com sucesso registra (${registros} registros; os outros ${pontos - registros} tool_result são falha do atalho e entrega de documento)`);
 
+    console.log('\n=== S448-7 — achados do code-review ===');
+    // (1) chamada concorrente não troca nem limpa o estado do turno legítimo
+    const legitimo = { alteracoes: ['Apagou: "Workspace"'] };
+    const estadosC = new Map<string, any>([['conv-g', legitimo]]);
+    const fakeConc: any = {
+        activeTurns: new Map([['conv-g', new AbortController()]]),
+        turnStartTimes: new Map([['conv-g', Date.now()]]),
+        TURN_STALE_MS: 7 * 60_000,
+        activeTurnStates: estadosC,
+        validacoesPorConversa: new Map(),
+        iniciarRelatoDoTurno: () => () => {},
+        clearActiveTurn: (id: string) => estadosC.delete(id),
+        runWithTools: async () => ({ text: 'Ainda estou processando sua mensagem anterior.', concurrentTurnRejected: true }),
+    };
+    const rc = await proto.run.call(fakeConc, 'conv-g', 'segundo clique');
+    assert(estadosC.get('conv-g') === legitimo && legitimo.alteracoes.length === 1, 'o estado do turno legítimo continua o mesmo, com a lista', estadosC.get('conv-g'));
+    assert(rc.concurrentTurnRejected === true && !/O que foi alterado/.test(rc.text) && !rc.groundingBlock, 'a recusa sai limpa', rc);
+    // (2) objetivo: o que os passos mudaram vai para a mensagem final
+    const { alteracoesFromTrace, GoalExecutionLoop } = await import('../../loop/GoalExecutionLoop');
+    assert(JSON.stringify(alteracoesFromTrace([
+        { type: 'tool_call', data: { tool: 'memory_write' } },
+        { type: 'tool_result', data: { tool: 'memory_write', success: true, alteracao: 'Atualizou: "Cripto"' } },
+        { type: 'tool_result', data: { tool: 'memory_write', success: false, alteracao: 'Apagou: "B"' } },
+        { type: 'tool_result', data: { tool: 'memory_admin', success: true } },
+    ])) === JSON.stringify(['Atualizou: "Cripto"']), 'alteracoesFromTrace: só as bem-sucedidas que mudaram algo');
+    const tentativas = [{ result: 'failure', alteracoes: ['Atualizou: "Cripto"'] }, { result: 'success', alteracoes: ['Apagou: "Workspace"'] }, { result: 'success' }];
+    const goalFake: any = { id: 'g1', currentPlan: [], sentArtifacts: [], attempts: [], strategiesTried: [], blockers: [], userIntent: 'arrumar a memória', createdAt: Date.now() };
+    const fakeLoopG: any = {
+        goalStore: { getById: () => ({ attempts: tentativas }) },
+        pickBestAvailableContent: () => 'Memória organizada.',
+        gracefulDelivery: { buildFailureMessage: () => 'falhou' },
+    };
+    const rg = (GoalExecutionLoop.prototype as any).buildResult.call(fakeLoopG, goalFake, true, 2, 0, undefined);
+    assert(/^Memória organizada\.\n\n📝 O que foi alterado neste objetivo:\n• Atualizou: "Cripto"\n• Apagou: "Workspace"$/.test(rg.finalOutput),
+        'mensagem final do objetivo traz o recibo de todos os passos (inclusive o que falhou depois de mudar)', rg.finalOutput);
+    // (3) protocolo de ação em JSON: pede autorização com botões em vez de cair na recusa
+    const fsJ = await import('fs');
+    const srcJ = fsJ.readFileSync(require.resolve('../../loop/AgentLoop.ts'), 'utf-8');
+    const ini = srcJ.indexOf('private async runJsonActionDispatch(');
+    const trecho = srcJ.slice(ini, srcJ.indexOf('this.proactiveRecovery.execute(', ini));
+    assert(/requiresAuthorization\(toolName, atomicData\.action\.input/.test(trecho) && /this\.pedirAutorizacao\(/.test(trecho), 'JSON: portão e pedido de autorização antes de executar');
+    const recSrc = fsJ.readFileSync(require.resolve('../../loop/ProactiveRecovery.ts'), 'utf-8');
+    assert(!recSrc.includes('neste modo de operação'), 'a recusa não fala mais em "modo" (apagar pede em qualquer modo)');
+    // (4) detalhes literais no markdown
+    await escrita.execute({ action: 'create', id: 'wifi', type: 'fact', name: 'Wi-Fi', content: 'senha_do_wifi em *config* e `cofre`' });
+    const pedidoMd = auth.formatRequest('memory_write', { action: 'delete', id: 'wifi' }).text;
+    assert(pedidoMd.includes("• `\"Wi-Fi\" (fact) — senha_do_wifi em *config* e 'cofre'`"), 'cada detalhe entre crases (sem crase interna)', pedidoMd);
+
     console.log('\n=== S448-6 — painel web: o cartão de aprovação descreve a ação de memória ===');
     const rota = fs.readFileSync(require.resolve('../../dashboard/routes/chat.ts'), 'utf-8');
     assert(/ToolRegistry\.confirmacaoDoDono\(t\.tool/.test(rota), 'o detalhe do cartão vem da mesma descrição do pedido');

@@ -61,8 +61,9 @@ padrão de `requiredArgsHint` e `deliveryFacts`), o `ToolRegistry`, o `Authoriza
    do conteúdo de cada nó; no merge, o que fica e o que sai; aviso de que só volta restaurando um backup.
 4. **O que mudou:** cada ação de memória preenche `ToolResult.alteracao` (pelo nome). O `AgentLoop` guarda no estado do
    turno e o `run()` anexa "📝 O que foi alterado neste turno" a **qualquer** resposta — a normal, a bloqueada pelo juiz, o
-   pedido de confirmação. A resposta da aprovação (`resumeFromWorkflow`) traz o que a ação aprovada mudou. Fica de fora o
-   passo de objetivo (o texto dele é material do objetivo) e a recusa de turno concorrente.
+   pedido de confirmação. A resposta da aprovação (`resumeFromWorkflow`) traz o que a ação aprovada mudou. O passo de
+   objetivo não leva a lista no próprio texto (é material do objetivo): ela sai na mensagem final do objetivo. A recusa de
+   turno concorrente também fica sem ela.
 
 ## Fase 5 — Validação
 
@@ -72,12 +73,19 @@ padrão de `requiredArgsHint` e `deliveryFacts`), o `ToolRegistry`, o `Authoriza
 - Teste: `S448` (todos os modos, texto do pedido, aprovação e recusa, recibo, lista no `run()`, cartão do painel).
 - Reversível por commit.
 
+**Achados do code-review (23/10/2026), corrigidos:**
+- **Protocolo de ação em JSON** (modelos sem chamada nativa): caía na recusa do `ProactiveRecovery`, sem transação nem
+  botões. Agora pergunta ao mesmo portão e pede autorização como o caminho nativo (`AgentLoop.pedirAutorizacao`, comum
+  aos dois). A recusa que sobra no `ProactiveRecovery` deixou de dizer "neste modo".
+- **Objetivo:** cada attempt guarda o que mudou (`GoalAttempt.alteracoes` — do trace do sub-turno, do resultado da tool
+  direta ou da ação aprovada na retomada), inclusive quando o passo falhou ou teve a resposta bloqueada; a mensagem final
+  do objetivo (`buildResult`) termina com "📝 O que foi alterado neste objetivo".
+- **Chamada concorrente** (recusada pelo guard de turno ativo) não troca nem limpa mais o estado do turno legítimo, e a
+  recusa não leva fatos dele.
+- **Markdown:** no pedido de confirmação, cada detalhe vai entre crases, como o comando do `exec_command`.
+- A limpeza devolve os nós que removeu (`CleanupResult.removed`), sem refazer a seleção.
+
 **Riscos e pendências (registrados, não resolvidos aqui):**
-- **Protocolo de ação em JSON** (modelos sem chamada nativa de ferramenta): o portão no `ProactiveRecovery` recusa em vez de
-  pedir confirmação — falha fechada, mas sem botões. Já valia para `exec_command` em SAFE. Os turnos reais usam o caminho
-  nativo (`[TOOL]` no log).
-- **Objetivo:** a confirmação vale (o passo para em `needs_auth`), mas a lista "o que mudou" de cada passo não chega à
-  mensagem final do objetivo. Próximo passo.
 - **`update` sobrescreve o conteúdo** sem guardar o anterior; não pede confirmação (fora do pedido). A lista mostra o texto
   novo.
 - **Texto em pt-BR:** fixo do Core, mesmo débito de idioma do relato de progresso (ADR-027).

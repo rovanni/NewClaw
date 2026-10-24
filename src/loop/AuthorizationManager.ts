@@ -92,7 +92,9 @@ export class AuthorizationManager {
     } {
         // ADR-028: a tool que apaga dado do usuário descreve o que sairia — a mesma resposta que fez o portão perguntar.
         const confirmacao = ToolRegistry.confirmacaoDoDono(toolName, args);
-        if (confirmacao) return { emoji: '🗑️', action: confirmacao.acao, details: confirmacao.detalhes, risk: 'irreversible' };
+        // Entre crases, como o comando do exec_command: `*`, `_` do conteúdo do nó não viram formatação no Telegram.
+        const literal = (s: string) => `\`${s.replace(/`/g, "'")}\``;
+        if (confirmacao) return { emoji: '🗑️', action: confirmacao.acao, details: confirmacao.detalhes.map(literal), risk: 'irreversible' };
 
         switch (toolName) {
             case 'exec_command': {

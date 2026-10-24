@@ -985,12 +985,12 @@ export class AgentLoop {
      * bloqueou a resposta de um turno que tinha mesclado, atualizado e apagado nós da memória, e ela nunca soube das
      * mudanças. Texto fixo do núcleo em pt-BR (mesmo débito de idioma do relato de progresso, ADR-027).
      */
-    static comAlteracoes(texto: string, alteracoes: readonly string[]): string {
+    static comAlteracoes(texto: string, alteracoes: readonly string[], onde: 'neste turno' | 'neste objetivo' = 'neste turno'): string {
         if (alteracoes.length === 0) return texto;
         const MOSTRAR = 20;
         const linhas = alteracoes.slice(0, MOSTRAR).map(a => `• ${a}`);
         if (alteracoes.length > MOSTRAR) linhas.push(`• …e mais ${alteracoes.length - MOSTRAR}`);
-        return `${texto.trimEnd()}\n\n📝 O que foi alterado neste turno:\n${linhas.join('\n')}`;
+        return `${texto.trimEnd()}\n\n📝 O que foi alterado ${onde}:\n${linhas.join('\n')}`;
     }
 
     /** ADR-028: guarda o que uma chamada bem-sucedida mudou, para o fim do turno contar (ver `comAlteracoes`). */
@@ -1522,18 +1522,25 @@ export class AgentLoop {
         const validacoesEmSegundoPlano = new AbortController();
         pendentes.push(validacoesEmSegundoPlano);
         this.validacoesPorConversa?.set(conversationId, pendentes);
-        this.activeTurnStates.set(conversationId, {
-            cognitiveWorkspace: new CognitiveWorkspace(),
-            lastToolExecution: null,
-            pendingObserverFeedback: [],
-            validacoesEmSegundoPlano,
-        });
+        // ADR-028 (code-review): uma chamada que o guard de runWithTools vai recusar (turno ativo, não vencido — mesma
+        // condição de lá) não troca nem limpa o estado do turno legítimo: antes, a lista do que ele já tinha mudado sumia.
+        const concorrente = this.activeTurns.has(conversationId)
+            && Date.now() - (this.turnStartTimes?.get(conversationId) || 0) <= this.TURN_STALE_MS;
+        if (!concorrente) {
+            this.activeTurnStates.set(conversationId, {
+                cognitiveWorkspace: new CognitiveWorkspace(),
+                lastToolExecution: null,
+                pendingObserverFeedback: [],
+                validacoesEmSegundoPlano,
+            });
+        }
         const pararRelato = this.iniciarRelatoDoTurno(conversationId, context);
         try {
             const result = await this.runWithTools(conversationId, userText, 0, userId, context, options);
             // Issues 049/053: bloqueio de grounding e falha do provedor saem como fato estruturado, não só
             // como a prosa de `text`.
-            const turnState = this.activeTurnStates.get(conversationId);
+            // A recusa concorrente não leva fatos do turno legítimo (o estado na tabela é o dele).
+            const turnState = concorrente ? undefined : this.activeTurnStates.get(conversationId);
             const facts = {
                 ...(turnState?.groundingBlock ? { groundingBlock: turnState.groundingBlock } : {}),
                 ...(turnState?.providerFailure ? { providerFailure: turnState.providerFailure } : {}),
@@ -1559,7 +1566,7 @@ export class AgentLoop {
             // deixando o guard de turno concorrente preso até TURN_STALE_MS (7min) — causa raiz
             // do incidente River #2 (ver S223) e da regressão em S101.
             pararRelato();
-            this.clearActiveTurn(conversationId);
+            if (!concorrente) this.clearActiveTurn(conversationId);   // o turno legítimo limpa no próprio finally
         }
     }
 
@@ -2761,6 +2768,12 @@ export class AgentLoop {
                     return { action: 'continueLoop', dedupAbort, dedupAbortTool, consecutiveToolFailures, guardsTriggered, totalToolCalls, toolFailureCount };
                 }
 
+                // ADR-005/ADR-028: mesmo portão do tool-calling nativo — pede autorização com botões, em vez de deixar a
+                // chamada cair na recusa do ProactiveRecovery.
+                if (ToolRegistry.requiresAuthorization(toolName, atomicData.action.input || {})) {
+                    return { action: 'earlyReturn', result: this.pedirAutorizacao(conversationId, toolName, atomicData.action.input || {}, userText, intentDecision, stepCount, move) };
+                }
+
                 const toolStartTime = Date.now();
                 const atomicRecovery = await this.proactiveRecovery.execute(
                     toolName, atomicData.action.input || {},
@@ -3027,6 +3040,46 @@ export class AgentLoop {
      * `proactiveRecovery.execute`, e todo o registro/telemetria/upgrade de step budget.
      * Extraído sem mudar lógica.
      */
+    /**
+     * Cria a transação de autorização e devolve o pedido com os botões. Comum ao tool-calling nativo e ao protocolo de
+     * ação em JSON (ADR-028, code-review: antes, o JSON caía na recusa do ProactiveRecovery — sem transação nem botões).
+     */
+    private pedirAutorizacao(
+        conversationId: string,
+        toolName: string,
+        args: Record<string, unknown>,
+        userText: string,
+        intentDecision: IntentDecision,
+        stepCount: number,
+        move: (event: AgentFSMEvent, meta?: Record<string, unknown>) => void,
+    ): ProcessedResult {
+        log.warn(`[${this.ts()}] [AUTH] Dangerous tool BLOCKED: ${toolName}. Waiting for human approval.`);
+
+        let txnId: string | undefined;
+        if (this.workflowEngine) {
+            // Novo fluxo: cria transaction com ID estruturado.
+            // Canais com workflowCallback (Telegram, WhatsApp, Discord, Signal) rotearão o callback
+            // diretamente ao WorkflowEngine — sem passar pelo LLM pipeline.
+            const ctx: ContinuationContext = {
+                workflow: this.inferWorkflowName(intentDecision.intent, toolName),
+                step: toolName,
+                userGoal: userText.slice(0, 200),
+                activeResources: this.extractResourceNames(args),
+                alternativeTools: this.findSafeAlternatives(toolName),
+            };
+            const txn = this.workflowEngine.createTransaction(conversationId, toolName, args, ctx);
+            txnId = txn.id;
+        }
+        // Registra no authManager para: (1) guardar hasPendingAuth nos fast-paths,
+        // (2) permitir removePending() no resumeFromWorkflow() após resolução.
+        // txnId é armazenado para habilitar aprovação por texto ("sim") como fallback.
+        this.authManager.addPending(conversationId, toolName, args, txnId);
+
+        move('AUTH_REQUIRED', { step: stepCount, tool: toolName, txnId });
+        const authReq = this.authManager.formatRequest(toolName, args, txnId);
+        return { text: authReq.text, options: authReq.options };
+    }
+
     private async executeAndRecordNativeToolCall(
         toolCall: ToolCall,
         toolName: string,
@@ -3053,35 +3106,7 @@ export class AgentLoop {
         // GoalExecutionLoop faz exatamente a mesma, com a mesma resposta.
         const isDangerous = ToolRegistry.requiresAuthorization(toolName, toolCall.arguments);
         if (isDangerous) {
-            log.warn(`[${this.ts()}] [AUTH] Dangerous tool BLOCKED: ${toolName}. Waiting for human approval.`);
-
-            let txnId: string | undefined;
-            if (this.workflowEngine) {
-                // Novo fluxo: cria transaction com ID estruturado.
-                // Canais com workflowCallback (Telegram, WhatsApp, Discord, Signal) rotearão o callback
-                // diretamente ao WorkflowEngine — sem passar pelo LLM pipeline.
-                const ctx: ContinuationContext = {
-                    workflow: this.inferWorkflowName(intentDecision.intent, toolName),
-                    step: toolName,
-                    userGoal: userText.slice(0, 200),
-                    activeResources: this.extractResourceNames(toolCall.arguments),
-                    alternativeTools: this.findSafeAlternatives(toolName),
-                };
-                const txn = this.workflowEngine.createTransaction(
-                    conversationId, toolName,
-                    toolCall.arguments as Record<string, unknown>,
-                    ctx
-                );
-                txnId = txn.id;
-            }
-            // Registra no authManager para: (1) guardar hasPendingAuth nos fast-paths,
-            // (2) permitir removePending() no resumeFromWorkflow() após resolução.
-            // txnId é armazenado para habilitar aprovação por texto ("sim") como fallback.
-            this.authManager.addPending(conversationId, toolName, toolCall.arguments, txnId);
-
-            move('AUTH_REQUIRED', { step: stepCount, tool: toolName, txnId });
-            const authReq = this.authManager.formatRequest(toolName, toolCall.arguments, txnId);
-            return { action: 'earlyReturn', result: { text: authReq.text, options: authReq.options } };
+            return { action: 'earlyReturn', result: this.pedirAutorizacao(conversationId, toolName, toolCall.arguments, userText, intentDecision, stepCount, move) };
         }
 
         // Guard: bloqueia edit repetido no mesmo arquivo (previne append-loop)

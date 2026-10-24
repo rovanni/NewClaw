@@ -208,6 +208,13 @@ export function writesFromTrace(steps: Array<{ type: string; data?: Record<strin
     return out;
 }
 
+/** ADR-028 — o que as ferramentas de um sub-turno mudaram (`alteracao` gravada no tool_result do trace pelo AgentLoop). */
+export function alteracoesFromTrace(steps: Array<{ type: string; data?: Record<string, any> }>): string[] {
+    return steps
+        .filter(s => s.type === 'tool_result' && s.data?.success === true && typeof s.data?.alteracao === 'string')
+        .map(s => s.data!.alteracao as string);
+}
+
 export class GoalExecutionLoop {
     private readonly evaluator: GoalEvaluator;
     private readonly riskAnalyzer: RiskAnalyzer;
@@ -555,6 +562,7 @@ export class GoalExecutionLoop {
         authStepOutput: string,
         onProgress?: ProgressCallback,
         authStepArtifactPaths?: string[],
+        authStepAlteracao?: string,
     ): Promise<GoalResult> {
         log.info(`[GoalLoop] resuming goal=${goal.id} after auth`);
 
@@ -566,7 +574,7 @@ export class GoalExecutionLoop {
         // representam duas execuções genuinamente distintas do step.
         const blockedStep = this.getPendingSteps(goal.currentPlan)[0];
         if (blockedStep) {
-            this.markStepDone(goal, blockedStep, authStepOutput, 'add', authStepArtifactPaths);
+            this.markStepDone(goal, blockedStep, authStepOutput, 'add', authStepArtifactPaths, authStepAlteracao ? [authStepAlteracao] : undefined);
         }
 
         // requiresAuth: false — Sprint 0.11, ver nota no branch 'needs_auth' acima.
@@ -2484,6 +2492,7 @@ export class GoalExecutionLoop {
                 agentloopSubToolCalls: agentloopResult.agentloopSubToolCalls,
                 agentloopSubToolFailures: agentloopResult.agentloopSubToolFailures,
                 agentloopSubToolWrites: agentloopResult.agentloopSubToolWrites,
+                agentloopAlteracoes: agentloopResult.agentloopAlteracoes,
                 deferredSendArgs,
             });
 
@@ -2516,7 +2525,7 @@ export class GoalExecutionLoop {
         step: PlanStep,
         cycle: number,
         startMs: number,
-        opts: { output?: string; error?: string; toolName?: string; args?: Record<string, unknown> },
+        opts: { output?: string; error?: string; toolName?: string; args?: Record<string, unknown>; alteracoes?: string[] },
     ): void {
         this.goalStore.addAttempt(goal.id, {
             id: `att_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
@@ -2530,6 +2539,8 @@ export class GoalExecutionLoop {
             executedAt: Date.now(),
             cycle,
             planGeneration: goal.planGeneration ?? 0,
+            // ADR-028: passo que falhou (ou teve a resposta bloqueada) pode ter mudado dados antes — continua contado.
+            ...(opts.alteracoes?.length ? { alteracoes: opts.alteracoes } : {}),
         });
     }
 
@@ -2556,13 +2567,14 @@ export class GoalExecutionLoop {
         cycle: number,
         startMs: number,
         block: GroundingBlock,
+        alteracoes?: string[],
     ): CycleResult {
         const MARKER = ' [VERIFICAÇÃO —';
         const description = step.description ?? '';
         const alreadyHinted = description.includes(MARKER);
         const cleanDesc = description.split(MARKER)[0].split(' [ATENÇÃO —')[0];
 
-        this.recordFailedAttempt(goal, step, cycle, startMs, { error: `grounding_blocked:${block.state}` });
+        this.recordFailedAttempt(goal, step, cycle, startMs, { error: `grounding_blocked:${block.state}`, alteracoes });
 
         // Correção dirigida (14/10/2026): com o trecho da fonte que o juiz citou, o retry sabe o valor certo — não só o que estava errado.
         const claims = block.unconfirmedClaims.slice(0, 5)
@@ -2633,12 +2645,13 @@ export class GoalExecutionLoop {
         startMs: number,
         failure: ProviderFailure,
         userMessage: string,
+        alteracoes?: string[],
     ): CycleResult {
         const ERROR_PREFIX = 'provider_unavailable:';
         const previous = [...goal.attempts].reverse().find(a => a.planStepId === step.id);
         const repeated = previous?.result === 'failure' && (previous.error ?? '').startsWith(ERROR_PREFIX);
 
-        this.recordFailedAttempt(goal, step, cycle, startMs, { error: `${ERROR_PREFIX}${failure.status}${failure.reason ? `:${failure.reason}` : ''}` });
+        this.recordFailedAttempt(goal, step, cycle, startMs, { error: `${ERROR_PREFIX}${failure.status}${failure.reason ? `:${failure.reason}` : ''}`, alteracoes });
         log.warn(
             `[PROVIDER-FAILURE] goal=${goal.id} step=${step.id} status=${failure.status} reason=${failure.reason ?? '-'}` +
             ` repeated=${repeated} retryBudget=${goal.retryBudget}`
@@ -2785,6 +2798,7 @@ export class GoalExecutionLoop {
             agentloopSubToolCalls?: string[];
             agentloopSubToolFailures?: Array<{ tool: string; error?: string }>;
             agentloopSubToolWrites?: string[];
+            agentloopAlteracoes?: string[];
         }
     > {
         // Sem tool específica → chama AgentLoop com prompt focado no step
@@ -2935,6 +2949,10 @@ export class GoalExecutionLoop {
             return { earlyReturn: true, cycleResult: this.evaluator.evaluate(goal, step, { success: false, output: text, error: errorMsg }) };
         }
 
+        // ADR-028: o que o sub-turno mudou, lido ANTES das demais saídas antecipadas (bloqueio, autorização) — nelas também
+        // conta. Depois da recusa concorrente: aquela chamada não executou nada.
+        const alteracoesDoPasso = alteracoesFromTrace(traceManager.getRecentTraces(10).find(t => t.sessionId === goal.conversationId)?.steps ?? []);
+
         // Issue 049: a barreira de groundedness (ADR-010 C1) não autorizou a entrega — `text` é a
         // mensagem fixa de bloqueio, escrita para o usuário, não o produto do step. Antes disto ela
         // virava o output do attempt: o StepSemanticValidator (um segundo avaliador LLM) relia a prosa
@@ -2943,7 +2961,7 @@ export class GoalExecutionLoop {
         // bloqueio pertence a esta camada (ADR-010 §10): o veredito chega como fato e decide o rumo
         // aqui, sem passar pelo validador semântico.
         if (typeof response !== 'string' && response.groundingBlock) {
-            return { earlyReturn: true, cycleResult: this.handleGroundingBlock(goal, step, cycle, startMs, response.groundingBlock) };
+            return { earlyReturn: true, cycleResult: this.handleGroundingBlock(goal, step, cycle, startMs, response.groundingBlock, alteracoesDoPasso) };
         }
 
         // Issue 053: o provedor de LLM não respondeu (depois de toda a cadeia de fallback) e `text` é a
@@ -2951,7 +2969,7 @@ export class GoalExecutionLoop {
         // nuvem em HTTP 429, um goal queimou 12 ciclos e 5 replans em 1,3 s, cada step "concluído" com a
         // frase de indisponibilidade do ProviderFactory.
         if (typeof response !== 'string' && response.providerFailure) {
-            return { earlyReturn: true, cycleResult: this.handleProviderFailure(goal, step, cycle, startMs, response.providerFailure, text) };
+            return { earlyReturn: true, cycleResult: this.handleProviderFailure(goal, step, cycle, startMs, response.providerFailure, text, alteracoesDoPasso) };
         }
 
         // Sprint 0.10 (achado L22): correlaciona o attempt com o ExecutionTrace real do
@@ -3004,14 +3022,14 @@ export class GoalExecutionLoop {
         if (invalidPath) {
             log.warn(`[GoalStep] step-name-as-path detected: "${invalidPath}" step=${step.id} — marking failure`);
             const errorMsg = `Path inválido na resposta: "${invalidPath}" é um identificador de step, não um arquivo.`;
-            this.recordFailedAttempt(goal, step, cycle, startMs, { output: text.slice(0, 300), error: errorMsg });
+            this.recordFailedAttempt(goal, step, cycle, startMs, { output: text.slice(0, 300), error: errorMsg, alteracoes: alteracoesDoPasso });
             return { earlyReturn: true, cycleResult: this.evaluator.evaluate(goal, step, { success: false, output: text, error: errorMsg }) };
         }
 
         // Se o AgentLoop retornou botões de auth, propaga como needs_auth
         const authOpts = respOptions?.filter(o => o.value?.startsWith('auth:'));
         if (authOpts && authOpts.length > 0) {
-            this.recordFailedAttempt(goal, step, cycle, startMs, { output: text.slice(0, 300) });
+            this.recordFailedAttempt(goal, step, cycle, startMs, { output: text.slice(0, 300), alteracoes: alteracoesDoPasso });
             return { earlyReturn: true, cycleResult: { outcome: 'needs_auth' as const, confidence: 0.9, output: text, authOptions: authOpts } };
         }
 
@@ -3027,7 +3045,7 @@ export class GoalExecutionLoop {
         const stepEvalForAttempt = { confidence: stepEval.confidence, reason: stepEval.reason };
         const toolResult = { success: stepEval.success, output: text };
 
-        return { earlyReturn: false, toolResult, stepEvalForAttempt, stepSuccessConfident, agentloopTraceId, agentloopSubToolCalls, agentloopSubToolFailures, agentloopSubToolWrites };
+        return { earlyReturn: false, toolResult, stepEvalForAttempt, stepSuccessConfident, agentloopTraceId, agentloopSubToolCalls, agentloopSubToolFailures, agentloopSubToolWrites, agentloopAlteracoes: alteracoesDoPasso };
     }
 
     /**
@@ -3044,7 +3062,7 @@ export class GoalExecutionLoop {
         channelContext: ChannelContext,
         cycle: number,
         startMs: number,
-        toolResult: { success: boolean; output: string; error?: string; artifactPaths?: string[] },
+        toolResult: { success: boolean; output: string; error?: string; artifactPaths?: string[]; alteracao?: string },
         opts: {
             stepMutations?: import('./GoalTypes').ToolMutation[];
             stepEvalForAttempt?: { confidence: number; reason?: string };
@@ -3053,10 +3071,13 @@ export class GoalExecutionLoop {
             agentloopSubToolCalls?: string[];
             agentloopSubToolFailures?: Array<{ tool: string; error?: string }>;
             agentloopSubToolWrites?: string[];
+            agentloopAlteracoes?: string[];
             deferredSendArgs: Array<Record<string, unknown>>;
         },
     ): CycleResult {
         const { stepMutations, stepEvalForAttempt, stepSuccessConfident, agentloopTraceId, agentloopSubToolCalls, agentloopSubToolFailures, agentloopSubToolWrites, deferredSendArgs } = opts;
+        // ADR-028: passo de tool direta → a alteração do próprio resultado; passo do agente → as do sub-turno.
+        const alteracoes = opts.agentloopAlteracoes ?? (toolResult.success && toolResult.alteracao ? [toolResult.alteracao] : []);
 
         // Registrar attempt com auditoria completa (cycle, mutations, evaluation)
         const attempt: GoalAttempt = {
@@ -3084,6 +3105,7 @@ export class GoalExecutionLoop {
             subToolWrites: agentloopSubToolWrites,
             producedArtifactPaths: toolResult.artifactPaths,
             planGeneration: goal.planGeneration ?? 0,
+            ...(alteracoes.length ? { alteracoes } : {}),
         };
         this.goalStore.addAttempt(goal.id, attempt);
 
@@ -3368,6 +3390,7 @@ export class GoalExecutionLoop {
         output: string,
         attemptRecording: 'add' | 'skip' | 'finalize' = 'add',
         producedArtifactPaths?: string[],
+        alteracoes?: string[],
     ): void {
         // Após instalação bem-sucedida de dependência, invalida tools + execution
         // para que o próximo replan detecte a ferramenta recém-instalada.
@@ -3402,6 +3425,7 @@ export class GoalExecutionLoop {
                 executedAt: Date.now(),
                 producedArtifactPaths,
                 planGeneration: goal.planGeneration ?? 0,
+                ...(alteracoes?.length ? { alteracoes } : {}),
             });
         } else if (attemptRecording === 'finalize') {
             this.goalStore.finalizeLastAttemptAsSuccess(goal.id, step.id, output);
@@ -5150,10 +5174,15 @@ Se a intenção original pedia uma explicação condicional (ex: "se não conseg
         const summaryIsCoverNote = !success || hasSeparateDelivery;
 
         // Usa || para tratar string vazia como ausente (exec_command com outputLen=0)
-        const finalOutput = (summaryIsCoverNote && !hasGenericSummary ? overrideOutput : undefined)
+        const textoFinal = (summaryIsCoverNote && !hasGenericSummary ? overrideOutput : undefined)
             ?? this.pickBestAvailableContent(goal, overrideOutput)
             ?? lastCompletedStep?.result
             ?? (success ? overrideOutput ?? 'Tarefa concluída com sucesso.' : this.gracefulDelivery.buildFailureMessage(goal));
+        // ADR-028: o que os passos mudaram (fato gravado em cada attempt), junto de qualquer mensagem final do objetivo —
+        // o consolidador escreve prosa, a lista é o recibo.
+        // Lidas do store: o `goal` recebido pode ser um retrato anterior aos últimos attempts gravados.
+        const tentativas = this.goalStore?.getById?.(goal.id)?.attempts ?? goal.attempts;
+        const finalOutput = AgentLoop.comAlteracoes(textoFinal, tentativas.flatMap(a => a.alteracoes ?? []), 'neste objetivo');
 
         // H1 observabilidade: resultado final estruturado para correlacionar com [USER-MESSAGE]
         log.info(

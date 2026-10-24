@@ -238,12 +238,13 @@ export class ProactiveRecovery {
         // faz recebe recusa: falha fechada, nunca execução silenciosa. Probes internos
         // (EnvironmentProbe) não passam por este executor e seguem intocados.
         if (ToolRegistry.requiresAuthorization(toolName, args)) {
-            log.warn(`[RECOVERY] "${toolName}" exige autorização do usuário no modo ${permissionRegistry.getMode()} — execução recusada`);
+            log.warn(`[RECOVERY] "${toolName}" exige autorização do usuário (modo ${permissionRegistry.getMode()}) — execução recusada`);
             return {
                 result: {
                     success: false,
                     output: '',
-                    error: `A ferramenta '${toolName}' exige autorização explícita do usuário neste modo de operação.`,
+                    // Sem "neste modo": apagar dado do usuário pede autorização em qualquer modo (ADR-028).
+                    error: `A ferramenta '${toolName}' exige autorização explícita do usuário para esta chamada.`,
                 },
                 finalToolName: toolName,
                 finalArgs: args,

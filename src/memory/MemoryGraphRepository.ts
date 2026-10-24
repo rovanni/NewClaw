@@ -49,6 +49,8 @@ export interface CleanupResult {
     deletedEmbeddings: number;
     deletedMetrics: number;
     removedIds: string[];
+    /** ADR-028: os nós removidos, lidos antes de apagar — quem chamou diz o que saiu, pelo nome. */
+    removed: BasicNode[];
 }
 
 export interface NodeCentralityUpdate {
@@ -286,10 +288,11 @@ export class MemoryGraphRepository {
     }
 
     cleanupGhostsAndOrphans(): CleanupResult {
-        const safeToRemove = this.nosParaLimpeza().map(n => n.id);
+        const removed = this.nosParaLimpeza();
+        const safeToRemove = removed.map(n => n.id);
 
         if (safeToRemove.length === 0) {
-            return { deletedNodes: 0, deletedEdges: 0, deletedEmbeddings: 0, deletedMetrics: 0, removedIds: [] };
+            return { deletedNodes: 0, deletedEdges: 0, deletedEmbeddings: 0, deletedMetrics: 0, removedIds: [], removed: [] };
         }
 
         const ph = safeToRemove.map(() => '?').join(',');
@@ -310,7 +313,7 @@ export class MemoryGraphRepository {
             `DELETE FROM memory_nodes WHERE id IN (${ph})`
         ).run(...safeToRemove).changes;
 
-        return { deletedNodes, deletedEdges, deletedEmbeddings, deletedMetrics, removedIds: safeToRemove };
+        return { deletedNodes, deletedEdges, deletedEmbeddings, deletedMetrics, removedIds: safeToRemove, removed };
     }
 
     recalcDegreeAndPagerank(): number {
