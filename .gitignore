@@ -3,6 +3,10 @@ dist/
 data/
 tmp/
 .env
+# Cópias do .env (.env.bak-*, .env.local…) têm as mesmas chaves em texto puro — 25/10/2026: 10 delas soltas na instalação
+# Windows, todas aparecendo no git como arquivos novos. Só o modelo sem valores entra no repositório.
+.env.*
+!.env.example
 
 # docs — apenas assets, ROADMAP e walkthrough são públicos
 docs/Auditorias/
