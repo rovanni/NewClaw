@@ -415,10 +415,13 @@ export class GoalOrchestrator {
         // Falta um dado do usuário e nem a memória o tem → a pergunta é obrigatória; a resposta volta junto do pedido
         // original (pendingClarifications). Quando este tipo decide, ele é a autoridade única de "perguntar ou não".
         let suficienciaDecidiu = false;
+        // ADR-029: o pedido entendido pela conversa ("Pode fazer?" → o que ela pediu antes), escrito pelo mesmo juiz.
+        let pedidoCompleto: string | undefined;
         if ((routerRequiresTools || routerRequiresGoal) && process.env.VALIDACAO_SUFICIENCIA !== 'off') {
             const decisao = await this.verificarSuficiencia(message, recentMessages, conversationId, signal);
             if (signal.aborted) return MENSAGEM_PEDIDO_INTERROMPIDO;
             if (decisao.acao !== 'sem_veredito') suficienciaDecidiu = true;
+            pedidoCompleto = decisao.pedidoCompleto;
             if (decisao.acao === 'perguntar') {
                 log.info(`[SUFICIENCIA] faltando=[${decisao.faltando.join(' | ')}] — pergunta ao usuário; pedido guardado para session=${sessionKey}`);
                 // Escrita pelo modelo no idioma do pedido; sem ela, os dados que faltam (o Core não emite texto de UI).
@@ -567,11 +570,15 @@ export class GoalOrchestrator {
         const abandonedAuthPending = currentActiveGoal?.status === 'blocked' && !!currentActiveGoal.pendingTxnId;
 
         if (signal.aborted) return MENSAGEM_PEDIDO_INTERROMPIDO;   // cancelado antes de existir o goal: nada é criado
+        // ADR-029: o objetivo é o pedido entendido pela conversa; `userIntent` continua o texto literal (o planejador lê os
+        // dois — o literal protege contra uma reescrita errada). Sem o pedido completo (juiz sem veredito ou desligado): como antes.
+        const objetivo = pedidoCompleto || classification.objective || message;
+        if (pedidoCompleto) log.info(`[PEDIDO-COMPLETO] cru="${message.slice(0, 120)}" completo="${pedidoCompleto.slice(0, 300)}"`);
         const goal = this.goalStore.create({
             sessionKey,
             conversationId,
             userIntent: message,
-            objective: classification.objective || message,
+            objective: objetivo,
             status: 'active',
             currentPlan: [],
             attempts: [],
