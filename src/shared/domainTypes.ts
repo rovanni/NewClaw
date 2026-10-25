@@ -266,6 +266,11 @@ export interface GoalAttempt {
      */
     subToolWrites?: string[];
     /**
+     * ADR-028 — o que este attempt mudou nos dados do usuário (`ToolResult.alteracao`, pelo nome), inclusive quando a
+     * resposta do passo foi bloqueada. A mensagem final do objetivo lista todos (`GoalExecutionLoop.buildResult`).
+     */
+    alteracoes?: string[];
+    /**
      * Sprint R1-R7 (docs/sprints-r1-r7-2026-07-13/REVISAO_ARQUITETURAL_SPRINT_R7_2026-07-13.md): artefatos que este
      * attempt declarou ter produzido — populado por `write` (o próprio `file_path`) e por
      * `exec_command` (linhas `ARTIFACT: <path>` no stdout, verificadas contra o disco antes

@@ -6,6 +6,7 @@ import { DashboardContext } from './types';
 import type { ChannelAttachment, NormalizedMessage } from '../../channels/ChannelAdapter';
 import { mimeTypeForFile, serializeAttachment } from '../../channels/ChannelAdapter';
 import { MessageBus } from '../../channels/MessageBus';
+import { ToolRegistry } from '../../core/ToolRegistry';
 
 // Reexportados para não quebrar call sites externos (ex: S14 test) — implementação real mora em
 // channels/ChannelAdapter.ts desde a issue 040/041 (ver comentário lá: Core também precisa desta
@@ -146,14 +147,20 @@ export function createChatRouter(ctx: DashboardContext): Router {
             getWorkflowEngine?: () => { getPendingByConversation?: (id: string) => Array<{ id: string; tool: string; params: Record<string, unknown>; createdAt: number }> };
         }).getWorkflowEngine?.();
         const pendingAuth = (conversationId && workflowEngine?.getPendingByConversation)
-            ? workflowEngine.getPendingByConversation(conversationId).map(t => ({
-                txnId: t.id,
-                tool: t.tool,
-                // Só o comando/alvo, para a interface poder mostrar o que está sendo aprovado.
-                // Nunca o objeto inteiro de params: pode conter conteúdo grande de arquivo.
-                detail: typeof t.params?.command === 'string' ? t.params.command as string : undefined,
-                createdAt: t.createdAt,
-            }))
+            ? workflowEngine.getPendingByConversation(conversationId).map(t => {
+                // ADR-028: o que seria apagado, descrito pela própria tool (nome e conteúdo, não ids).
+                const confirmacao = ToolRegistry.confirmacaoDoDono(t.tool, t.params ?? {});
+                return {
+                    txnId: t.id,
+                    tool: t.tool,
+                    // Só o comando/alvo, para a interface poder mostrar o que está sendo aprovado.
+                    // Nunca o objeto inteiro de params: pode conter conteúdo grande de arquivo.
+                    detail: typeof t.params?.command === 'string' ? t.params.command as string
+                        : confirmacao ? [confirmacao.acao, ...confirmacao.detalhes.map(d => `• ${d}`)].join('\n')
+                        : undefined,
+                    createdAt: t.createdAt,
+                };
+            })
             : [];
 
         // S226: janela entre o 202 de POST /api/chat e o goal/turn existir em algo rastreável

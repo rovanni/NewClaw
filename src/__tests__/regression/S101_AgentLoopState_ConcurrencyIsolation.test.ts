@@ -63,6 +63,8 @@ async function main() {
         clearActiveTurn: AgentLoop.prototype['clearActiveTurn'],
         // ADR-027: run() inicia o relato de progresso do turno — mesmo padrão (método real; sem aviso ligado, não relata).
         iniciarRelatoDoTurno: AgentLoop.prototype['iniciarRelatoDoTurno'],
+        // ADR-028: run() pergunta se há turno ativo não vencido (o mesmo método do guard de runWithTools).
+        turnoAtivoNaoVencido: AgentLoop.prototype['turnoAtivoNaoVencido'],
         postTurnCallback: null,
         runWithTools: async (conversationId: string, _userText: string, _step: number, _userId?: string, _context?: any) => {
             runWithToolsCalled = true;

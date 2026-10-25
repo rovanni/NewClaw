@@ -685,7 +685,7 @@ export class AgentController {
                 if (pendingGoal) {
                     const responseText = decision === 'rejected'
                         ? await this.goalOrchestrator.abortGoalFromAuth(txnId)
-                        : await this.goalOrchestrator.resumeFromAuth(txnId, result.output ?? '', result.artifactPaths);
+                        : await this.goalOrchestrator.resumeFromAuth(txnId, result.output ?? '', result.artifactPaths, result.alteracao);
                     const delivered = await adapter.send({ text: responseText, format }, rawCtx);
                     await this.sessionManager.recordAssistantMessage(sessionKey, responseText, { model: 'workflow' }, delivered?.attachments).catch(err =>
                         log.error('[WF] record_auth_response_failed', err)

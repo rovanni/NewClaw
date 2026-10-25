@@ -49,6 +49,8 @@ export interface CleanupResult {
     deletedEmbeddings: number;
     deletedMetrics: number;
     removedIds: string[];
+    /** ADR-028: os nós removidos, lidos antes de apagar — quem chamou diz o que saiu, pelo nome. */
+    removed: BasicNode[];
 }
 
 export interface NodeCentralityUpdate {
@@ -256,7 +258,11 @@ export class MemoryGraphRepository {
         `).run(weight, confidence, id);
     }
 
-    cleanupGhostsAndOrphans(): CleanupResult {
+    /**
+     * Os nós que `cleanupGhostsAndOrphans()` removeria agora — a MESMA seleção, para o pedido de confirmação (ADR-028)
+     * mostrar exatamente o que a execução vai apagar.
+     */
+    nosParaLimpeza(): BasicNode[] {
         const ghosts = this.db.prepare(`
             SELECT id FROM memory_nodes
             WHERE length(content) < 10
@@ -271,19 +277,22 @@ export class MemoryGraphRepository {
         `).all() as Array<{ id: string }>;
 
         const toRemove = [...new Set([...ghosts.map(g => g.id), ...orphanGhosts.map(o => o.id)])];
-        const safeToRemove = toRemove.filter(nodeId => {
-            const node = this.db.prepare(
-                'SELECT type FROM memory_nodes WHERE id = ?'
-            ).get(nodeId) as { type: string } | undefined;
-            return node &&
+        const porId = this.db.prepare('SELECT id, type, domain, name, content FROM memory_nodes WHERE id = ?');
+        return toRemove
+            .map(nodeId => porId.get(nodeId) as BasicNode | undefined)
+            .filter((node): node is BasicNode => !!node &&
                 node.type !== 'identity' &&
-                !nodeId.startsWith('core:') &&
-                !nodeId.startsWith('core_') &&
-                !nodeId.startsWith('pref_');
-        });
+                !node.id.startsWith('core:') &&
+                !node.id.startsWith('core_') &&
+                !node.id.startsWith('pref_'));
+    }
+
+    cleanupGhostsAndOrphans(): CleanupResult {
+        const removed = this.nosParaLimpeza();
+        const safeToRemove = removed.map(n => n.id);
 
         if (safeToRemove.length === 0) {
-            return { deletedNodes: 0, deletedEdges: 0, deletedEmbeddings: 0, deletedMetrics: 0, removedIds: [] };
+            return { deletedNodes: 0, deletedEdges: 0, deletedEmbeddings: 0, deletedMetrics: 0, removedIds: [], removed: [] };
         }
 
         const ph = safeToRemove.map(() => '?').join(',');
@@ -304,7 +313,7 @@ export class MemoryGraphRepository {
             `DELETE FROM memory_nodes WHERE id IN (${ph})`
         ).run(...safeToRemove).changes;
 
-        return { deletedNodes, deletedEdges, deletedEmbeddings, deletedMetrics, removedIds: safeToRemove };
+        return { deletedNodes, deletedEdges, deletedEmbeddings, deletedMetrics, removedIds: safeToRemove, removed };
     }
 
     recalcDegreeAndPagerank(): number {

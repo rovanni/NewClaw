@@ -2,7 +2,7 @@
  * ToolRegistry — Registro centralizado de tools com enable/disable
  */
 
-import { ToolExecutor, ToolResult } from '../loop/agentLoopTypes';
+import { ToolExecutor, ToolResult, ConfirmacaoDoDono } from '../loop/agentLoopTypes';
 import { createLogger } from '../shared/AppLogger';
 import { resolverMarcadores, mascararProfundo } from '../shared/segredos';
 import { permissionRegistry } from './PermissionRegistry';
@@ -281,13 +281,33 @@ export class ToolRegistryClass {
      * planejado executava sem gate nenhum em modo SAFE — reproduzido em execução real
      * (04/08/2026, `docs/decisoes/ADR-005_ONDE_VIVE_O_GATE_DE_ACAO_PERIGOSA.md`).
      *
-     * Decide por nome de tool, flag `dangerous` do registro, modo operacional e análise
-     * estrutural do comando — nunca por texto de interface ou mensagem traduzida.
+     * Decide por nome de tool, flag `dangerous` do registro, modo operacional, análise
+     * estrutural do comando e a declaração da própria tool de que a chamada apaga dado do
+     * usuário (ADR-028) — nunca por texto de interface ou mensagem traduzida.
      */
     requiresAuthorization(name: string, args: Record<string, unknown>): boolean {
+        // ADR-028: apagar dado do usuário pede confirmação em TODOS os modos — inclusive DEVELOPER/GOD, cujo
+        // `auto_approve_exec` diz respeito a comandos, não à memória dela.
+        if (this.confirmacaoDoDono(name, args)) return true;
         return this.isDangerous(name)
             && !isReadOnlyExecCommand(name, args)
             && !permissionRegistry.can('auto_approve_exec');
+    }
+
+    /**
+     * ADR-028: o que esta chamada apagaria (a tool responde — só ela sabe), ou `null`. Falha ao descrever fecha o
+     * portão: pede confirmação com uma descrição genérica em vez de deixar passar sem perguntar.
+     */
+    confirmacaoDoDono(name: string, args: Record<string, unknown>): ConfirmacaoDoDono | null {
+        const tool = this.tools.get(name)?.tool;
+        if (!tool?.confirmacaoDoDono) return null;
+        try {
+            // Mascarado como o resultado da execução (ADR-019): a descrição traz conteúdo de nó, que vai ao canal e à sessão.
+            return mascararProfundo(tool.confirmacaoDoDono(args));
+        } catch (err) {
+            log.warn(`[ADR-028] ${name}: não consegui descrever o que a chamada apagaria (${err instanceof Error ? err.message : String(err)}) — pedindo confirmação mesmo assim`);
+            return { acao: `Usar ${name} (pode apagar dados)`, detalhes: [] };
+        }
     }
 
     has(name: string): boolean {
