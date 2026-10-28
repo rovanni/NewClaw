@@ -1253,7 +1253,9 @@ export class AgentLoop {
                     // "bloqueando entrega" também para UNVALIDATED, que é ENTREGUE com aviso desde 14/10: o log contradizia o que
                     // acontecia na linha seguinte (achado ao revisar os logs de 15–21/10/2026).
                     log.warn(`[${this.ts()}] [GROUNDING] estado=${g.state} — resposta não confirmada pelo juiz (${g.reason})`);
-                    this.reflectionMemory.record({
+                    // S453: o juiz que NÃO CONCLUIU (UNVALIDATED) não disse nada da ferramenta — gravar falha nela a fazia
+                    // "falhar 30%+" em findToolFailures e virar dica contra exec_command/read/memory_write (Windows, 25/10).
+                    if (g.state !== 'UNVALIDATED') this.reflectionMemory.record({
                         traceId: trace.id,
                         conversationId,
                         userInput: userText,
