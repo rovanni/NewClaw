@@ -39,6 +39,8 @@ import { Goal, StepCognitiveContext } from './GoalTypes';
 
 const log = createLogger('GracefulDeliveryOrchestrator');
 
+const AUDIO_DELIVERED_SENTINEL = '__send_audio_delivered__';
+
 export interface GracefulDeliveryResult {
     /** true se há algum conteúdo parcial útil para incluir na resposta */
     hasPartialContent: boolean;
@@ -126,8 +128,10 @@ export class GracefulDeliveryOrchestrator {
 
         // 1. O que o usuário JÁ recebeu (fato mais importante — o goal pode ter entregue arquivos
         //    válidos e só depois esbarrado num step adicional; reproduzido ao vivo em 09/07/2026).
+        // A sentinela de dedup do áudio (S44) não é arquivo: ao usuário, é a resposta que ele ouviu (S455).
+        const deliveredShown = delivered.map(a => a === AUDIO_DELIVERED_SENTINEL ? 'a resposta em áudio' : a);
         lines.push(delivered.length > 0
-            ? `Consegui gerar e enviar: ${delivered.join(', ')}. Porém não finalizei o restante do pedido.`
+            ? `Consegui gerar e enviar: ${deliveredShown.join(', ')}. Porém não finalizei o restante do pedido.`
             : `Não consegui completar: "${goal.userIntent.slice(0, 150)}".`);
 
         // 2. Motivo específico do chamador.
