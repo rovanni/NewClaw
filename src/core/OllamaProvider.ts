@@ -527,7 +527,8 @@ export class OllamaProvider implements ILLMProvider {
 
         if (!content && toolCalls.length === 0) {
             log.warn(`[${consumeId}] [STREAM-CONSUME] EMPTY after ${chunkCount} chunks, ${elapsed}ms`);
-            throw new Error('Empty response from stream');
+            // S452: vazia porque o limite de saída acabou (no raciocínio) é diferente de falha passageira — quem chama distingue.
+            throw Object.assign(new Error('Empty response from stream'), { cortadoPeloLimite: doneReason === 'length' });
         }
 
         log.info(`[${consumeId}] [STREAM-CONSUME] COMPLETE chunks=${chunkCount} content=${content.length}chars thinking=${thinking.length}chars toolCalls=${toolCalls.length} duration=${elapsed}ms`);
