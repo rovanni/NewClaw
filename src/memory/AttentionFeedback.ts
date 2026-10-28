@@ -833,7 +833,7 @@ export class AttentionFeedback {
         const concentrationIndex = totalUsage > 0 ? top3Usage / totalUsage : 0;
 
         // Edge density
-        const nodeCount = (this.db.prepare('SELECT COUNT(*) as cnt FROM memory_nodes WHERE type != "legacy_container"').get() as CountRow | undefined)?.cnt ?? 0;
+        const nodeCount = (this.db.prepare("SELECT COUNT(*) as cnt FROM memory_nodes WHERE type != 'legacy_container'").get() as CountRow | undefined)?.cnt ?? 0;
         const edgeCount = (this.db.prepare('SELECT COUNT(*) as cnt FROM memory_edges').get() as CountRow | undefined)?.cnt ?? 0;
         const edgeDensity = nodeCount > 0 ? edgeCount / nodeCount : 0;
 
