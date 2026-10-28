@@ -123,7 +123,7 @@ async function main(): Promise<void> {
         assert(/\[ESCLARECIMENTO — o assistente perguntou: "\$\{pending\.pergunta\}"; o usuário respondeu: "\$\{message\}"\. Atenda o pedido acima usando esta resposta\.\]/.test(src),
             'a resposta volta dizendo O QUE foi perguntado e mandando atender o pedido original');
         assert(/classification\.isAmbiguous && suficienciaDecidiu/.test(src), 'quando a suficiência decidiu, isAmbiguous não pergunta de novo (autoridade única)');
-        assert(/criarMotorDeValidacao\(providerFactory\)/.test(src) && /this\.memory\.memoriaProximaDoPedido\(pedido, 5\)/.test(src) && /this\.memory\.getPreferences\(\)/.test(src),
+        assert(/obterMotor\(providerFactory\)/.test(src) && /this\.memory\.memoriaProximaDoPedido\(pedido, 5\)/.test(src) && /this\.memory\.getPreferences\(\)/.test(src),
             'motor único; preferências e memória das fontes únicas');
     }
 

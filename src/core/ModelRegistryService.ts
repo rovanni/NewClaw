@@ -58,6 +58,22 @@ export class ModelRegistryService {
     private cache: ModelInfo[] | null = null;
     private cacheAt = 0;
     private lastHealth: ProviderHealth[] = [];
+    /**
+     * S454: a última falha de descoberta avisada, por provedor. Servidor local desligado falhava a cada varredura e
+     * enchia o log (Windows, 25–28/10: 118 "llamafile discovery failed" e 118 "Strata discovery failed" idênticos).
+     * Avisa a primeira falha e a mudança de erro; a repetição vai para debug; a volta, para info.
+     */
+    private falhaAvisada = new Map<string, string>();
+
+    private registrarFalha(provedor: string, erro: string): void {
+        if (this.falhaAvisada.get(provedor) === erro) { log.debug(`${provedor} discovery failed (repetida): ${erro}`); return; }
+        this.falhaAvisada.set(provedor, erro);
+        log.warn(`${provedor} discovery failed: ${erro}`);
+    }
+
+    private registrarSucesso(provedor: string): void {
+        if (this.falhaAvisada.delete(provedor)) log.info(`${provedor} discovery voltou a responder`);
+    }
     private cloudCatalogCache: ModelInfo[] | null = null;
     private cloudCatalogCacheAt = 0;
 
@@ -128,8 +144,9 @@ export class ModelRegistryService {
                 const models = await ollama.discoverModels();
                 results.push(...models);
                 health.push({ provider: 'ollama', baseUrl: ollama.getBaseUrl(), online: true, modelCount: models.length });
+                this.registrarSucesso('Ollama');
             } catch (err) {
-                log.warn(`Ollama discovery failed: ${errorMessage(err)}`);
+                this.registrarFalha('Ollama', errorMessage(err));
                 health.push({ provider: 'ollama', baseUrl: ollama.getBaseUrl(), online: false, modelCount: 0, error: errorMessage(err) });
             }
         }
@@ -140,6 +157,7 @@ export class ModelRegistryService {
                 const models = await provider.discoverModels();
                 results.push(...models);
                 health.push({ provider: custom.label, baseUrl: custom.baseUrl, online: true, modelCount: models.length });
+                this.registrarSucesso(custom.label);
             } catch (err) {
                 // Issue 070: o servidor RESPONDEU, só não lista modelos (rota /models ausente ou com outro formato) —
                 // como no Cline, vale o Model ID que o operador declarou. Só 404/405/501 ("esta rota não existe"): 401/403
@@ -151,6 +169,7 @@ export class ModelRegistryService {
                         results.push({ id: custom.model, provider: custom.label, label: custom.model, capabilities: guessCapabilities(custom.model), status: 'available' });
                     }
                     health.push({ provider: custom.label, baseUrl: custom.baseUrl, online: true, modelCount: custom.model ? 1 : 0 });
+                    this.registrarSucesso(custom.label);
                     continue;
                 }
                 // 503 = servidor no ar, modelo ainda carregando. Não é falha: registrar como tal
@@ -161,7 +180,7 @@ export class ModelRegistryService {
                 if (carregando) {
                     log.info(`${custom.label}: servidor no ar, modelo ainda carregando (503)`);
                 } else {
-                    log.warn(`${custom.label} discovery failed: ${errorMessage(err)}`);
+                    this.registrarFalha(custom.label, errorMessage(err));
                 }
                 health.push({
                     provider: custom.label,
@@ -187,8 +206,9 @@ export class ModelRegistryService {
                 const models = await provider.discoverModels();
                 results.push(...models);
                 health.push({ provider: name, online: true, modelCount: models.length });
+                this.registrarSucesso(name);
             } catch (err) {
-                log.warn(`${name} discovery failed: ${errorMessage(err)}`);
+                this.registrarFalha(name, errorMessage(err));
                 health.push({ provider: name, online: false, modelCount: 0, error: errorMessage(err) });
             }
         }

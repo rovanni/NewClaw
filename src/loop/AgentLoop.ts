@@ -31,7 +31,7 @@ import { createLogger } from '../shared/AppLogger';
 import { intervaloDoRelatoMs, montarRelatoDoTurno } from './relatoDeProgresso';
 import { gravarEfeito } from '../shared/evaluatorFlightRecorder';
 import type { ValidationEngine } from '../validation/ValidationEngine';
-import { criarMotorDeValidacao } from '../validation/motorPadrao';
+import { obterMotor } from '../validation/motorPadrao';
 import { ANALYSIS_INTENT_PATTERN } from '../shared/analysisIntentPattern';
 import { ClassificationMemory } from '../memory/ClassificationMemory';
 import { DecisionMemory } from '../memory/DecisionMemory';
@@ -528,7 +528,9 @@ export class AgentLoop {
         decisionMemory?: DecisionMemory
     ) {
         this.providerFactory = providerFactory;
-        this.motorDeValidacao = criarMotorDeValidacao(providerFactory);
+        // O motor ÚNICO desta fábrica (ADR-014), não uma instância própria: o modelo do juiz trocado no painel
+        // (`ObserverValidator.setModel`) mora nele. Com instância própria, `qualidade_da_resposta` seguia no modelo antigo (S451).
+        this.motorDeValidacao = obterMotor(providerFactory);
         this.memory = memory;
         this.skillLearner = skillLearner as SkillLearner;
         this.skillLoader = skillLoader as SkillLoader;
@@ -1251,7 +1253,9 @@ export class AgentLoop {
                     // "bloqueando entrega" também para UNVALIDATED, que é ENTREGUE com aviso desde 14/10: o log contradizia o que
                     // acontecia na linha seguinte (achado ao revisar os logs de 15–21/10/2026).
                     log.warn(`[${this.ts()}] [GROUNDING] estado=${g.state} — resposta não confirmada pelo juiz (${g.reason})`);
-                    this.reflectionMemory.record({
+                    // S453: o juiz que NÃO CONCLUIU (UNVALIDATED) não disse nada da ferramenta — gravar falha nela a fazia
+                    // "falhar 30%+" em findToolFailures e virar dica contra exec_command/read/memory_write (Windows, 25/10).
+                    if (g.state !== 'UNVALIDATED') this.reflectionMemory.record({
                         traceId: trace.id,
                         conversationId,
                         userInput: userText,

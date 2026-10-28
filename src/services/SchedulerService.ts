@@ -238,7 +238,7 @@ export class SchedulerService {
 
                 try {
                     await this.onTrigger(task);
-                    this.db.prepare('UPDATE scheduled_tasks SET last_run = datetime("now") WHERE id = ?').run(task.id);
+                    this.db.prepare("UPDATE scheduled_tasks SET last_run = datetime('now') WHERE id = ?").run(task.id);
                 } catch (e) {
                     log.error(`[Scheduler] Error running task ${task.id}:`, e);
                 }

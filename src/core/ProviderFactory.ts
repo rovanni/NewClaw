@@ -444,6 +444,15 @@ export class ProviderFactory {
         // Issue 064b: alguma tentativa terminou porque o PRAZO de quem chamou acabou — então não há refação sem
         // streaming com o mesmo modelo e o mesmo prazo (ela também não caberia).
         let prazoEsgotado = false;
+        // S452: uma tentativa voltou vazia porque o modelo gastou o limite de saída raciocinando. Repetir a mesma chamada
+        // (mesma entrada, mesmo limite) tende a cortar de novo — Windows, 25/10: o juiz cortou em 32.700 tokens na
+        // tentativa, na repetição e na refação sem streaming, ~6 min por pedido. Em sombra por padrão (registra e mede o
+        // que a repetição rende); com CORTE_PELO_LIMITE_SEM_REPETIR=1, não repete nem refaz sem streaming.
+        let cortePeloLimiteEm: number | undefined;
+        const naoRepetirCorte = process.env.CORTE_PELO_LIMITE_SEM_REPETIR === '1';
+        const sombraDoCorteDeuResposta = (onde: string) => {
+            if (cortePeloLimiteEm !== undefined) log.info(`[${requestId}] [CORTE-LIMITE-SOMBRA] ${onde} depois do corte DEU resposta (${Date.now() - cortePeloLimiteEm} ms após o corte) — a regra nova teria perdido esta`);
+        };
         const MAX_RETRIES = 1;
         const RETRY_BACKOFF_MS = 10000 + Math.floor(Math.random() * 3000);
         const requestId = `req-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
@@ -688,6 +697,7 @@ export class ProviderFactory {
                         // chamadas auxiliares (ver getBudgetAuxiliar em shared/auxTimeout.ts).
                         this.circuitBreakers.getOrCreate({ name: providerName }).recordSuccess(duration);
                         log.info(`[${attemptId}] SUCCESS content=${result.content.length}chars thinking=${(result.thinking || '').length}chars toolCalls=${result.toolCalls?.length || 0} duration=${duration}ms`);
+                        sombraDoCorteDeuResposta('a repetição');
                         return {
                             status: 'success',
                             content: result.content,
@@ -742,7 +752,12 @@ export class ProviderFactory {
                     // retentáveis como antes.
                     const prazoDestaTentativa = prazoDaTentativaEsgotado || (error as { deadlineExceeded?: boolean })?.deadlineExceeded === true;
                     if (prazoDestaTentativa) prazoEsgotado = true;
-                    const isRetryable = !prazoDestaTentativa && (isTimeout ||
+                    const cortadoPeloLimite = (error as { cortadoPeloLimite?: boolean })?.cortadoPeloLimite === true;
+                    if (cortadoPeloLimite) {
+                        cortePeloLimiteEm ??= attemptStart;
+                        log.info(`[${attemptId}] [CORTE-LIMITE${naoRepetirCorte ? '' : '-SOMBRA'}] vazia: o limite de saída acabou no raciocínio${naoRepetirCorte ? ' — sem repetir (CORTE_PELO_LIMITE_SEM_REPETIR=1)' : ' — a regra nova não repetiria; segue como antes'}`);
+                    }
+                    const isRetryable = !prazoDestaTentativa && !(cortadoPeloLimite && naoRepetirCorte) && (isTimeout ||
                         errorMessage(error)?.includes('abort') ||
                         errorMessage(error)?.includes('ECONNRESET') ||
                         errorMessage(error)?.includes('fetch failed') ||
@@ -775,7 +790,11 @@ export class ProviderFactory {
         if (prazoEsgotado) {
             log.info(`[${requestId}] Prazo de quem chamou esgotado — sem refação sem streaming (mesmo modelo, mesmo prazo)`);
         }
-        if (!prazoEsgotado && podeTentarNaoStreaming && attemptLog.every(a => a.status === 'timeout' || a.status === 'error')) {
+        const semRefacaoPeloCorte = cortePeloLimiteEm !== undefined && naoRepetirCorte;
+        if (semRefacaoPeloCorte) {
+            log.info(`[${requestId}] [CORTE-LIMITE] sem refação sem streaming (mesmo modelo, mesmo limite de saída)`);
+        }
+        if (!prazoEsgotado && !semRefacaoPeloCorte && podeTentarNaoStreaming && attemptLog.every(a => a.status === 'timeout' || a.status === 'error')) {
             const sharedOllama = this.providers.get('ollama');
             // O fallback sem streaming respeita o MODELO que o chamador pediu, como o streaming já respeita
             // (linha do `getProviderWithModel` acima). Antes ele usava a instância compartilhada, com o modelo
@@ -810,6 +829,7 @@ export class ProviderFactory {
                         .catch((e) => { if (teleNaoStreaming) Object.assign(teleNaoStreaming, { status: 'error', errorMessage: errorMessage(e), durationMs: Date.now() - t0NaoStreaming }); throw e; });
                     if (teleNaoStreaming) Object.assign(teleNaoStreaming, { status: result.content?.trim() ? 'success' : 'empty', durationMs: Date.now() - t0NaoStreaming, contentChars: (result.content || '').length, contentText: result.content || '' });
                     if (result.content && result.content.trim()) {
+                        sombraDoCorteDeuResposta('a refação sem streaming');
                         attemptLog.push({ provider: 'ollama', model: 'non-streaming-fallback', duration: Date.now() - startTime, status: 'success' });
                         return {
                             status: 'success',
@@ -831,6 +851,9 @@ export class ProviderFactory {
             ? attemptLog[attemptLog.length - 1].errorMessage : '';
         const isTimeoutError = lastError?.includes('Timeout') || lastError?.includes('abort');
         log.error(`[${requestId}] EXHAUSTED attempts=${attemptLog.length}`);
+        if (cortePeloLimiteEm !== undefined && !naoRepetirCorte) {
+            log.info(`[${requestId}] [CORTE-LIMITE-SOMBRA] nada deu resposta depois do corte — a regra nova pouparia ${Date.now() - cortePeloLimiteEm} ms`);
+        }
 
         // `fallbackMessage` fixa em português mantém o débito de i18n do Core já declarado em `ARCHITECTURE.md`
         // ("Gaps conhecidos"). Sem reserva (ADR-018), a indisponibilidade do escolhido É o resultado.
