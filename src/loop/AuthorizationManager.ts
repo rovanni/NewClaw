@@ -57,6 +57,13 @@ export class AuthorizationManager {
         this.pendingActions.delete(conversationId);
     }
 
+    /** Remove a pendência de uma transação já resolvida, seja qual for a conversa em que foi registrada. */
+    removePendingByTxn(txnId: string): void {
+        for (const [conversationId, p] of this.pendingActions) {
+            if (p.txnId === txnId) this.pendingActions.delete(conversationId);
+        }
+    }
+
     /**
      * Format a request message with interactive buttons.
      *

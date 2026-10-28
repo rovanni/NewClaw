@@ -84,7 +84,7 @@ async function main() {
                 },
             },
             goalOrchestrator: { getGoalStore: () => ({ getByTxnId: () => null }) },
-            agentLoop: { resumeFromWorkflow: async () => 'Ação concluída após autorização.' },
+            agentLoop: { esquecerAutorizacao: () => {}, resumeFromWorkflow: async () => 'Ação concluída após autorização.' }, // S456
         };
 
         const adapter = new WebChannelAdapter();

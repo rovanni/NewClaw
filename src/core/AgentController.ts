@@ -675,6 +675,8 @@ export class AgentController {
 
             await this.sessionManager.withMutex(sid, async () => {
                 const result = await this.workflowEngine.resume(txnId, decision, (name) => ToolRegistry.get(name));
+                // Resolvida ou expirada, a transação acabou: a pendência dela sai do AgentLoop em qualquer caminho (S456).
+                this.agentLoop.esquecerAutorizacao(txnId);
                 if (!result) {
                     await adapter.send({ text: '⚠️ Sessão de autorização expirada. Repita o comando.', format: 'plain' }, rawCtx);
                     return;
