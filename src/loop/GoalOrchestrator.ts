@@ -27,7 +27,7 @@ import { avaliarGoal, KERNEL_ESCALATION_PREFIX } from './CognitiveKernelGate';
 import { ProviderFactory } from '../core/ProviderFactory';
 import { MemoryManager, descreverNoDaMemoria } from '../memory/MemoryManager';
 import { ContextBuilder } from './ContextBuilder';
-import { criarMotorDeValidacao } from '../validation/motorPadrao';
+import { obterMotor } from '../validation/motorPadrao';
 import { executarNoTurno } from '../shared/turnCancellation';
 import type { ValidationEngine } from '../validation/ValidationEngine';
 import { TIPO_SUFICIENCIA_DO_PEDIDO, type DecisaoDeSuficiencia } from '../validation/tipos/suficienciaDoPedido';
@@ -96,7 +96,8 @@ export class GoalOrchestrator {
     ) {
         this.goalStore = goalStore;
         this.extractor = new GoalExtractor(providerFactory, agentLoop.getClassifierModel());
-        this.motorDeValidacao = criarMotorDeValidacao(providerFactory);
+        // O motor ÚNICO desta fábrica (ADR-014), onde mora o modelo do juiz trocado no painel (S451).
+        this.motorDeValidacao = obterMotor(providerFactory);
 
         const reflectionMemory = new ReflectionMemory(memory);
         const caseMemory = new CaseMemory(memory);

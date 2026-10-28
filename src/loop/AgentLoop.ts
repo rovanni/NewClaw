@@ -31,7 +31,7 @@ import { createLogger } from '../shared/AppLogger';
 import { intervaloDoRelatoMs, montarRelatoDoTurno } from './relatoDeProgresso';
 import { gravarEfeito } from '../shared/evaluatorFlightRecorder';
 import type { ValidationEngine } from '../validation/ValidationEngine';
-import { criarMotorDeValidacao } from '../validation/motorPadrao';
+import { obterMotor } from '../validation/motorPadrao';
 import { ANALYSIS_INTENT_PATTERN } from '../shared/analysisIntentPattern';
 import { ClassificationMemory } from '../memory/ClassificationMemory';
 import { DecisionMemory } from '../memory/DecisionMemory';
@@ -528,7 +528,9 @@ export class AgentLoop {
         decisionMemory?: DecisionMemory
     ) {
         this.providerFactory = providerFactory;
-        this.motorDeValidacao = criarMotorDeValidacao(providerFactory);
+        // O motor ÚNICO desta fábrica (ADR-014), não uma instância própria: o modelo do juiz trocado no painel
+        // (`ObserverValidator.setModel`) mora nele. Com instância própria, `qualidade_da_resposta` seguia no modelo antigo (S451).
+        this.motorDeValidacao = obterMotor(providerFactory);
         this.memory = memory;
         this.skillLearner = skillLearner as SkillLearner;
         this.skillLoader = skillLoader as SkillLoader;
