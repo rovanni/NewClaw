@@ -1,13 +1,13 @@
 # ADR-031 — Experiências opcionais não impõem dependências ao núcleo (harness)
 
 Data: 28/10/2026. Status: **aprovada em 29/10/2026** — princípio pedido pela operadora e confirmado na decisão R1 da ADR-030 (harness em repositório separado, dependência por contratos documentados). Relacionada:
-`ADR-030_CANAL_DE_VOZ_PIPECAT.md` (Jarvis), `docs/ARCHITECTURE.md`, RFC-008.
+`ADR-030_CANAL_DE_VOZ_PIPECAT.md` (interface de voz), `docs/ARCHITECTURE.md`, RFC-008.
 
 ## Fase 1 — Compreensão
 
 ### O que motivou
 
-O Jarvis (ADR-030) é a primeira funcionalidade do NewClaw que traz **código e componentes de terceiros com outra pilha**:
+A interface de voz (ADR-030) é a primeira funcionalidade do NewClaw que traz **código e componentes de terceiros com outra pilha**:
 
 - **Pilhas novas:** Python com Pipecat e React com Vite, enquanto o núcleo é TypeScript e autoral.
 - **Licenças com obrigações próprias:** a auditoria da Etapa 0 da ADR-030 encontrou licenças BSD, MIT, Apache, ISC, OFL, LGPL e
@@ -41,7 +41,7 @@ A operadora quer preservar a autoria e a autonomia do núcleo: *o harness usa o 
 
 | # | Alternativa | Vantagens | Desvantagens |
 |---|---|---|---|
-| A | Incorporar o Jarvis ao núcleo (versão anterior da ADR-030: rota de sinalização e página `/jarvis` no servidor do NewClaw) | Um processo, uma instalação | O núcleo passa a conhecer o Jarvis; dependências e avisos misturados |
+| A | Incorporar a interface de voz ao núcleo (versão anterior da ADR-030: rota de sinalização e página de voz própria no servidor do NewClaw) | Um processo, uma instalação | O núcleo passa a conhecer a interface de voz; dependências e avisos misturados |
 | **B** | **Harness opcional, com dependência num sentido só** | Núcleo autoral e leve; obrigações de licença concentradas; harness substituível | Mais uma peça para instalar e versionar; exige contrato público explícito |
 | C | Harness como "plugin" carregado dentro do processo do núcleo | Um processo só | O núcleo passa a carregar código e dependências de terceiros — o oposto do objetivo |
 
@@ -63,7 +63,7 @@ A operadora quer preservar a autoria e a autonomia do núcleo: *o harness usa o 
 7. **Contrato antes do cliente:** quando um harness precisa de algo do núcleo, a extensão entra no núcleo como **interface
    pública genérica**, útil a qualquer cliente, nunca como exceção para um cliente específico.
 
-### O que o núcleo passa a oferecer (genérico, não "para o Jarvis")
+### O que o núcleo passa a oferecer (genérico, não "para a interface de voz")
 
 - **Contrato do turno documentado e versionado:** envio, aceitação, andamento, progresso, resposta, cancelamento, aprovação
   e histórico. Inclui teste de conformidade na suíte de regressão.
@@ -79,7 +79,7 @@ Feito na Etapa 1 da ADR-030 (29/10/2026):
 
 - Corrigir os acoplamentos já existentes do suplemento do PowerPoint (exceção de CORS, prefixo, broker): ficam registrados
   como débito, com migração possível para o contrato público.
-- O repositório do Jarvis: decidido na R1 da ADR-030 (repositório separado, 29/10/2026).
+- O repositório da interface de voz: decidido na R1 da ADR-030 (repositório separado, 29/10/2026).
 
 ## Fase 5 — Validação
 
@@ -91,7 +91,7 @@ Feito na Etapa 1 da ADR-030 (29/10/2026):
 
 ## Critérios de verificação
 
-- `grep` de "jarvis"/nome do harness em `src/` retorna zero.
+- `grep` do nome do harness em `src/` retorna zero.
 - A suíte de regressão do núcleo é a mesma com o harness instalado e sem ele.
 - O teste de conformidade do contrato do turno faz parte da suíte do núcleo.
 - O inventário de licenças do harness cobre 100% das dependências diretas e transitivas.

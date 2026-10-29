@@ -1,4 +1,4 @@
-# ADR-030 — Jarvis: experiência de voz opcional (harness) sobre o NewClaw, com Pipecat como ouvido e boca
+# ADR-030 — Interface de voz opcional (harness) sobre o NewClaw, com Pipecat como ouvido e boca
 
 Data: 28/10/2026. Status: **Etapa 0 concluída** (provas e auditoria, nada no produto). **Decisões aprovadas em
 29/10/2026** (seção "Decisões da operadora"); **Etapa 1 feita** só no núcleo — o contrato público do turno
@@ -6,8 +6,8 @@ Data: 28/10/2026. Status: **Etapa 0 concluída** (provas e auditoria, nada no pr
 
 ## O pedido e o enquadramento
 
-A operadora quer uma experiência Jarvis — interface própria, voz e acompanhamento de tarefas — que qualquer usuário do
-NewClaw possa instalar e configurar, **sem que o núcleo dependa dela**. Em 28/10 ela definiu o enquadramento: o Jarvis é um
+A operadora quer uma interface de voz — janela própria, voz e acompanhamento de tarefas — que qualquer usuário do
+NewClaw possa instalar e configurar, **sem que o núcleo dependa dela**. Em 28/10 ela definiu o enquadramento: a interface de voz é um
 **harness opcional**. O harness usa o NewClaw; o NewClaw não depende do harness (ADR-031).
 
 Requisitos que continuam valendo:
@@ -167,17 +167,17 @@ Leitura: a voz acrescenta ~2–3 s (STT + primeira frase do TTS); o tempo domina
 - **Painel:** `index.html` (`startTurnPolling`, `fetchAndRenderOutbox`, `nextPollHealth`, `cancelMessage`).
 - **Suplemento:** `addins/powerpoint-addin/src/taskpane/turnPolling.ts`.
 
-O Jarvis seria a terceira.
+A interface de voz seria a terceira.
 
 | Opção | Vantagens | Desvantagens |
 |---|---|---|
 | a. Cada cliente com sua cópia | Nada muda no núcleo | Três cópias que divergem (já há diferenças entre as duas atuais) |
-| **b. Contrato público do turno no núcleo + um cliente público desse contrato** (módulo neutro, sem dependências, servido pelo NewClaw) | Uma definição só; serve painel, suplemento, Jarvis e qualquer cliente futuro; é interface genérica, não "para o Jarvis" (ADR-031, regra 7) | Uma etapa no núcleo antes do harness; migrar o painel e o suplemento depois, com regressão |
+| **b. Contrato público do turno no núcleo + um cliente público desse contrato** (módulo neutro, sem dependências, servido pelo NewClaw) | Uma definição só; serve painel, suplemento, interface de voz e qualquer cliente futuro; é interface genérica, não "para a interface de voz" (ADR-031, regra 7) | Uma etapa no núcleo antes do harness; migrar o painel e o suplemento depois, com regressão |
 | c. Só o contrato documentado, com teste de conformidade, sem cliente comum | Sem código novo de cliente | A duplicação continua, só que vigiada |
 
 **Recomendação: b**, em duas partes:
 1. Contrato documentado + teste de conformidade + módulo cliente (núcleo).
-2. O Jarvis usa o módulo desde o início; painel e suplemento migram depois, cada um numa etapa com a suíte do chat.
+2. A interface de voz usa o módulo desde o início; painel e suplemento migram depois, cada um numa etapa com a suíte do chat.
 
 O módulo decide "terminou?" por sinais estruturais (`/active` livre, outbox), nunca lendo o texto da resposta.
 
@@ -197,7 +197,7 @@ precisar de mais de um formato.
 ## Arquitetura revisada
 
 ```text
-                         ┌──────────── harness Jarvis (opcional, outro processo) ─────────────┐
+                         ┌──────────── harness de voz (opcional, outro processo) ─────────────┐
  navegador ──HTTPS?───▶  │ interface (build React/Vite)                                         │
  (uma origem)            │ login → POST {NEWCLAW_URL}/api/auth/login → token guardado no servidor│
                          │ /newclaw/* → repasse com Bearer para a API pública do NewClaw         │
@@ -222,7 +222,7 @@ precisar de mais de um formato.
 
 ## Repositório (R1) — evidência para a decisão
 
-| | Mesmo repositório (`harnesses/jarvis/`) | **Repositório separado** (`newclaw-jarvis`) |
+| | Mesmo repositório (`harnesses/interface_voz/`) | **Repositório separado** (`interface_voz`) |
 |---|---|---|
 | Licenças | A distribuição do NewClaw passa a incluir o harness e o inventário dele | Inventário, avisos e eventuais obrigações ficam só no harness |
 | Pilhas | Python + React dentro de um projeto TypeScript; CI e instaladores do núcleo crescem | Cada projeto com a própria CI |
@@ -255,7 +255,7 @@ precisar de mais de um formato.
 | D6 | Progresso | Só eventos significativos confirmados pelo backend; nada repetitivo nem fictício | **aprovada** (29/10) |
 | D7 | Som e voz | Sinal curto, independente do TTS, quando o pedido é aceito; Kokoro como opção inicial, voz e idioma configuráveis; sem TTS, modo texto | **aprovada** (29/10) |
 | D8 | Modelo | Roteamento do Cognitive Kernel preservado; nenhum modelo fixo no harness; mudança só depois de medir por etapa | **aprovada** (29/10) |
-| D9 | Link no painel | Nenhum link específico do Jarvis no painel | **adiada** (29/10) — o harness é acessado diretamente |
+| D9 | Link no painel | Nenhum link específico da interface de voz no painel | **adiada** (29/10) — o harness é acessado diretamente |
 | D10 | Ao reabrir | Mostrar sem falar, pelo histórico (com o `id` que a lista de conversas dá para o `sessionId`) | mantida, alinhada à D5 |
 | D11 | Ação perigosa | Só por clique; nunca por voz (coerente com a D3: nada de efeito por comando de voz nesta fase) | mantida |
 | D12–D13 | Supervisão e transporte | O harness cuida de si (sem PM2 do núcleo); SmallWebRTC | revistas |
@@ -263,7 +263,7 @@ precisar de mais de um formato.
 
 ## Decisões da operadora (29/10/2026)
 
-- **R1 — repositório separado.** O Jarvis é um harness opcional noutro repositório. Ele depende do NewClaw por contratos
+- **R1 — repositório separado.** A interface de voz é um harness opcional noutro repositório. Ele depende do NewClaw por contratos
   documentados; o núcleo não depende dele. O harness não duplica memória, roteamento de modelos nem execução. A estratégia
   de distribuição definitiva respeita a auditoria de licenças.
 - **L1 — código-fonte, com ressalvas.** Na primeira versão, nada de ambiente Python pronto nem contêiner com as dependências
@@ -290,10 +290,10 @@ precisar de mais de um formato.
   - nasce das APIs e dos estados reais;
   - evita a duplicação entre painel, suplemento e clientes futuros;
   - preserva os consumidores existentes e tem testes de conformidade;
-  - é independente do Jarvis e de qualquer fornecedor de voz;
+  - é independente da interface de voz e de qualquer fornecedor de voz;
   - não mexe em memória, roteamento de modelos nem execução.
-- **D9 — adiada.** Nenhum link do Jarvis no painel agora. Uma integração futura pode vir por um mecanismo genérico de
-  extensões, sem o núcleo depender do Jarvis.
+- **D9 — adiada.** Nenhum link da interface de voz no painel agora. Uma integração futura pode vir por um mecanismo genérico de
+  extensões, sem o núcleo depender da interface de voz.
 
 **Etapa 1 autorizada** só para o contrato público de turnos no repositório do NewClaw, sem push nem deploy, sem Pipecat, React
 ou dependência do harness no Core, e sem migrar painel nem suplemento. Resultado: `docs/CONTRATO_DO_TURNO.md`.
@@ -304,7 +304,7 @@ As oito decisões foram aprovadas como proposta, sem implementação além da Et
 - conferir as APIs antes de implementar;
 - decisão que dependa do que não foi provado → registrar a limitação e propor a menor alteração;
 - não tocar a produção nem usar nada do laboratório;
-- o Jarvis continua harness opcional (ADR-031).
+- a interface de voz continua harness opcional (ADR-031).
 
 **D1 — Onde o Pipecat roda.** Na infraestrutura que o usuário configurar, de preferência junto ao harness. Nenhuma máquina
 nem sistema operacional é requisito universal.
@@ -356,7 +356,7 @@ memória.
   - A lista só traz conversas do canal web (`provider = 'web'`, `DashboardMemoryRepository.listWebConversations`), então
     continuar uma conversa do Telegram ou do Discord não é possível pela API.
   - O histórico usa `web:<sessionId>`, não o `sessionId` (achado da Etapa 1; com o `sessionId`, volta vazio, sem erro).
-- **Menor alteração proposta:** nada no núcleo. O Jarvis usa sessões do canal web, e "continuar" vale para as conversas que
+- **Menor alteração proposta:** nada no núcleo. A interface de voz usa sessões do canal web, e "continuar" vale para as conversas que
   a lista mostra. Unir conversas entre canais é conceito novo, com ADR própria.
 
 **D6 — Progresso.** Só eventos significativos confirmados pelo backend; nada repetitivo nem fictício.
@@ -463,7 +463,7 @@ estruturais e não conhece cliente, canal nem fornecedor de voz; o `S457` confer
 | 1 — Contrato público do turno (**feita em 29/10**, seção "Etapa 1 — resultado") | núcleo (único ponto do núcleo) | Contrato documentado e versionado; teste de conformidade na suíte; módulo cliente neutro servido pelo NewClaw; aceitação e polling medidos sem cota (via `/cancelar`) numa instância isolada | Teste de conformidade e suíte completa passando; nenhum comportamento do chat muda |
 | 2 — Motor de voz | harness | Pipeline da prova, com frase a frase, interrupção por VAD real, configuração da tabela 4, sem LLM | Testes das funções puras; interrupção por voz real provada; sem configuração, sai com aviso claro |
 | 3 — Servidor do harness | harness | Login, repasse com Bearer, sinalização com checagem de origem, TLS opcional, verificação de requisitos e de versão | Testes de segurança: sem login → 401; outra origem → recusada; motor de voz inalcançável pela rede |
-| 4 — Janela Jarvis | harness | Interface React a partir do molde, só com o transporte SmallWebRTC; estados; modo texto; Parar; aprovação por clique; histórico | Testes da máquina de estados; build reproduzível; inventário de licenças gerado |
+| 4 — Janela de voz | harness | Interface React a partir do molde, só com o transporte SmallWebRTC; estados; modo texto; Parar; aprovação por clique; histórico | Testes da máquina de estados; build reproduzível; inventário de licenças gerado |
 | 5 — Instalação e documentação | harness | Ativação que verifica requisitos; guia; avisos de terceiros | Instalação limpa em Windows e Linux; NewClaw sem harness idêntico |
 | 6 — Validação real | ambos | Instância isolada, LLM real só com OK de cota | Os testes de aceitação (T1–T15 das versões anteriores) |
 | 7 — Migrações opcionais | núcleo | Painel e suplemento passam a usar o cliente público | Suíte do chat e do suplemento iguais |
@@ -471,7 +471,7 @@ estruturais e não conhece cliente, canal nem fornecedor de voz; o `S457` confer
 ## Fase 5 — Validação da proposta
 
 - **Evidência:** todas as afirmações desta revisão vêm de teste ou de leitura de código; o que falta está nomeado.
-- **Estrutural:** o núcleo ganha só uma interface pública genérica; o Jarvis vive fora dele.
+- **Estrutural:** o núcleo ganha só uma interface pública genérica; a interface de voz vive fora dele.
 - **Complexidade:** o núcleo não cresce com Python, React nem exceções de CORS; a duplicação do protocolo do turno passa de
   duas cópias (e uma terceira a caminho) para uma.
 - **Reversível:** remover o harness não muda nada no NewClaw.
