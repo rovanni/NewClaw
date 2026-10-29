@@ -137,7 +137,8 @@ export function comSegredos(tool: ToolExecutor): ToolExecutor {
             if (prop === EMBRULHADA) return true;
             if (prop === 'execute') {
                 return async (args: Record<string, unknown>, ...resto: unknown[]) => {
-                    const resultado = await (alvo.execute as (...a: unknown[]) => Promise<unknown>).call(alvo, resolverMarcadores(args), ...resto);
+                    const entrada = alvo.guardaOMarcador ? args : resolverMarcadores(args);   // S463: memória guarda o marcador
+                    const resultado = await (alvo.execute as (...a: unknown[]) => Promise<unknown>).call(alvo, entrada, ...resto);
                     return mascararProfundo(resultado);
                 };
             }

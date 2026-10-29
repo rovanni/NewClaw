@@ -102,6 +102,10 @@ export interface ToolExecutor {
      *  confirmação — ou `null` quando não apaga nada. Vale em TODOS os modos (decisão da operadora): quem consome é
      *  `ToolRegistry.requiresAuthorization()`. Co-localizado na tool porque só ela sabe o que a chamada remove. */
     confirmacaoDoDono?(args: Record<string, unknown>): ConfirmacaoDoDono | null;
+    /** ADR-019 (S463): ferramenta que GUARDA o que recebe (memória) fica com o marcador <SEGREDO:nome>, não com o valor —
+     *  o marcador guardado é trocado pelo valor quando for usado numa ferramenta que executa. Sem isto, "anote a senha"
+     *  gravava o valor em claro em `memory_nodes`, no índice FTS e em `memory_index` (teste real de 29/10/2026). */
+    guardaOMarcador?: true;
     execute(args: Record<string, unknown>): Promise<ToolResult>;
 }
 
