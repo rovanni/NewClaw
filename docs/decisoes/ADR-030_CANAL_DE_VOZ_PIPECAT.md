@@ -8,7 +8,8 @@ Data: 28/10/2026. Status: **Etapa 0 concluída** (provas e auditoria, nada no pr
 
 A operadora quer uma interface de voz — janela própria, voz e acompanhamento de tarefas — que qualquer usuário do
 NewClaw possa instalar e configurar, **sem que o núcleo dependa dela**. Em 28/10 ela definiu o enquadramento: a interface de voz é um
-**harness opcional**. O harness usa o NewClaw; o NewClaw não depende do harness (ADR-031).
+**harness opcional**. O harness usa o NewClaw; o NewClaw não depende do harness (ADR-031). Nome definitivo, escolhido
+pela operadora em 29/10/2026: **newclaw-ivoz** ("newclaw interface de voz").
 
 Requisitos que continuam valendo:
 
@@ -222,7 +223,7 @@ precisar de mais de um formato.
 
 ## Repositório (R1) — evidência para a decisão
 
-| | Mesmo repositório (`harnesses/interface_voz/`) | **Repositório separado** (`interface_voz`) |
+| | Mesmo repositório (`harnesses/interface_voz/`) | **Repositório separado** (`newclaw-ivoz`) |
 |---|---|---|
 | Licenças | A distribuição do NewClaw passa a incluir o harness e o inventário dele | Inventário, avisos e eventuais obrigações ficam só no harness |
 | Pilhas | Python + React dentro de um projeto TypeScript; CI e instaladores do núcleo crescem | Cada projeto com a própria CI |
@@ -263,7 +264,8 @@ precisar de mais de um formato.
 
 ## Decisões da operadora (29/10/2026)
 
-- **R1 — repositório separado.** A interface de voz é um harness opcional noutro repositório. Ele depende do NewClaw por contratos
+- **R1 — repositório separado.** A interface de voz é um harness opcional noutro repositório, `newclaw-ivoz` (pasta local
+  `D:\IA\Projetos\newclaw\interface_voz`). Ele depende do NewClaw por contratos
   documentados; o núcleo não depende dele. O harness não duplica memória, roteamento de modelos nem execução. A estratégia
   de distribuição definitiva respeita a auditoria de licenças.
 - **L1 — código-fonte, com ressalvas.** Na primeira versão, nada de ambiente Python pronto nem contêiner com as dependências

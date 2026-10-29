@@ -374,7 +374,7 @@ async function main(): Promise<void> {
         const src = fs.readFileSync(CLIENT_PATH, 'utf-8');
         const codigo = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
         assert(!/^\s*import\s/m.test(codigo) && !/require\(/.test(codigo), 'sem dependências: nenhum import nem require');
-        assert(!/powerpoint|interface_voz|pipecat|kokoro|document\.|window\./i.test(codigo), 'não conhece cliente, harness, fornecedor de voz nem DOM');
+        assert(!/powerpoint|ivoz|interface_voz|pipecat|kokoro|document\.|window\./i.test(codigo), 'não conhece cliente, harness, fornecedor de voz nem DOM');
         const p = (body: unknown) => phaseFromActive(body, 'c');
         assert(p({ active: [{ conversationId: 'c', elapsedMs: 1, kind: 'turn' }], pendingAuth: [{ txnId: 't' }], pending: true }).phase === 'awaiting_approval', 'aprovação pendente vem antes de running');
         assert(p({ active: [{ conversationId: 'outra', elapsedMs: 1, kind: 'goal' }], pendingAuth: [], pending: false }).phase === 'finished', 'só outra conversa ativa → finished');
