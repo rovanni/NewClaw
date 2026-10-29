@@ -1,384 +1,363 @@
-# ADR-030 — Jarvis: voz para o NewClaw pelo Pipecat do lab (boca e ouvido; o cérebro é um só)
+# ADR-030 — Jarvis: interface de voz nativa do NewClaw, com Pipecat como ouvido e boca
 
-Data: 28/10/2026. Status: **proposta, em planejamento** — nada implementado, nada publicado. Aguarda as decisões da
-operadora (matriz D1–D11). Entradas tratadas como hipótese, não como decisão: `Idéias/Assistente voz newclaw.md`
-(conversa com o Thorial, 27/10), `D:\IA\Projetos\jarvis-kit` (`JARVIS_BRIEFING.md`, 28/10) e o bot que roda hoje em
-`https://10.0.0.5:8443/client/`.
+Data: 28/10/2026. Status: **proposta técnica** — nada implementado. Aguarda o OK da operadora na proposta e nas decisões
+da matriz antes de qualquer código. Nenhum deploy, nenhuma dependência da infraestrutura dela.
 
-O pedido dela: manter o chat normal do painel como está e ter uma **janela separada** para conversar por voz, com visual de
-Jarvis (o esboço de tela é só referência de estilo; quadros de infraestrutura estão fora do escopo).
+## O pedido
 
-## Resumo — o que está comprovado, o que falta medir, o que é dela
+Transformar o protótipo JARVIS do lab numa **funcionalidade nativa do NewClaw**, distribuída no projeto open source, para
+qualquer usuário instalar e configurar no próprio ambiente. Requisitos dela, resumidos:
 
-| | Itens |
+1. Incorporar a interface React/Vite do protótipo ao repositório, seguindo as convenções do projeto.
+2. O Cognitive Kernel continua a única fonte de verdade de memória, contexto, roteamento de modelos e execução.
+3. Usar o código Pipecat e os componentes já validados no protótipo, adaptados à instalação de cada usuário.
+4. Nenhum IP, domínio, token, serviço ou infraestrutura do lab dela no produto.
+5. Chat convencional e funcionalidades existentes mantidos; o Jarvis não substitui o núcleo nem duplica a lógica dele.
+6. Utilizável depois da instalação, com configuração documentada da voz, sem exigir os mesmos provedores ou modelos.
+7. Autenticação, cancelamento, estados da interface, falhas de conexão, histórico e permissões tratados.
+8. O NewClaw instala e funciona normalmente sem os componentes de voz configurados.
+
+Entradas examinadas: este repositório (`origin/main` ab0f583), `D:\IA\Projetos\jarvis-kit` (`JARVIS_BRIEFING.md`), o bot
+que roda no Marte (`~/pipecat-lab`, só leitura) e as versões anteriores desta ADR (histórico do branch).
+
+## Resumo
+
+| | |
 |---|---|
-| **Comprovado no código** (NewClaw `origin/main` ab0f583; jarvis-kit) | Envio assíncrono (`POST /api/chat` → `202 {turnId}`), resposta por outbox, progresso por `/api/chat/active`, cancelamento por `/cancelar`, continuidade pelo `sessionId`, conversa gravada e legível por `/api/conversations/:id/messages`, autenticação Bearer, limites de taxa. No kit: STT pelo whisper-proxy (API OpenAI), TTS Kokoro, VAD Silero, bot em `0.0.0.0:7860` |
-| **Comprovado no ambiente** (leitura, 28/10) | Pipecat **1.12.0** no Marte, com `UserStarted/StoppedSpeakingFrame`, `BotStarted/StoppedSpeakingFrame`, `InterruptionFrame`, `TranscriptionFrame` e `RTVIServerMessageFrame`. Painel da Venus em `0.0.0.0:3090` com senha definida, **HTTP sem TLS**. `RELATO_DE_PROGRESSO_MIN` vazio na Venus (vale o padrão, 5 min) |
-| **Medido** (logs existentes) | Duração do turno no NewClaw (`processing_done`) e tempos do STT/TTS do bot — ver "Linha de base" |
-| **Hipótese, a medir** | Latência do caminho de voz completo; tempo até a aceitação; tempo até o primeiro progresso no canal web; comportamento do turno cancelado; leitura correta do outbox em fila ocupada; servir o cliente próprio pelo runner do Pipecat |
-| **Depende dela** | D1–D11 (matriz abaixo), OK de cota para os testes com modelo, e qualquer ligação com produção |
+| **Comprovado** | A API de chat do NewClaw já tem tudo o que o Jarvis precisa para conversar (tabela do contrato). O protótipo tem pipeline de voz funcionando com Pipecat **1.12.0**: VAD Silero, STT por API OpenAI, TTS Kokoro, transporte SmallWebRTC, e o protocolo RTVI com `user-transcription`, `bot-tts-text`, `client-message`, `server-message` e `send-text`. O repositório já tem precedentes para cada peça nova: subpacote com build próprio (`addins/powerpoint-addin`), processo auxiliar supervisionado (servidor de modelo local, `models.ts`), descoberta de Python multiplataforma (`resolvePython3Runtime`) e contrato de TTS igual ao do Kokoro (`KOKORO_TTS_URL`) |
+| **Achado que muda o requisito 1** | **Não existe código-fonte de uma interface Jarvis.** O que roda hoje é o cliente pronto do pacote `pipecat_ai_prebuilt` (só o build). O `client-templates/react-vite` do kit é um molde do Pipecat CLI: importa `@/components/pipecat/console/console`, que não está no kit (os componentes vêm do registro `ui.pipecat.ai` na hora de gerar o projeto). O reskin Jarvis ainda não foi feito; procurei no PC e no Marte |
+| **Hipótese, a provar na Etapa 0** | Se uma `client-message` do navegador consegue mandar o bot falar um texto (sem LLM no pipeline); se a sinalização WebRTC funciona atrás de um proxy do NewClaw; a licença dos componentes do registro; o custo de instalação do Pipecat em Windows e Linux limpos |
+| **Medido** (logs existentes, sem cota) | Turno do NewClaw: mediana de ~70 s (Venus/web, 30 dias) a ~153 s (Windows/web). STT do protótipo: 1,1–2,1 s; Kokoro: 0,1–1,2 s até o primeiro áudio. Resposta em 1–2 s não sai de trocar a boca: o desenho é "aceito na hora, resposta depois" |
+| **Depende dela** | Matriz de decisões D1–D15 e o OK para começar a Etapa 0 |
 
 ## Fase 1 — Compreensão
 
-### Sistema de voz que já existe (jarvis-kit)
+### O que o protótipo tem e o que é do lab
 
-```text
-Navegador (https://10.0.0.5:8443/client/)        ← cliente pronto do pacote pipecat_ai_prebuilt (não editável)
-   │ HTTPS + WebRTC (SmallWebRTC)
-tls_proxy.py :8443 (repasse TCP com TLS) → bot.py :7860 (Pipecat 1.12.0, Marte, systemd pipecat-bot / pipecat-tls)
-   ├─ VAD Silero (fim da fala, interrupção)
-   ├─ STT  whisper-proxy http://127.0.0.1:8200/v1  — POST /v1/audio/transcriptions (API OpenAI), Language.PT
-   ├─ LLM  Ollama        http://127.0.0.1:11434/v1  — OLLAMA_MODEL (o bot traz um modelo como valor padrão)
-   └─ TTS  Kokoro        http://10.0.0.1:8199/v1    — KOKORO_VOICE; KokoroTTS remove o cabeçalho WAV
-```
-
-O briefing propõe: (1) reskin a partir de `client-templates/react-vite`; (2) manter o fluxo de voz; (3) trocar o LLM direto
-por um "proxy LLM" que chama o NewClaw, com uma "camada de conversa na frente" (persona Jarvis) e uma variável
-`CANAL_DE_VOZ_PIPECAT` no `.env` do NewClaw.
-
-### Contrato real da API de chat do NewClaw (entrega 1)
-
-Legenda: **C** = comprovado no código; **C+P** = comprovado no código e conferido em produção (só leitura); **H** = hipótese.
-
-| Capacidade | Como funciona | Evidência | Status |
+| Peça | Arquivo | Reaproveitável? | Específico do lab (sai do produto) |
 |---|---|---|---|
-| Autenticação | `POST /api/auth/login {password}` → `{token}` (HMAC com `DASHBOARD_PASSWORD`). Depois, `Authorization: Bearer <token>` em toda chamada. Bearer é isento da checagem CSRF | `auth.ts:202-225, 238-283`; `security.ts:163-166` | C |
-| Validade do token | Não expira; sobrevive a reinício (assinatura). `logout` só apaga o cookie. **Revogar = trocar `DASHBOARD_PASSWORD`**, o que derruba todos os tokens, inclusive o do painel. Escopo: a API inteira do painel | `auth.ts:197-225, 285-288` | C |
-| Exposição | Painel da Venus em `0.0.0.0:3090`, senha definida, HTTP puro. Sem senha, o painel se recusa a subir fora de localhost | `DashboardServer.ts:180-195`; `.env` da Venus | C+P |
-| Identificação de sessão | `sessionId` no corpo vira `userId` e `chatId`; a chave da sessão é `web:<sessionId>`. O mesmo `sessionId` = a mesma conversa (histórico, objetivo ativo, fila) | `chat.ts:256, 288-297`; `SessionKeyFactory.ts:28` | C |
-| Origem do cliente | Prefixo do `sessionId` (precedente: `powerpoint-addin-` → `metadata.hostApp`) | `chat.ts:272-285` | C |
-| Enviar mensagem | `POST /api/chat` multipart (`message`, `sessionId`, anexos opcionais) → `202 {success, turnId, sessionId}`; o processamento segue em segundo plano | `chat.ts:230-316` | C |
-| Resposta | `GET /api/chat/outbox?turnId=` → `200 {response, options, attachments}` uma vez (a leitura consome); `404` = ainda não pronta | `chat.ts:322-350`; `WebChannelAdapter.ts:123-133` | C |
-| Ainda trabalhando? | `GET /api/chat/active?sessionId=&turnId=` → `{active[], pendingAuth[], pending, progresso?}`. `pending` cobre a janela entre o `202` e o turno existir; `active[].elapsedMs` = há quanto tempo | `chat.ts:93-182` | C |
-| Tarefa longa | O turno espera o objetivo: `processing_done` chega a 3.729 s no Windows. Enquanto isso, `/active` mostra o turno/objetivo | `MessageBus.ts:598-610`; logs | C+P |
-| Progresso | Último relato do ADR-027 em `progresso {texto, em}` no `/active`; some quando a resposta sai. Frequência: `RELATO_DE_PROGRESSO_MIN` (padrão 5 min, global) | `WebChannelAdapter.ts:111-119, 282-287`; ADR-027 | C (no canal web: **H**, não medido) |
-| Cancelamento | `POST /api/chat` com `message=/cancelar` e o mesmo `sessionId`: fura a fila, cancela turno e objetivo; a confirmação sai no outbox do turno do cancelamento. É o que o painel faz | `agentControllerCommands.ts:25-38`; `MessageBus.ts:374-388`; `index.html:1373-1383` | C (o que o turno cancelado devolve: **H**) |
-| Fala durante o trabalho | Texto comum com objetivo ativo vira complemento: o outbox do **turno novo** recebe "📎 Anotado…"; a resposta final sai no turno original | `MessageBus.ts:390-410` | C |
-| Fila ocupada | O outbox do turno recebe primeiro o ACK ("🧠 Estou concluindo…") e, quando o turno roda, a resposta final é gravada **de novo no mesmo `turnId`** | `MessageBus.ts:449-458`; `WebChannelAdapter.ts:217-251` | C (leitura correta pelo cliente: **H**) |
-| Entrega tardia | Resposta sem ninguém esperando fica no outbox; entregas sem turno (aviso de skill, anexo) viram órfãs e saem coladas na **próxima** resposta da sessão, com o prefixo "📎 Entrega pendente…" | `WebChannelAdapter.ts:249-251, 291-334` | C |
-| Histórico gravado | Toda resposta final é gravada na conversa; `GET /api/conversations` lista (com `sessionId`), `GET /api/conversations/:id/messages` lê | `MessageBus.ts:632`; `conversations.ts:8-65` | C |
-| Ação perigosa | Objetivo bloqueado aparece em `pendingAuth`; aprovação por `POST /api/chat/auth-decision` | `chat.ts:195-228`; ADR-005 | C |
-| Limites de taxa | `POST /api/chat`: 10/min por IP. Geral: 120/min por IP. Login: 10 a cada 15 min | `chat.ts:17-18`; `security.ts:75-86` | C |
-| Push | **Não existe para chat.** `/api/stream` (SSE) é de rastros de execução, global, sem `turnId` — não serve para entrega e mostraria outras conversas | `traces.ts:4-33` | C |
-| Marca estrutural de ACK/complemento | **Não existe**: ACK, complemento e resposta final têm a mesma forma | `ChannelAdapter.ts` (`NormalizedResponse`) | C (limitação) |
+| Pipeline de voz | `server/bot.py` (Pipecat 1.12.0) | **Sim**, sem o estágio LLM | `Language.PT` fixo; modelo `glm-5.3-flash:cloud` como valor padrão; endereços `127.0.0.1:8200`, `127.0.0.1:11434`, `10.0.0.1:8199`; voz `pf_dora` como padrão; prompt "Você é a IAL, a assistente do Luciano" |
+| Correções do Kokoro | `KokoroTTS` (remove o cabeçalho WAV, caminha os chunks até `data`) e a inclusão das vozes no `VALID_VOICES` | **Sim** — valem para qualquer servidor compatível com a API OpenAI que devolva WAV | Lista fixa de vozes (`pf_dora`, `pf_santa`…) — vira a voz que o usuário configurar |
+| TLS para o microfone | `server/tls_proxy.py` (repasse TCP com TLS) | Não como está — o caminho do certificado é do usuário `rover` | `/home/rover/pipecat-lab/tls/...` |
+| Serviços | `systemd/pipecat-bot.service`, `pipecat-tls.service` | Só como referência; o NewClaw usa PM2 nas duas plataformas | Usuário e caminhos `rover`; bot em `0.0.0.0:7860` sem autenticação |
+| Interface | `client-current-dist/` (build pronto, não editável); `client-templates/react-vite` e `vanilla-js-vite` (moldes) | O molde React, sim — **depois de gerado** com os componentes do registro | `VITE_BOT_START_URL` apontando para o bot |
 
-### Linha de base (só logs existentes, sem cota)
+### O que o NewClaw já tem (reaproveitado como está)
 
-**Duração do turno no NewClaw** — `processing_done` do `MessageBus` (da entrada no Core até a resposta, incluindo objetivo).
-Extraído em 28/10 de `~/.pm2/logs/newclaw-out.log` + `~/newclaw/logs/newclaw.log` (Venus) e `C:\Users\lucia\.pm2\logs\newclaw-out.log`
-(Windows).
+**Contrato da API de chat** (comprovado no código; usado hoje pelo painel e pelo suplemento do PowerPoint):
 
-| Produção / canal | Período | n | p50 | p90 | máx | ≤ 2 s | ≤ 10 s | > 60 s |
-|---|---|---|---|---|---|---|---|---|
-| Venus / web | 30 dias | 13 | 69,8 s | 112,6 s | 178 s | 0% | 7% | 53% |
-| Venus / telegram | 30 dias | 72 | 75,3 s | 531,0 s | 2.133 s | 0% | 5% | 61% |
-| Windows / web | 30 dias | 126 | 152,7 s | 1.820,2 s | 3.729 s | 3% | 12% | 65% |
-| Windows / telegram | 30 dias | 26 | 663,4 s | 1.747,4 s | 2.400 s | 0% | 0% | 92% |
-| Venus / todos os canais | desde 16/05 | 786 | — | — | — | 5–7% | 10–11% | 46–51% |
+| Capacidade | Como funciona | Evidência |
+|---|---|---|
+| Autenticação | Cookie `newclaw_session` (mesmo domínio) ou `Bearer`. Login em `POST /api/auth/login` | `auth.ts:238-283` |
+| Sessão | `sessionId` = conversa; chave `web:<sessionId>`; mesmo `sessionId` = mesmo histórico, objetivo e fila | `chat.ts:256, 288-297`; `SessionKeyFactory.ts:28` |
+| Enviar | `POST /api/chat` (`message`, `sessionId`, anexos) → `202 {turnId}` | `chat.ts:230-316` |
+| Resposta | `GET /api/chat/outbox?turnId=` → `200` uma vez; `404` = ainda não pronta | `chat.ts:322-350` |
+| Andamento | `GET /api/chat/active?sessionId=&turnId=` → `active[]` (com `elapsedMs`), `pending`, `pendingAuth[]`, `progresso` (ADR-027) | `chat.ts:93-182` |
+| Cancelar | `POST /api/chat` com `/cancelar` no mesmo `sessionId` (o painel faz assim) | `agentControllerCommands.ts:25-38`; `index.html:1373-1383` |
+| Aprovar ação perigosa | `POST /api/chat/auth-decision` | `chat.ts:195-228`; ADR-005 |
+| Histórico | `GET /api/conversations`, `GET /api/conversations/:id/messages` | `conversations.ts:8-65` |
+| Entrega tardia | Resposta sem ninguém esperando fica no outbox; entregas sem turno saem na próxima resposta da sessão | `WebChannelAdapter.ts:249-334` |
+| Limites | `POST /api/chat` 10/min por IP; geral 120/min; login 10/15 min | `chat.ts:17-18`; `security.ts:75-86` |
+| Limitações | Sem push para chat (`/api/stream` é de rastros, global); ACK de fila e "anotado" têm a mesma forma da resposta final | `traces.ts:4-33`; `ChannelAdapter.ts` |
 
-Limites dessa medida: (1) mistura conversa simples e objetivo — o log não diz qual foi; (2) o Windows inclui sessões de
-teste; (3) não mede fila nem polling.
+**Precedentes para as peças novas:**
 
-**Tempos do bot de voz** — `bot.log` do Marte (`enable_metrics=True`), uma única sessão com métricas (09/10/2026):
+| Necessidade | Precedente no repositório |
+|---|---|
+| Interface com build próprio dentro do repositório | `addins/powerpoint-addin` (`package.json` e webpack próprios, instalador próprio, PM2) |
+| Processo auxiliar supervisionado | Servidor de modelo local: `spawn` com log em arquivo, PID em disco, status no painel (`models.ts:600-640`); PM2 com `treekill: false` (`ecosystem.config.cjs`) |
+| Achar o Python em Windows e Linux | `resolvePython3Runtime`, `defaultPython3Candidates` (`utils/crossPlatform.ts:312`) |
+| TTS por API OpenAI, sem endereço padrão | `KOKORO_TTS_URL`, `KOKORO_TTS_VOICE` (`send_audio.ts:351-371`; `.env.example:293-301`) |
+| STT | `WHISPER_API_URL` com rota `/inference` (formato whisper.cpp) ou `whisper` local com `--language pt` fixo (`agentMediaHandlers.ts:225-280`) |
+| Idioma | `config.language` (pt-BR, en-US, es-ES) e `buildLanguageDirective` |
+| Build do produto | `npm run build` = `tsc` + cópia de `src/dashboard/public` para `dist/`; os instaladores rodam `npm install` e `npm run build` (`install.ps1:543-546`, `install.sh:515`) |
+| Licença | NewClaw: MIT. Pipecat: BSD-2-Clause (cabeçalho do `bot.py`); dependências do cliente pronto: MIT (`THIRD_PARTY_NOTICES.txt`) |
 
-| Estágio | n | mínimo | máximo |
-|---|---|---|---|
-| STT (TTFB do `OpenAISTTService`) | 7 | 1,07 s | 2,10 s |
-| TTS (TTFB do `KokoroTTS`) | 8 | 0,08 s | 1,15 s |
-| LLM atual do bot (TTFB) | 10 | 0,07 s | 0,63 s |
+### Linha de base (só logs existentes)
 
-**Conclusão:** a resposta da Alexa caseira é rápida porque o LLM dela responde em menos de 1 s. O NewClaw responde em
-~1 minuto ou mais na mediana. Responder em 1–2 s **não é possível** trocando só a boca; o desenho precisa de reconhecimento
-imediato + entrega depois, e a decisão de deixar o turno de conversa mais rápido é dela (D8), não de um LLM na frente.
+| Medida | Fonte | Valor |
+|---|---|---|
+| Turno do NewClaw, Venus/web, 30 dias | `processing_done` | n=13, p50 69,8 s, p90 112,6 s, 0% ≤ 2 s |
+| Turno do NewClaw, Windows/web, 30 dias | `processing_done` | n=126, p50 152,7 s, p90 1.820 s, 3% ≤ 2 s |
+| STT do protótipo (TTFB) | `bot.log`, 09/10/2026 | n=7, 1,07–2,10 s |
+| Kokoro (TTFB) | `bot.log`, 09/10/2026 | n=8, 0,08–1,15 s |
 
-### Correção de uma afirmação da ideia
+Limites: o log do NewClaw mistura conversa e objetivo; o do bot é uma sessão só.
 
-`AgentController.js` e `AuditorService.js` **não são um "frontend em embrião"**: são a compilação de `src/core/AgentController.ts`
-(fachada do Core: liga adapters, `MessageBus`, `AgentLoop`, `WorkflowEngine`) e de `src/services/auditor/AuditorService.ts`
-(autodiagnóstico `/audit`, só a dona). Os frontends do NewClaw são os canais e o painel; o frontend de voz é o cliente do
-jarvis-kit.
+### Correção de uma afirmação da ideia original
 
-### Decisões relacionadas
+`AgentController.js` e `AuditorService.js` não são um "frontend em embrião": são a compilação da fachada do Core
+(`src/core/AgentController.ts`) e do autodiagnóstico `/audit` (`src/services/auditor/AuditorService.ts`).
 
-`ARCHITECTURE.md` ("Como adicionar um canal novo", "Dependências proibidas"), RFC-008 (cliente externo por prefixo de
-`sessionId`), ADR-005 (ação perigosa), ADR-027 (progresso), ADR-029 (pedido entendido pela conversa),
-`SOBERANIA_DA_CONFIGURACAO.md`, `NUNCA_ADIVINHAR.md`. Nenhuma tentativa anterior de voz em tempo real no repositório.
+## Fase 2 — Crítica
 
-## Fase 2 — Crítica da hipótese
+1. **Requisito 1 parte de algo que não existe.** Não há interface React do Jarvis para incorporar; há um molde e um
+   cliente pronto. A Etapa 3 **cria** a interface a partir do molde gerado — não é migração.
+2. **Python para todo mundo é caro.** O Pipecat traz `aiortc`, `onnxruntime` (Silero) e `numpy`. Exigir isso na instalação
+   quebraria o requisito 8. A voz precisa ser **opcional de verdade**: sem Python e sem voz configurada, o NewClaw instala e
+   funciona igual a hoje, e a janela Jarvis funciona **só em texto**.
+3. **Microfone exige contexto seguro.** O navegador só libera o microfone em `https` ou em `localhost`. O NewClaw não tem TLS
+   próprio (o painel serve HTTP). No próprio computador funciona; de outro aparelho da rede, o usuário precisa de HTTPS — é
+   o que o `tls_proxy.py` resolve no lab (decisão D14).
+4. **Não pode existir um segundo cérebro.** O bot do protótipo tem LLM, prompt de persona e contexto acumulado. No produto o
+   estágio LLM sai: o processo de voz só ouve e fala (requisito 2).
+5. **Duplicação do cliente da API.** O painel conhece o protocolo do turno (polling a cada 1,5 s, tolerância a falha, leitura
+   do outbox, cancelamento) num script embutido em `index.html`. O Jarvis precisa do mesmo conhecimento.
+   `QUANDO_EXTRAIR_DUPLICACAO.md` manda extrair quando o conhecimento pode divergir — e pode. Mas extrair agora mexe no chat
+   do painel (requisito 5). Decisão D15.
+6. **Duas configurações de STT.** O Core fala `/inference` (whisper.cpp); o Pipecat fala `/v1/audio/transcriptions` (API
+   OpenAI). Ter duas variáveis para "onde está meu Whisper" é o tipo de duplicação que o projeto evita. Decisão D2.
+7. **Nada de padrão escondido.** O protótipo tem modelo, voz, idioma e endereços com valores padrão; no produto, cada um
+   vem da configuração do usuário ou fica ausente e reportado (`NUNCA_ADIVINHAR`, `SOBERANIA_DA_CONFIGURACAO`).
+8. **Quem tem credencial.** Se o processo de voz chamar a API do NewClaw, precisa de um token com acesso à API inteira (não há
+   token com escopo). Se só o navegador falar com o NewClaw, o processo de voz não precisa de credencial nenhuma.
 
-Hipótese de partida: *o Pipecat entra como um `ChannelAdapter` novo, só STT/TTS, e memória e progresso vêm do Core.*
-
-**Se sustenta:** sem LLM nem memória no Pipecat (senão são dois cérebros); memória de longo prazo já única (o grafo não tem
-`user_id` nem canal); progresso já vem do Core; o chat do painel não precisa mudar.
-
-**Cai:**
-
-1. **`ChannelAdapter` novo** não passa no gate "Extensão antes de Criação": o `WebChannelAdapter` já atende clientes externos
-   (PowerPoint) com tudo o que a voz precisa (tabela do contrato).
-2. **"Camada de conversa na frente"** (briefing, item 2): roteador semântico duplicado (`UnifiedIntentRouter`/`GoalExtractor`),
-   outra memória e um modelo escolhido no código. A linha de base mostra o motivo real da demora (o turno), que um LLM na
-   frente só esconderia respondendo com outra memória.
-3. **"Memória única" é só meia verdade:** histórico e objetivo são por `canal:usuário`; o Jarvis é outra conversa que a do
-   Telegram (D5).
-4. **O `LLMContext` do Pipecat não pode virar memória:** hoje ele acumula a conversa e a manda inteira a cada turno. Ligado ao
-   NewClaw, só a fala nova sai do bot.
-5. **`CANAL_DE_VOZ_PIPECAT` no `.env` do NewClaw não serve ao fluxo** (quem chama é o bot); só serviria a um botão no painel
-   (D9).
-6. **"Reconhecimento imediato" não é frase gerada:** o fato disponível é "turno aceito" (`202`), mostrado como estado.
-
-**Casos extremos** (todos tratados mais abaixo): interrupção da fala × cancelamento do trabalho; fala durante o trabalho;
-janela fechada; rede caindo; fila ocupada (ACK e final no mesmo `turnId`); entrega órfã colada na próxima resposta; ação
-perigosa pendente; resposta longa; textos fixos do Core com emoji e sempre em pt-BR; limites de taxa.
-
-**God Object:** nenhum — nada entra no Core.
+**God Object:** evitado se o processo de voz não souber nada de conversa (só áudio ↔ texto) e o servidor do NewClaw só
+servir a página e repassar a sinalização.
 
 ## Fase 3 — Alternativas
 
-| # | Como o Pipecat fala com o NewClaw | Vantagens | Desvantagens |
+### Motor de voz
+
+| # | Alternativa | Vantagens | Desvantagens |
 |---|---|---|---|
-| A | LLM do Pipecat na frente, escalando ao NewClaw (briefing) | Latência baixa no trivial | Dois cérebros e duas memórias; roteador duplicado; modelo no código |
-| **B** | **Processador "NewClaw" no lugar do estágio `llm`**, cliente HTTP do canal web (como o PowerPoint) | Zero arquivo novo no NewClaw; reusa fila, outbox, progresso, órfãs, Bearer, conversa no painel; reversível | Canal aparece como `web`; polling; limites de taxa |
-| B′ | Rota compatível com OpenAI (`/v1/chat/completions`) no NewClaw | Bot quase sem mudança | Rota nova; protocolo síncrono que manda o histórico inteiro; sem lugar para progresso e "aceito" |
-| C | `VoiceChannelAdapter` com WebSocket/SSE | Push; identidade própria | Tipo de canal, rota e outbox novos sem evidência medida |
-| D | Bot falando com o NewClaw pelo Telegram | Nenhum código | Gambiarra de identidade e latência |
+| **V1** | **Processo de voz Pipecat opcional, no repositório** (o `bot.py` do protótipo sem o LLM) | Usa o que ela validou; interrupção, VAD e streaming de TTS maduros; WebRTC com cancelamento de eco | Python opcional na instalação; mais um processo |
+| V2 | Voz sem Python: VAD no navegador, áudio enviado como anexo ao Core (`transcribeAttachment`), TTS do Core devolvido ao navegador | Tudo em Node; reusa o STT/TTS do Core | Não usa o Pipecat (contraria o requisito 3); exige rota nova de TTS e extrair o TTS de dentro da ferramenta `send_audio`; interrupção feita à mão |
+| V3 | Voz do navegador (Web Speech API), como o ditado do chat | Nenhum serviço | No Chrome o áudio vai para servidores do Google; voz do sistema |
 
-| Onde transcrever | Decisão |
-|---|---|
-| **S1 — no Pipecat, manda texto** | **Recomendada.** O whisper-proxy fala `/v1/audio/transcriptions`; o Core só fala `/inference` (whisper.cpp) ou o `whisper` local com `--language pt` (`agentMediaHandlers.ts:225-280`). Mandar áudio exigiria mudar o Core |
-| S2 — áudio para o Core | Só com ADR própria que leve o Core à API OpenAI de transcrição |
+### Quem fala com o Core
 
-| A janela | Decisão |
-|---|---|
-| **J1 — reskin do cliente do kit (`react-vite`), servido pelo Marte** | **Recomendada.** WebRTC e eventos de estado já vêm do cliente Pipecat; o painel não muda |
-| J2 — página no painel ligada ao Pipecat | Traz WebRTC/Pipecat para o repositório do NewClaw |
-| J3 — página no painel com a voz do navegador | O ditado do Chrome manda áudio ao Google; contradiz "tudo local" |
+| # | Alternativa | Vantagens | Desvantagens |
+|---|---|---|---|
+| **P1** | **O navegador conversa com o NewClaw**; o processo de voz só transcreve (manda `user-transcription`) e fala o que o navegador mandar (`client-message`) | Processo de voz **sem credencial e sem conversa**; autenticação é o cookie do painel; uma máquina de estados só, no navegador | Depende de uma `client-message` fazer o bot falar (hipótese da Etapa 0) |
+| P2 | O processo de voz chama a API do NewClaw (como na versão anterior desta ADR) | Navegador mais simples | Token com acesso total guardado no processo de voz; estado dividido entre dois lugares |
 
-**Gate — Extensão antes de Criação (arquivos novos no NewClaw):** `VoiceChannelAdapter.ts` — NÃO (o `WebChannelAdapter`
-serve; só volta a ser candidato se o polling reprovar M5/M6). Rota OpenAI (B′) — NÃO. Tool/Skill/Script de voz — NÃO. Página
-de voz no painel — NÃO. **Sobram zero arquivos novos no NewClaw.** O código novo fica no jarvis-kit (seção "Sprints").
+### Onde mora e como é construída a interface
+
+| # | Alternativa | Vantagens | Desvantagens |
+|---|---|---|---|
+| **U1** | **Subpacote `jarvis/` com build Vite próprio**, gerado do molde, servido pelo painel em `/jarvis` | Mesmo padrão do `addins/powerpoint-addin`; React e Vite não entram nas dependências do NewClaw; mesmo domínio do painel (cookie) | Mais um build no `npm run build` |
+| U2 | Página em JavaScript puro dentro de `src/dashboard/public` | Sem build | Perde o molde React e os componentes do Pipecat; contraria o requisito 1 |
+| U3 | Interface servida pelo processo de voz, como hoje | Nada no painel | Outro endereço e outra autenticação; não é nativa |
+
+### Transporte de áudio
+
+| # | Alternativa | Vantagens | Desvantagens |
+|---|---|---|---|
+| **T1** | **SmallWebRTC (validado)**, com a sinalização passando por uma rota autenticada do NewClaw | O que ela testou; áudio direto entre o navegador e o processo de voz | Precisa de portas UDP entre os dois (na rede de casa, normal) |
+| T2 | WebSocket de áudio passando pelo servidor do NewClaw | Uma porta só, um TLS só | Não validado; mais carga no processo do NewClaw |
+
+### Como o processo de voz sobe
+
+| # | Alternativa | Vantagens | Desvantagens |
+|---|---|---|---|
+| **S1** | **Entrada condicional no PM2** (`ecosystem.config.cjs`) quando a voz está configurada | Mesmo padrão do suplemento do PowerPoint; reinício automático; nenhum código novo de supervisão | Ligar ou desligar exige `pm2` |
+| S2 | O NewClaw inicia e para o processo (como o servidor de modelo local) | Liga e desliga pelo painel | Módulo novo de supervisão no servidor |
+
+### Gate — Extensão antes de Criação
+
+| Arquivo novo proposto | Precisa existir? | O que já existe | Extensão que o elimina | Por que fica |
+|---|---|---|---|---|
+| `voz/bot.py` (+ `voz/requirements.txt`) | SIM | `jarvis-kit/server/bot.py` (fora do repo) | Nenhuma no NewClaw: não há nada em Node que faça WebRTC + VAD + STT/TTS em streaming | É o código validado, trazido sem o LLM e sem o que é do lab |
+| `jarvis/` (subpacote da interface) | SIM | Molde `client-templates/react-vite`; o chat em `index.html` | Um "modo voz" em `index.html` (U2) — descartado pelo requisito 1 | Interface nova, com build próprio, como o suplemento |
+| Rota `POST /api/voz/offer` (repasse da sinalização) | SIM | Nenhuma rota repassa para outro processo | Expor a porta do processo de voz ao navegador — descartado (outra autenticação, CORS e TLS) | Só repassa a oferta WebRTC, com o cookie do painel |
+| Status da voz | **NÃO** | `GET /api/status` | Campo aditivo `voz` em `/api/status` | — |
+| Supervisor do processo de voz em TypeScript | **NÃO** (com S1) | `ecosystem.config.cjs`; precedente do suplemento | Entrada condicional no PM2 | — |
+| Tela de configuração da voz | A decidir na Etapa 4 | Telas em `dashboard/public/config/views/` (ex.: `ModelosView.js`) | Seção nova numa tela existente | Só vira arquivo novo se não couber em nenhuma |
+| `docs/VOZ.md` (guia do usuário) | SIM | README trilíngue | — | Documentação da configuração (requisito 6) |
 
 ## Fase 4 — Síntese
 
-Recomendação: **B + S1 + J1.** O Jarvis (cliente do kit + `bot.py`) é boca e ouvido; o NewClaw é o único núcleo de
-conversa, memória e execução.
-
-### Estratégia de conversação (entrega 2)
-
-- **Continuidade = `sessionId` fixo por dispositivo** (`jarvis-<dispositivo>`, na configuração do bot). O NewClaw já monta o
-  histórico da sessão `web:jarvis-<dispositivo>`; o bot manda **só a transcrição nova**.
-- **Nada de histórico no bot:** o processador não usa o contexto acumulado do Pipecat para nada além de saber que há uma fala
-  nova; o contexto local é esvaziado a cada turno e nada dele sai do bot. Sem `assistant_aggregator` gravando respostas.
-- **A conversa é visível no painel** (`/api/conversations`), sem mudar o painel.
-- **A API atual basta para a continuidade.** Duas limitações registradas, sem extensão proposta agora:
-  1. **ACK/complemento sem marca estrutural** — o cliente não sabe, pela forma da resposta, se ela é final. Regra do cliente
-     (sem ler o texto): um `turnId` continua aberto enquanto `/active` mostrar a conversa ocupada; quando ela fica livre, faz
-     a última leitura do outbox de cada `turnId` aberto e os fecha; o que faltar está em `/api/conversations/:id/messages`.
-     Se o teste T11 reprovar essa regra, a menor extensão é um campo aditivo em `NormalizedResponse` (como `progresso`),
-     com ADR curta própria.
-  2. **Sem push** — resolvido por polling (o painel faz a cada 1,5 s). Só se M5 reprovar, estender a rota de chat (SSE por
-     `turnId`), com nova passada do gate.
-
-### Fluxo ponta a ponta (entrega 3)
+### Arquitetura recomendada: V1 + P1 + U1 + T1 + S1
 
 ```text
- mic ─▶ [cliente Jarvis] ─WebRTC─▶ [bot.py, Marte]
-                                    1 VAD: UserStartedSpeaking ............ estado OUVINDO
-                                    2 VAD: UserStoppedSpeaking ............ estado TRANSCREVENDO   (M1 começa)
-                                    3 STT whisper-proxy → TranscriptionFrame (texto vazio → OCIOSO) (M1 termina)
-                                    4 POST /api/chat {message, sessionId} ── estado ENVIANDO       (M2 começa)
-                                    5 202 {turnId} ......................... estado PENSANDO       (M2 termina)
-                                    6 a cada 1,5 s: GET /api/chat/active
-                                        - progresso novo → fala o relato (FALANDO) e volta a PENSANDO   (M3)
-                                        - pendingAuth → mostra "aprovação pendente no painel" (não aprova)
-                                        - elapsedMs → "pensando há N min" (só visual)
-                                    7 conversa livre → GET /api/chat/outbox?turnId  (200)          (M4)
-                                    8 remove markdown/emoji → Kokoro → BotStartedSpeaking ... FALANDO (M5)
-                                    9 BotStoppedSpeaking, sem turnId aberto ...... CONCLUÍDO → OCIOSO
- alto-falante ◀─WebRTC─ [cliente Jarvis] ◀─ áudio + RTVIServerMessageFrame {estado, texto}
+                        ┌────────────── servidor NewClaw (Node, como hoje) ──────────────┐
+ navegador  ──HTTP────▶ │ /jarvis ............ página estática (build de jarvis/)          │
+ (janela    ──cookie──▶ │ /api/chat, /active, /outbox, /cancelar, /auth-decision,         │
+  Jarvis)               │ /api/conversations .. EXISTENTES, sem mudança                    │
+            ──HTTP────▶ │ /api/voz/offer ...... NOVA: repassa a oferta WebRTC (autenticada)│
+            ──HTTP────▶ │ /api/status ......... + campo "voz" (configurada, no ar, erro)  │
+                        └───────────────┬──────────────────────────────────────────────────┘
+                                        │ localhost
+                        ┌───────────────▼──────── processo de voz (Python, OPCIONAL) ──────┐
+ navegador ◀─WebRTC───▶ │ VAD Silero → STT (URL do usuário) → evento user-transcription     │
+                        │ client-message {falar: texto} → TTS (KOKORO_TTS_URL) → áudio      │
+                        │ SEM LLM, SEM histórico, SEM credencial do NewClaw, só em 127.0.0.1 │
+                        └───────────────────────────────────────────────────────────────────┘
 ```
 
-A **máquina de estados mora no bot** (uma fonte de verdade) e chega ao cliente por `RTVIServerMessageFrame`; o cliente só
-desenha.
+Responsabilidades:
 
-### Segurança e rede (entrega 5)
-
-| Tema | Hoje (comprovado) | Proposta |
+| Componente | Faz | Não faz |
 |---|---|---|
-| Acesso à janela | Bot em `0.0.0.0:7860` sem TLS nem autenticação (unit `pipecat-bot.service`); `tls_proxy` em `:8443` | Bot em `127.0.0.1:7860` (só o proxy fica exposto). Restringir a janela à rede de casa (D1). A chave pública do cliente (`VITE_BOT_START_PUBLIC_API_KEY`) vai no código do navegador — **não é segredo** e não conta como proteção |
-| Token do NewClaw | Bearer da API inteira do painel, sem expiração, revogável só trocando a senha | Fica **só no servidor do bot** (arquivo de ambiente com permissão 600, fora do git e do cliente). Obtido uma vez por login. Rotação: trocar `DASHBOARD_PASSWORD` e refazer o login do bot e do painel (procedimento escrito no Sprint 4). Token com escopo restrito não existe — seria conceito novo, só com ADR própria |
-| Transporte Marte → Venus | Painel da Venus em HTTP puro na rede | **Túnel SSH** (encaminhamento local, unit systemd no Marte) para cifrar o token sem mudar o NewClaw. Alternativa: aceitar HTTP na rede de casa, como o painel já usa hoje (D1) |
-| Ação perigosa | Modo SAFE pede aprovação (`pendingAuth`) | O Jarvis **nunca aprova** por voz; diz que há aprovação pendente no painel (D11) |
-| Falha de conectividade | — | `401` → estado ERRO "token inválido" (sem tentar de novo em laço); `429` → espera o `Retry-After`; rede caída → depois de 3 falhas seguidas no polling, ERRO "NewClaw inalcançável", mas os `turnId` continuam abertos e são lidos quando a rede volta (o trabalho no NewClaw não para) |
-| Validação | — | Instância isolada (porta, banco e workspace próprios), nunca a produção, até o Sprint 4 com OK dela |
+| Janela Jarvis (navegador) | Máquina de estados; envia a transcrição ao `/api/chat`; acompanha `/active`; lê o outbox; manda o bot falar; cancelar; aprovar por clique; histórico; modo texto quando a voz não está disponível | Não decide nada de IA; não guarda memória além do `sessionId` |
+| Servidor NewClaw | Serve `/jarvis`; repassa a sinalização; informa o status da voz | Nada muda no Core (`MessageBus`, `GoalOrchestrator`, `AgentLoop`, memória) |
+| Processo de voz | Áudio ↔ texto; interrupção da fala | Não conversa, não tem LLM, não chama o NewClaw |
+| Core | Continua a única fonte de verdade (requisito 2) | Não fica sabendo que a voz existe |
 
-### Máquina de estados da janela (entrega 6)
+### Configuração (requisitos 4, 6 e 8)
 
-| De | Evento | Para | O que a janela mostra/faz |
+| O quê | Variável | Regra |
+|---|---|---|
+| TTS | `KOKORO_TTS_URL`, `KOKORO_TTS_VOICE` (**já existem**) | Mesmo contrato (API OpenAI `/v1/audio/speech`), sem endereço padrão. Vazio = sem fala |
+| STT | Decisão D2 | Sem endereço padrão. Vazio = sem escuta |
+| Idioma | `config.language` (**já existe**) | Passado ao STT e mostrado na janela; nada fixo em português |
+| Python | descoberto por `resolvePython3Runtime` | Ausente = voz indisponível, reportado no status |
+| Porta local do processo de voz | `VOZ_PORTA` (nova) | Só `127.0.0.1` |
+
+Ligar a voz = declarar STT e TTS (a declaração é a intenção, como em `KOKORO_TTS_URL`). Faltando qualquer peça, o status diz
+qual falta e a janela funciona em texto. Nenhum modelo entra no caminho da voz.
+
+### Estratégia de conversa
+
+- `sessionId` por aparelho, guardado no navegador (como o painel faz); a conversa aparece na lista do painel.
+- O navegador manda **só a fala nova**; o histórico é o da sessão no NewClaw. O processo de voz não guarda contexto.
+- "Turno terminado" sem ler texto: um `turnId` fica aberto enquanto `/active` mostrar a conversa ocupada; ao ficar livre,
+  a janela faz a última leitura do outbox de cada `turnId` aberto e completa o que faltar por
+  `/api/conversations/:id/messages`. Se o teste de fila ocupada reprovar, a menor extensão é um campo aditivo em
+  `NormalizedResponse` (como `progresso`), com ADR própria.
+
+### Máquina de estados da janela
+
+| De | Evento | Para | Comportamento |
 |---|---|---|---|
-| OCIOSO | `UserStartedSpeaking` | OUVINDO | onda reage ao microfone |
-| OUVINDO | `UserStoppedSpeaking` | TRANSCREVENDO | "entendendo…" |
-| TRANSCREVENDO | transcrição com texto | ENVIANDO | mostra o texto transcrito |
-| TRANSCREVENDO | transcrição vazia | OCIOSO | nada é enviado |
-| ENVIANDO | `202 {turnId}` | PENSANDO | turno aceito (som opcional, D7) |
-| ENVIANDO | `401`/`429`/`5xx`/rede | ERRO | motivo curto, sem reenviar em laço |
-| PENSANDO | progresso novo no `/active` | FALANDO | fala o relato; depois volta a PENSANDO |
-| PENSANDO | `pendingAuth` | PENSANDO | "aprovação pendente no painel" |
-| PENSANDO | `UserStartedSpeaking` | OUVINDO | fala nova vira complemento ou fila (novo `turnId`, o anterior continua aberto) |
-| PENSANDO | conversa livre + outbox `200` | FALANDO | fala a resposta |
-| FALANDO | `UserStartedSpeaking` | OUVINDO | **interrupção**: corta só o áudio; o trabalho não é cancelado |
-| FALANDO | `BotStoppedSpeaking`, sem `turnId` aberto | CONCLUÍDO | — |
-| FALANDO | `BotStoppedSpeaking`, com `turnId` aberto | PENSANDO | — |
-| qualquer um com `turnId` aberto | botão **Parar** | CANCELANDO | `POST /api/chat` `/cancelar` |
-| CANCELANDO | `/active` livre | CONCLUÍDO | fala a confirmação do outbox |
-| CONCLUÍDO | alguns segundos | OCIOSO | — |
-| ERRO | botão "Tentar de novo" ou rede volta | estado anterior | relê os `turnId` abertos |
+| OCIOSO | VAD: começou a falar | OUVINDO | onda reage ao microfone |
+| OUVINDO | VAD: parou | TRANSCREVENDO | "entendendo…" |
+| TRANSCREVENDO | `user-transcription` final com texto / vazio | ENVIANDO / OCIOSO | mostra o texto |
+| ENVIANDO | `202 {turnId}` / erro | PENSANDO / ERRO | turno aceito (som opcional, D7) |
+| PENSANDO | progresso novo | FALANDO → PENSANDO | fala o relato uma vez |
+| PENSANDO | `pendingAuth` | PENSANDO | botões Aprovar/Rejeitar (clique, nunca voz) |
+| PENSANDO | começou a falar | OUVINDO | fala nova vira complemento ou fila; o `turnId` anterior continua aberto |
+| PENSANDO | conversa livre + outbox `200` | FALANDO | fala a resposta (texto limpo de markdown e emoji) |
+| FALANDO | começou a falar | OUVINDO | **interrupção**: corta o áudio; o trabalho não é cancelado |
+| FALANDO | terminou, com/sem `turnId` aberto | PENSANDO / CONCLUÍDO | — |
+| qualquer um com `turnId` aberto | botão Parar | CANCELANDO → CONCLUÍDO | `/cancelar`; fala a confirmação |
+| ERRO | Tentar de novo / conexão volta | estado anterior | relê os `turnId` abertos |
 
 **Desconexão:**
-- **Janela fechada** (`on_client_disconnected`): o bot encerra a sessão de voz e não guarda nada; os turnos continuam no
-  NewClaw e as respostas ficam gravadas na conversa.
-- **Ao reabrir:** recupera pelo histórico (D10).
-- **Bot ↔ NewClaw cai:** estado ERRO com os `turnId` preservados enquanto a sessão de voz estiver aberta.
+- **Janela fechada:** o trabalho continua no NewClaw. Ao reabrir, a janela mostra (sem falar) o que chegou (D10).
+- **Processo de voz caiu:** a janela passa a funcionar em texto e avisa.
+- **NewClaw caiu:** depois de 3 falhas seguidas de consulta (a mesma regra do painel), a janela vai para ERRO e mantém os
+  `turnId` abertos.
 
-## Matriz de decisões D1–D11 (entrega 4)
+### Segurança
 
-| # | Decisão | Recomendação | Justificativa | Riscos | Como validar |
+- **Página e API do NewClaw:** a autenticação e a proteção CSRF do painel valem para `/jarvis` e para `/api/voz/offer`. Nada
+  de token no navegador nem no processo de voz.
+- **Processo de voz:**
+  - só em `127.0.0.1`, sem credencial nenhuma;
+  - a única porta de entrada é a sinalização repassada pelo NewClaw, já autenticada;
+  - o áudio WebRTC usa portas UDP negociadas — documentar no `docs/VOZ.md`.
+- **Ação perigosa:** aprovação só por clique na janela, com a mesma rota do painel; nunca por voz (D11).
+- **Acesso remoto:** exige HTTPS para o microfone (D14); sem HTTPS, a janela funciona em texto.
+
+### Riscos
+
+- **Peso da instalação opcional do Pipecat**, sobretudo no Windows (`aiortc`, `onnxruntime`).
+- **A hipótese da `client-message`.** Se ela falhar, cai para P2, com token interno, e esta ADR volta para revisão.
+- **Licença dos componentes do registro `ui.pipecat.ai`**, ainda não conferida.
+- **Duplicação do protocolo do turno entre painel e Jarvis** (D15).
+- **Latência:** a conversa continua levando o tempo do turno do NewClaw. A janela deixa a espera visível, mas não a encurta (D8).
+- **Tamanho do build:** o `npm run build` passa a gerar também a interface. Quanto tempo acrescenta é medido na Etapa 3.
+
+## Matriz de decisões
+
+| # | Decisão | Recomendação | Por quê | Risco | Como validar |
 |---|---|---|---|---|---|
-| D1 | Qual NewClaw e como alcança | **Testes:** instância isolada do NewClaw no Marte, ao lado do bot (localhost). **Produção (só no Sprint 4, com OK):** Venus por túnel SSH | Diretriz exige instância isolada; localhost dispensa rede nos testes; túnel cifra o token sem mudar o NewClaw | Marte precisa de um checkout do NewClaw (não verificado); túnel é mais uma peça que pode cair | T9 (rede) e T12; túnel derrubado de propósito → ERRO e recuperação |
-| D2 | Onde transcrever | **S1**, no Pipecat | Contrato do whisper do lab incompatível com o do Core | Duas configurações de STT | M1; T1 e T2 com fala real |
-| D3 | Cancelar | **Botão "Parar"** → `/cancelar` (mesmo do painel); interromper a fala só corta o áudio | Controle de interface, sem interpretar linguagem; o painel já faz igual | Pessoa espera que "pare" falado cancele | T6; T5 confirma que interrupção não cancela |
-| D4 | Resposta longa | **Falar o texto inteiro limpo, mostrando o texto na janela**; interrupção corta | Não perde conteúdo e não muda o Core. O painel corta em 500 caracteres na leitura em voz alta (`index.html:1193`) — opção que fica com ela | Monólogo longo | T3 com resposta longa; opinião dela |
-| D5 | Identidade entre canais | **Conversa própria por dispositivo** (`jarvis-<dispositivo>`), visível no painel; unificar só com ADR própria | Funciona com o contrato atual; unificar é conceito novo | "Cadê meu pedido do Telegram?" depende da memória de longo prazo | T2 e T13 |
-| D6 | Frequência do progresso | **Manter 5 min** no piloto; a janela mostra "pensando há N min" pelo `elapsedMs` | O valor é global; mudar afeta todos os canais | Silêncio de até 5 min | M3; na instância isolada, testar com valor baixo |
-| D7 | Som de "aceito" e voz | **Só o estado visual**; som opcional. Voz: a `KOKORO_VOICE` que ela já declarou no lab | Nenhuma escolha nova no código | — | Escolha dela |
-| D8 | Modelo de conversa | **Nada muda no piloto.** Com a linha de base separada (Sprint 0), ela decide se declara outro modelo no perfil de conversa | Mediana de ~70 s na Venus vem do turno; nenhum modelo é sugerido aqui | Piloto pode parecer lento | M4 por tipo de turno |
-| D9 | Botão no painel | **Não no piloto** (o chat fica intocado); abrir pelo endereço ou favorito | Restrição "chat do painel inalterado" | — | C7 |
-| D10 | Respostas que chegaram com a janela fechada | **Ao reabrir, mostrar (sem falar)** as mensagens novas da conversa, lidas de `/api/conversations/web:<sessionId>/messages`; falar só se ela pedir | Usa rota existente | Órfãs saem coladas na próxima resposta com "📎 Entrega pendente…" e serão faladas | T7, T8, T10 |
-| D11 | Aprovar ação perigosa por voz | **Nunca**; avisar que há aprovação no painel | Aprovação por voz é fácil de disparar sem querer; ADR-005 | Objetivo fica parado até ela abrir o painel | T14 |
+| D1 | Motor de voz | **V1** (Pipecat opcional) | Requisito 3 e componentes validados | Peso da instalação | Etapa 5 em Windows e Linux limpos |
+| D2 | Configuração do STT | **Uma variável só para o Whisper do usuário**, usada pelo Core e pelo processo de voz: estender o Core para também falar a API OpenAI de transcrição (benefício para as notas de voz de todos os canais) | Evita duas configurações para a mesma coisa | Mexe no Core (pequeno, com teste próprio) | Teste de transcrição nos dois formatos |
+| D3 | Cancelar | Botão **Parar** → `/cancelar` | Igual ao painel, sem interpretar fala | Pessoa espera que "pare" falado cancele | T6 |
+| D4 | Resposta longa | Falar o texto inteiro limpo e mostrar o texto | Não perde conteúdo | Monólogo | T3 + opinião dela |
+| D5 | Conversa | Uma por aparelho, visível no painel | Contrato atual | Separada da do Telegram (memória de longo prazo compartilhada) | T2, T13 |
+| D6 | Frequência do progresso | Manter `RELATO_DE_PROGRESSO_MIN`; a janela mostra "pensando há N min" pelo `elapsedMs` | O valor é global | Silêncio de até 5 min | M3 |
+| D7 | Som de "aceito" e voz | Só o estado visual; som opcional. Voz = `KOKORO_TTS_VOICE` do usuário | Nenhuma escolha no código | — | Escolha dela |
+| D8 | Modelo de conversa | Nada muda | O Core decide pelos perfis que o usuário declara | Parecer lento | M4 |
+| D9 | Acesso pela navegação do painel | Um link "Jarvis" no menu do painel (única mudança visível no painel) | Descoberta da funcionalidade | Toca o `index.html` | T12 |
+| D10 | Respostas que chegaram com a janela fechada | Mostrar sem falar | Rota existente | Entrega órfã falada na resposta seguinte | T7, T8, T10 |
+| D11 | Ação perigosa | Botões na janela; nunca por voz | ADR-005; clique é intencional | — | T14 |
+| D12 | Como o processo de voz sobe | **S1**, PM2 condicional | Precedente do suplemento; sem código de supervisão | Ligar/desligar pelo `pm2` | Etapa 4 |
+| D13 | Transporte | **T1**, SmallWebRTC | Validado | Portas UDP | Etapa 0 e T9 |
+| D14 | HTTPS para acesso remoto | Documentar o uso de proxy reverso do próprio usuário; sem TLS embutido no NewClaw nesta ADR | TLS no produto é decisão à parte | Microfone só em `localhost` sem proxy | Guia em `docs/VOZ.md` |
+| D15 | Protocolo do turno no navegador | Cliente pequeno e tipado dentro de `jarvis/`; extração para módulo comum com o painel numa etapa separada, com teste do chat | Não mexer no chat agora | Duas cópias do mesmo conhecimento até a extração | Etapa 6 |
 
-## Testes de aceitação (entrega 7)
+## Etapas de implementação
 
-Todos na instância isolada, com o modelo que ela escolher e **só depois do OK de cota** (estimativa no Sprint 1).
+Toda etapa termina com a suíte completa (`npm run test:regression`) passando, mais os testes próprios. Nenhuma toca a
+produção. Push e PR só com OK dela, etapa a etapa.
+
+| Etapa | O que entrega | Arquivos | Testes / pronto quando |
+|---|---|---|---|
+| **0 — Provas** (sem código no produto) | Prova da `client-message` → fala sem LLM; sinalização atrás de proxy; licença dos componentes do registro; instalação do Pipecat em Windows e Linux limpos | Nenhum no repositório (rascunho fora dele) | As quatro hipóteses respondidas e registradas aqui; se a primeira falhar, revisar P1 antes de seguir |
+| **1 — Processo de voz** | `voz/` com o pipeline do protótipo: sem LLM, sem histórico, configurado só por ambiente, idioma de `config.language`, `KokoroTTS` aproveitado, só `127.0.0.1`, aviso de licença BSD-2 | `voz/bot.py`, `voz/requirements.txt` (versão fixa do Pipecat), `voz/README.md`, `voz/tests/` | Testes Python das funções puras (cabeçalho WAV, leitura de configuração); sobe sozinho com STT/TTS de teste; sem nenhuma configuração, sai com mensagem clara |
+| **2 — Integração no servidor** | Rota `POST /api/voz/offer` (repasse autenticado); campo `voz` em `/api/status`; `/jarvis` servido como página estática; variáveis documentadas | `src/dashboard/routes/voz.ts` (nova), `src/dashboard/DashboardServer.ts`, `src/dashboard/routes/status.ts`, `.env.example` | Regressão nova: rota exige autenticação; voz ausente → status "não configurada" e `503` limpo; páginas e rotas existentes iguais. Suíte completa passando |
+| **3 — Janela Jarvis** | Projeto gerado do molde, componentes do registro incluídos no repositório, visual Jarvis, os estados da tabela, modo texto, Parar, aprovação por clique, histórico, reabertura | `jarvis/` (subpacote), `package.json` raiz (o script `build` passa a gerar também a janela) | Testes da máquina de estados e do cliente da API (sem rede); build reproduzível; janela abre em modo texto sem voz |
+| **4 — Instalação e distribuição** | Passo opcional de voz nos instaladores (ambiente Python + `voz/requirements.txt`), entrada condicional no PM2, atualização, guia | `install.sh`, `install.ps1`, `update.sh`, `update.ps1`, `ecosystem.config.cjs`, `docs/VOZ.md`, READMEs (3 idiomas), avisos de terceiros | Instalação limpa **sem voz** em Windows e Linux: NewClaw idêntico ao de antes; **com voz**: processo sobe e status "no ar" |
+| **5 — Validação real** (etapa 4 da diretriz) | Instância isolada, STT/TTS reais configurados como um usuário qualquer configuraria, LLM real (só com OK de cota) | Nenhum | T1–T14 passam; M1–M6 registrados |
+| **6 — Condicionais** (cada um com ADR própria) | Módulo comum do protocolo do turno (D15), marca estrutural de ACK, push por SSE, HTTPS embutido, identidade entre canais | — | Só se a medição ou ela pedir |
+
+A extensão do STT de D2, se aprovada, entra na Etapa 2, com teste próprio:
+- `src/core/agentMediaHandlers.ts`;
+- `.env.example`;
+- teste de regressão novo da transcrição nos dois formatos.
+
+### Proteção do que já existe
+
+- **Chat, roteamento de modelos e memória:** a suíte completa de regressão roda em toda etapa. As únicas mudanças no Core são
+  a extensão opcional de D2; o resto é rota nova e página nova.
+- **T12, "chat intocado":** o `index.html` só muda com D9 (um link), e conversar pelo painel e pelo Telegram continua igual.
+- **Sem voz configurada:** um teste de regressão garante que o NewClaw sobe, que `/api/status` diz "voz não configurada" e
+  que nenhum processo Python é chamado.
+
+## Testes de aceitação (Etapa 5)
 
 | # | Cenário | Passa quando |
 |---|---|---|
-| T1 | Conversa simples | Pergunta curta → resposta falada; a conversa aparece no painel com o mesmo `sessionId` |
-| T2 | Continuidade | Segunda fala que depende da primeira ("e o segundo?") é respondida certo; o bot mandou só a fala nova (conferido no log de auditoria do bot) |
-| T3 | Tarefa longa | Pedido que vira objetivo: PENSANDO durante todo o objetivo, resposta falada no fim |
-| T4 | Progresso | Com `RELATO_DE_PROGRESSO_MIN` baixo na instância isolada, cada relato novo é falado uma vez |
-| T5 | Interrupção | Falar durante FALANDO corta o áudio; o turno não é cancelado |
-| T5b | Complemento | Falar durante PENSANDO → "Anotado" e a resposta final do turno original ainda chega |
-| T6 | Cancelar | Parar durante PENSANDO → CANCELANDO → confirmação; `/active` livre; registrar o que o turno cancelado devolve |
-| T7 | Janela fechada | Fechar durante PENSANDO; a resposta fica gravada na conversa |
-| T8 | Reconexão | Reabrir depois de T7 → a resposta aparece (D10) |
-| T9 | Erros da API | Token errado → ERRO sem laço; NewClaw parado → ERRO e recuperação quando volta; `429` respeita `Retry-After` |
-| T10 | Resposta tardia/órfã | Entrega órfã é falada na resposta seguinte, sem duplicar |
-| T11 | Fila ocupada | Duas falas seguidas: ACK e resposta final do mesmo `turnId`, ambas recebidas, nenhuma perdida |
-| T12 | Chat intocado | Suíte de regressão do NewClaw passa; conversa normal no painel igual a antes |
-| T13 | Memória compartilhada | Fato dito ao Jarvis é encontrado depois pelo Telegram (memória de longo prazo) |
-| T14 | Ação perigosa | Pedido que exige aprovação → aviso "aprovação pendente no painel"; nada é aprovado pelo Jarvis |
+| T1 | Conversa simples | Pergunta falada → resposta falada; conversa visível no painel |
+| T2 | Continuidade | Segunda fala dependente da primeira respondida certo; só a fala nova foi enviada |
+| T3 | Tarefa longa | PENSANDO durante o objetivo, resposta falada no fim |
+| T4 | Progresso | Com relato frequente na instância isolada, cada relato novo falado uma vez |
+| T5 | Interrupção | Falar durante FALANDO corta o áudio sem cancelar o trabalho |
+| T5b | Complemento | Falar durante PENSANDO → "Anotado"; a resposta do turno original chega |
+| T6 | Cancelar | Parar → CANCELANDO → confirmação; `/active` livre |
+| T7 | Janela fechada | Resposta gravada na conversa |
+| T8 | Reabrir | A resposta aparece (D10) |
+| T9 | Falhas | Processo de voz parado → modo texto; NewClaw parado → ERRO e recuperação; sessão expirada → volta ao login |
+| T10 | Entrega órfã | Falada na resposta seguinte, sem duplicar |
+| T11 | Fila ocupada | ACK e resposta final do mesmo `turnId`, nenhuma perdida |
+| T12 | Chat intocado | Suíte de regressão; conversa normal no painel e no Telegram igual |
+| T13 | Memória compartilhada | Fato dito ao Jarvis encontrado depois por outro canal |
+| T14 | Ação perigosa | Botões de aprovação na janela; nada é aprovado por voz |
+| T15 | Sem voz | Instalação sem Python/STT/TTS: NewClaw normal; janela Jarvis em modo texto |
 
-## Métricas (entrega 8)
+## Métricas
 
-Uma linha JSON por evento no log de auditoria do bot, com `turnId`, `sessionId` e horário. Nenhum número abaixo é meta
-inventada: cada uma tem linha de base medida ou fica "a medir".
+| # | Métrica | De → até | Linha de base |
+|---|---|---|---|
+| M1 | Transcrição | fim da fala → `user-transcription` | 1,07–2,10 s (protótipo, n=7) |
+| M2 | Aceitação | transcrição → `202` | a medir |
+| M3 | Primeiro progresso | `202` → primeiro `progresso` | a medir (padrão: relato a cada 5 min) |
+| M4 | Primeira resposta | `202` → outbox `200` | p50 69,8 s (Venus/web) a 152,7 s (Windows/web), misturando conversa e objetivo |
+| M5 | Primeiro áudio | outbox `200` → início da fala | 0,08–1,15 s (Kokoro, n=8) |
+| M6 | Custo do polling | resposta pronta → outbox lido | a medir (esperado ≤ 1,5 s; hipótese) |
 
-| # | Métrica | De → até | Fonte | Linha de base |
-|---|---|---|---|---|
-| M1 | Latência de transcrição | `UserStoppedSpeaking` → `TranscriptionFrame` | log do bot | TTFB do STT 1,07–2,10 s (n=7, 09/10) |
-| M2 | Tempo até a aceitação | transcrição → `202` | log do bot | **a medir** |
-| M3 | Tempo até o primeiro progresso | `202` → primeiro `progresso` novo | log do bot | **a medir** (o relato sai a cada 5 min por padrão; no canal web nunca medido) |
-| M4 | Tempo até a primeira resposta | `202` → outbox `200` | log do bot; `processing_done` no NewClaw | Venus/web 30d p50 69,8 s, p90 112,6 s (n=13); Windows/web 30d p50 152,7 s (n=126) — mistura conversa e objetivo |
-| M5 | Tempo até o primeiro áudio | outbox `200` → `BotStartedSpeaking` | log do bot | TTFB do Kokoro 0,08–1,15 s (n=8) |
-| M6 | Custo do polling | (resposta pronta no NewClaw) → outbox `200` | log do bot × `processing_done` | **a medir** (esperado ≤ 1,5 s pelo intervalo; hipótese) |
-
-As metas de M2–M6 ficam com ela, depois do Sprint 0.
-
-## Sprints (entrega 9)
-
-Nenhuma sprint mexe na produção. Push, PR e deploy só com OK dela, sprint a sprint.
-
-### Sprint 0 — Linha de base e decisões (sem código, sem cota)
-- Separar, nos logs existentes, conversa simples × objetivo (cruzar `processing_done` com os registros do `GoalOrchestrator`
-  pelo horário e pela sessão) e refazer a tabela de M4 por tipo.
-- Conferir no Marte: se o runner do Pipecat 1.12 serve um cliente próprio no lugar do `pipecat_ai_prebuilt` (necessário para
-  J1); se há checkout do NewClaw para a instância isolada.
-- Ela decide D1–D11 e as metas de M2–M6.
-- **Arquivos:** só esta ADR. **Pronto quando:** tabela de M4 separada por tipo, as duas conferências respondidas, decisões
-  registradas aqui.
-
-### Sprint 1 — Instância isolada e teste de contrato
-- Subir o NewClaw isolado no Marte (porta, banco e workspace próprios; modelo que ela escolher).
-- Cliente HTTP do NewClaw no kit + teste de contrato que exercita login, envio, `/active`, outbox, cancelamento, fila
-  ocupada e entrega órfã.
-- Estimar a cota antes e pedir OK.
-- **Arquivos (jarvis-kit):** `server/newclaw_client.py` (novo), `server/tests/test_contrato_newclaw.py` (novo),
-  `server/env.example`. **NewClaw:** nenhum.
-- **Pronto quando:** cada linha da tabela do contrato marcada com "H" vira comprovada ou refutada, com o log do teste; se T11
-  reprovar, abrir a ADR curta da marca estrutural antes de seguir.
-
-### Sprint 2 — Bot ligado ao NewClaw
-- Estágio `llm` do `bot.py` trocado pelo processador "NewClaw".
-  - Sai do caminho do Jarvis o modelo embutido como valor padrão: `OLLAMA_MODEL` sem valor padrão, se ela quiser manter o
-    modo Ollama.
-  - Máquina de estados no bot, publicada ao cliente por `RTVIServerMessageFrame`.
-  - Limpeza de markdown/emoji antes do Kokoro.
-  - Log de auditoria JSON (M1–M6).
-- **Arquivos (jarvis-kit):** `server/bot.py`, `server/newclaw_client.py`, `server/env.example`. **NewClaw:** nenhum.
-- **Pronto quando:** T1, T2, T3, T5, T5b, T6, T9 e T11 passam na instância isolada, com o cliente atual (sem reskin).
-
-### Sprint 3 — Janela Jarvis (reskin)
-- Cliente a partir de `client-templates/react-vite`, nome e visual Jarvis.
-  - Os nove estados.
-  - Botão Parar.
-  - Texto transcrito e da resposta.
-  - Recuperação ao reabrir (D10).
-  - Aviso de aprovação pendente (D11).
-- **Arquivos (jarvis-kit):** diretório novo do cliente gerado do template (ex.: `client-jarvis/`); a forma de servir depende
-  do achado do Sprint 0. **NewClaw:** nenhum.
-- **Pronto quando:** T4, T7, T8, T10 e T14 passam; todos os estados aparecem na tela.
-
-### Sprint 4 — Segurança e ligação com produção (só com OK dela)
-- Bot em `127.0.0.1`.
-- Túnel SSH Marte → Venus (ou a escolha dela em D1).
-- Token em arquivo 600 e procedimento de rotação escrito.
-- Teste T9 com o túnel derrubado.
-- Só então apontar para a Venus, **por ela ou com o OK explícito dela**.
-- **Arquivos (jarvis-kit):** `systemd/pipecat-bot.service`, `systemd/` unit nova do túnel, `server/env.example`,
-  procedimento de rotação (documento do kit). **NewClaw:** nenhum (a Venus já está em `0.0.0.0:3090` com senha; com túnel,
-  nem isso muda).
-- **Pronto quando:** T1–T14 passam contra a produção escolhida, com M1–M6 registrados.
-
-### Sprint 5 — Condicional (cada item com ADR própria, só se a medição pedir)
-Push por SSE na rota de chat (se M6 reprovar); `ChannelType 'voice'` (se a mistura nos logs atrapalhar); identidade única
-entre canais (D5); resposta falável (D4); marca estrutural de ACK (se T11 reprovar); STT único (S2).
-
-**Arquivos do NewClaw alterados nos Sprints 0–4:** somente esta ADR.
-
-## Critérios de sucesso
-
-- **C1:** estado TRANSCREVENDO visível assim que o VAD detecta o fim da fala, e PENSANDO no `202`, em 100% dos turnos.
-- **C2:** M2–M6 dentro das metas que ela definir no Sprint 0.
-- **C3:** zero turnos sem retorno (cruzando `turnId` do bot com outbox e conversa).
-- **C4:** a conversa do Jarvis aparece no painel; T13 passa.
-- **C5:** nenhum modelo escolhido pelo código do NewClaw nem pelo caminho do Jarvis.
-- **C6:** zero arquivo novo ou alterado no código do NewClaw nos Sprints 0–4.
-- **C7:** chat do painel e demais canais iguais (T12).
+As metas ficam com ela depois da Etapa 0.
 
 ## Fase 5 — Validação
 
-- **Evidência real?** Sim: contrato conferido linha a linha no código, ambiente lido no Marte e na Venus, linha de base dos
-  logs. O que não foi medido está marcado como hipótese.
-- **Estrutural ou sintoma?** Estrutural: a voz é mais um cliente do canal, sem segundo cérebro.
-- **Reduz complexidade?** Sim: no NewClaw nada é criado; no bot, um estágio é trocado, não somado.
-- **Uma fonte de verdade?** Uma memória, uma fila, um roteador; a máquina de estados da janela mora só no bot. Sobram duas
-  configurações de STT (S1, consciente).
-- **Filosofia do Cognitive Kernel?** Mantida — o Core não sabe que a voz existe.
-- **Incremental e reversível?** Sim: cada sprint para em si; voltar o estágio `llm` do `bot.py` desfaz tudo.
+- **Evidência real?** Sim: contrato, precedentes e protótipo conferidos no código e no Marte; linha de base dos logs. O que
+  falta está nomeado como hipótese da Etapa 0.
+- **Estrutural?** Sim: voz entra como interface e processo de áudio, sem segundo cérebro.
+- **Reduz complexidade?** Em relação ao protótipo, sim: sai o LLM do bot, sai o token, sai o endereço fixo. Entram uma rota,
+  uma página e um processo opcional.
+- **Uma fonte de verdade?** Memória, contexto, roteamento e execução só no Core; estado da janela só no navegador. Com D2,
+  uma configuração de STT.
+- **Filosofia do Cognitive Kernel?** Mantida: o Core não sabe que a voz existe.
+- **Incremental e reversível?** Sim: cada etapa funciona sozinha; tirar a entrada do PM2 e o link do menu desliga tudo.
 
 ## Achados laterais (registrados, não corrigidos aqui)
 
-- **Outbox sem expiração:** resposta nunca lida fica para sempre na memória do processo (`WebChannelAdapter.ts:121-133`).
-- **Token do painel sem revogação individual e com escopo total** (`auth.ts:202-225`).
-- **Bot do lab em `0.0.0.0:7860` sem TLS nem autenticação** (`systemd/pipecat-bot.service`); tratado no Sprint 4.
-- **`processing_done` não diz o tipo do turno** (conversa × objetivo); a linha de base precisa de cruzamento manual.
-- **Resposta sem marca de ACK/complemento** (limitação 1 da estratégia de conversação).
+- Outbox sem expiração (`WebChannelAdapter.ts:121-133`).
+- Token do painel sem revogação individual e com acesso total (`auth.ts:202-225`).
+- Bot do lab em `0.0.0.0:7860` sem TLS nem autenticação (infraestrutura dela, fora do produto).
+- `processing_done` não diz se o turno foi conversa ou objetivo.
+- STT local do Core com `--language pt` fixo (`agentMediaHandlers.ts:273`), independente de `config.language`.
