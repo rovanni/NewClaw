@@ -89,7 +89,8 @@ async function main(): Promise<void> {
     {
         const src = fs.readFileSync(path.join(process.cwd(), 'src', 'loop', 'GoalOrchestrator.ts'), 'utf-8');
         assert(/pedidoCompleto = decisao\.pedidoCompleto;/.test(src), 'a decisão do juiz de suficiência é guardada (antes: só `acao`)');
-        assert(/const objetivo = pedidoCompleto \|\| classification\.objective \|\| message;/.test(src), 'objetivo: pedido completo → objetivo do classificador → texto cru');
+        // S461: o pedido completo só vale quando o juiz o reescreveu (a cópia igual não apaga o objetivo do classificador).
+        assert(/const objetivo = pedidoEntendido \|\| classification\.objective \|\| message;/.test(src), 'objetivo: pedido completo → objetivo do classificador → texto cru');
         const iCreate = src.indexOf('const goal = this.goalStore.create({');
         const bloco = src.slice(iCreate, iCreate + 300);
         assert(/userIntent: message,/.test(bloco) && /objective: objetivo,/.test(bloco), 'userIntent continua o texto literal; objective recebe o pedido entendido');

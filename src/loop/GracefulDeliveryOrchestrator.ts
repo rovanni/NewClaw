@@ -41,6 +41,16 @@ const log = createLogger('GracefulDeliveryOrchestrator');
 
 const AUDIO_DELIVERED_SENTINEL = '__send_audio_delivered__';
 
+/**
+ * As palavras do usuário ficam (S73), e o pedido entendido vai junto quando é outro (S461, review do PR #18): "Não consegui
+ * completar: "Pode fazer?"" sozinho não diz o quê.
+ */
+function entendidoComo(goal: Goal): string {
+    const obj = (goal.objective ?? '').trim();
+    if (!obj || obj.toLowerCase() === goal.userIntent.trim().toLowerCase()) return '';
+    return ` (entendido como: "${obj.slice(0, 150)}")`;
+}
+
 export interface GracefulDeliveryResult {
     /** true se há algum conteúdo parcial útil para incluir na resposta */
     hasPartialContent: boolean;
@@ -132,7 +142,7 @@ export class GracefulDeliveryOrchestrator {
         const deliveredShown = delivered.map(a => a === AUDIO_DELIVERED_SENTINEL ? 'a resposta em áudio' : a);
         lines.push(delivered.length > 0
             ? `Consegui gerar e enviar: ${deliveredShown.join(', ')}. Porém não finalizei o restante do pedido.`
-            : `Não consegui completar: "${goal.userIntent.slice(0, 150)}".`);
+            : `Não consegui completar: "${goal.userIntent.slice(0, 150)}"${entendidoComo(goal)}.`);
 
         // 2. Motivo específico do chamador.
         const lastBlocker = goal.blockers[goal.blockers.length - 1];
