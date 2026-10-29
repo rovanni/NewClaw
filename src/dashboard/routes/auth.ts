@@ -274,6 +274,8 @@ export function createAuthRouter(): Router {
             res.cookie('newclaw_session', token, {
                 httpOnly: true,
                 sameSite: 'strict',
+                // Pelo HTTPS (DASHBOARD_TLS_CERT), o cookie só viaja cifrado; pelo HTTP local, segue como antes.
+                secure: req.secure,
                 maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
                 path: '/',
             });

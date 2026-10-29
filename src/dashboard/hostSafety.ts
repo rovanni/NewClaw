@@ -27,6 +27,50 @@ export function isUnsafeExposedBoot(host: string, authEnabled: boolean): boolean
     return !LOOPBACK_HOSTNAMES.has(host) && !authEnabled;
 }
 
+// ── HTTPS opcional (29/10/2026) ───────────────────────────────────────────────────────────────
+//
+// O navegador só libera o microfone (e outras APIs) em página segura: HTTPS ou localhost. O painel
+// aberto pela rede em http://<ip>:3090 recebia `not-allowed` no ditado. Com DASHBOARD_TLS_CERT e
+// DASHBOARD_TLS_KEY, o painel atende a rede em HTTPS (DASHBOARD_HTTPS_PORT) e o HTTP fica preso a
+// 127.0.0.1 — as ferramentas locais (`newclaw update`, `doctor`, troca de senha), que chamam
+// http://127.0.0.1:<DASHBOARD_PORT>, continuam funcionando, e pela rede só existe HTTPS.
+
+/** Porta HTTPS quando DASHBOARD_HTTPS_PORT não é informada. É endereço local, não escolha de recurso. */
+export const DASHBOARD_HTTPS_PORT_PADRAO = 3443;
+
+export interface Escuta { host: string; port: number }
+export interface PlanoDeEscuta {
+    http: Escuta;
+    https?: Escuta & { certFile: string; keyFile: string };
+    /** Configuração inconsistente: o boot para com esta mensagem (falha alta, como a de senha). */
+    erro?: string;
+}
+
+export function planejarEscuta(
+    env: { DASHBOARD_HOST?: string; DASHBOARD_HTTPS_PORT?: string; DASHBOARD_TLS_CERT?: string; DASHBOARD_TLS_KEY?: string },
+    port: number,
+): PlanoDeEscuta {
+    const host = env.DASHBOARD_HOST || '127.0.0.1';
+    const cert = env.DASHBOARD_TLS_CERT?.trim();
+    const key = env.DASHBOARD_TLS_KEY?.trim();
+    if (!cert && !key) return { http: { host, port } };
+    if (!cert || !key) {
+        return { http: { host, port }, erro: 'HTTPS precisa dos dois: DASHBOARD_TLS_CERT e DASHBOARD_TLS_KEY.' };
+    }
+    const bruta = env.DASHBOARD_HTTPS_PORT?.trim();
+    const httpsPort = bruta ? Number(bruta) : DASHBOARD_HTTPS_PORT_PADRAO;
+    if (!Number.isInteger(httpsPort) || httpsPort < 1 || httpsPort > 65535) {
+        return { http: { host, port }, erro: `DASHBOARD_HTTPS_PORT inválida: '${bruta}'.` };
+    }
+    if (httpsPort === port) {
+        return { http: { host, port }, erro: `DASHBOARD_HTTPS_PORT (${httpsPort}) precisa ser diferente de DASHBOARD_PORT.` };
+    }
+    return {
+        http: { host: '127.0.0.1', port },
+        https: { host, port: httpsPort, certFile: cert, keyFile: key },
+    };
+}
+
 // ── Gate de Host por requisição (issue 026, achado nº1) ───────────────────────────────────────
 //
 // `isUnsafeExposedBoot()` responde "este BIND expõe o Dashboard sem senha?" no boot. A mesma
