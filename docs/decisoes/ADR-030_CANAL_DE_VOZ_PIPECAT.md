@@ -34,7 +34,7 @@ Requisitos que continuam valendo:
 | **Medido** | TTS, STT, conexão WebRTC, tempo até a primeira fala e interrupção (tabela de latência). Linha de base do NewClaw a partir dos logs |
 | **Achados que pedem decisão** | Binários **GPL** (`libx264`, `libx265`) dentro do pacote PyAV para Linux, que o WebRTC do Pipecat exige; LGPL em `soxr` e `num2words`; o Kokoro do lab não envia o áudio em partes (texto longo espera tudo e dispara um aviso de "contexto sem áudio" aos ~3 s) |
 | **Não provado ainda** | Interrupção por voz real (precisa de microfone real; o protótipo dela já faz isso); pacotes do Pipecat no Windows; tempo de aceitação, de progresso e de polling no NewClaw (exige instância isolada do NewClaw) |
-| **Decisões** | R1, L1, H1, H3, D2 e D15 aprovadas e D9 adiada em 29/10 (seção "Decisões da operadora"); H2 e H4 seguem propostas |
+| **Decisões** | R1, L1, H1, H3, D1–D8 e D15 aprovadas e D9 adiada em 29/10 (seções "Decisões da operadora" e "Decisões D1–D8"); H2 aprovada pela D4; H4 segue proposta |
 
 ## Etapa 0 — Resultados por prioridade
 
@@ -244,19 +244,20 @@ precisar de mais de um formato.
 | R1 | Onde mora o harness | Repositório separado | **aprovada** (29/10) |
 | L1 | Binários GPL/LGPL de terceiros | Distribuir só código-fonte; nunca empacotar ambiente Python, wheels ou contêiner sem análise própria; listar no inventário | **aprovada com ressalvas** (29/10) |
 | H1 | Forma do harness | Um processo: interface + login + repasse + sinalização + motor de voz | **aprovada** (29/10) — subprocesso permitido se uma dependência exigir |
-| H2 | Frase a frase no TTS | Sim (por pontuação) | proposta |
+| H2 | Frase a frase no TTS | Sim (por pontuação) | **aprovada** pela D4 (29/10) |
 | H3 | HTTPS para acesso remoto | O harness termina TLS com certificado do usuário, opcional; sem ele, só `localhost` com microfone | **aprovada com critérios** (29/10) |
 | H4 | STUN/TURN | Nenhum por padrão; `enableDefaultIceServers: false` | proposta |
-| D2 | STT | Revisada: só no harness; o Core não muda | **aprovada** (29/10) |
-| D3 | Cancelar | Botão Parar → `/cancelar` | mantida |
-| D4 | Resposta longa | Falar tudo, frase a frase, mostrando o texto | mantida |
-| D5 | Conversa | Uma por aparelho, visível no painel | mantida |
-| D6 | Frequência do progresso | Manter `RELATO_DE_PROGRESSO_MIN` | mantida |
-| D7 | Som e voz | Só estado visual; voz = `VOZ_TTS_VOZ` | mantida |
-| D8 | Modelo de conversa | Nada muda (perfis do NewClaw) | mantida |
+| D1 | Onde o Pipecat roda | Na infraestrutura que o usuário configurar, de preferência junto ao harness; nenhuma máquina nem sistema como requisito | **aprovada** (29/10) |
+| D2 | STT | Em tempo real, no harness/Pipecat, com provedor configurável; o texto vai ao NewClaw pela API existente; o Core não muda | **aprovada** (29/10) |
+| D3 | Cancelar | Botão Parar, separando "interromper o áudio" de "cancelar a tarefa" (esta com confirmação); comando de voz depois | **aprovada** (29/10) |
+| D4 | Resposta longa | Texto aparece aos poucos; fala sintetizada em blocos por frase; resposta completa no histórico | **aprovada** (29/10) |
+| D5 | Identidade e sessões | Identidade e memória do NewClaw; sessões explícitas; nenhuma memória no Pipecat; continuar conversas só no que a API oferece | **aprovada** (29/10) |
+| D6 | Progresso | Só eventos significativos confirmados pelo backend; nada repetitivo nem fictício | **aprovada** (29/10) |
+| D7 | Som e voz | Sinal curto, independente do TTS, quando o pedido é aceito; Kokoro como opção inicial, voz e idioma configuráveis; sem TTS, modo texto | **aprovada** (29/10) |
+| D8 | Modelo | Roteamento do Cognitive Kernel preservado; nenhum modelo fixo no harness; mudança só depois de medir por etapa | **aprovada** (29/10) |
 | D9 | Link no painel | Nenhum link específico do Jarvis no painel | **adiada** (29/10) — o harness é acessado diretamente |
-| D10 | Ao reabrir | Mostrar sem falar, pelo histórico | mantida |
-| D11 | Ação perigosa | Só por clique; nunca por voz | mantida |
+| D10 | Ao reabrir | Mostrar sem falar, pelo histórico (com o `id` que a lista de conversas dá para o `sessionId`) | mantida, alinhada à D5 |
+| D11 | Ação perigosa | Só por clique; nunca por voz (coerente com a D3: nada de efeito por comando de voz nesta fase) | mantida |
 | D12–D13 | Supervisão e transporte | O harness cuida de si (sem PM2 do núcleo); SmallWebRTC | revistas |
 | D15 | Protocolo do turno | Contrato público + cliente público no núcleo (opção b) | **aprovada e prioritária** (29/10) |
 
@@ -296,6 +297,105 @@ precisar de mais de um formato.
 
 **Etapa 1 autorizada** só para o contrato público de turnos no repositório do NewClaw, sem push nem deploy, sem Pipecat, React
 ou dependência do harness no Core, e sem migrar painel nem suplemento. Resultado: `docs/CONTRATO_DO_TURNO.md`.
+
+## Decisões D1–D8 da operadora (29/10/2026): evidência e limitações
+
+As oito decisões foram aprovadas como proposta, sem implementação além da Etapa 1. As instruções que acompanham as decisões:
+- conferir as APIs antes de implementar;
+- decisão que dependa do que não foi provado → registrar a limitação e propor a menor alteração;
+- não tocar a produção nem usar nada do laboratório;
+- o Jarvis continua harness opcional (ADR-031).
+
+**D1 — Onde o Pipecat roda.** Na infraestrutura que o usuário configurar, de preferência junto ao harness. Nenhuma máquina
+nem sistema operacional é requisito universal.
+- **Evidência:**
+  - O harness alcança o NewClaw só pelo endereço configurado (`NEWCLAW_URL`, tabela 4) e pelo contrato do turno (HTTP com
+    `Bearer`), sem nada de rede local.
+  - A Etapa 0 já rodou o motor de voz numa máquina e o NewClaw noutra.
+- **Limitação:** os pacotes do Pipecat para Windows não foram verificados, incluindo o PyAV e os codecs que ele traz.
+- **Menor alteração proposta:** na Etapa 2, provar o motor de voz em Windows e em Linux. Se um deles não servir, a
+  documentação diz isso em vez de restringir o desenho.
+
+**D2 — Transcrição no harness.** STT em tempo real no harness/Pipecat, com provedor configurável. O texto vai ao NewClaw
+pela API existente.
+- **Evidência:**
+  - `POST /api/chat` aceita texto (contrato, operação 1), então o Core não muda.
+  - A prova da Etapa 0 gerou o evento `user-transcription` com `OpenAISTTService`, configurado só por ambiente
+    (`VOZ_STT_URL`, `VOZ_STT_MODELO`, `VOZ_STT_CHAVE`).
+- **Limitação:** o usuário configura a transcrição em dois lugares, se quiser também a nota de voz dos canais (já aprovado
+  assim).
+
+**D3 — Cancelar.** Primeiro o botão Parar, separando duas ações:
+
+| Ação | Como | Evidência |
+|---|---|---|
+| Interromper o áudio | Local, no harness (`rtvi.interrupt_bot()`); o turno segue no NewClaw | Parou em ~15 ms (Etapa 0) |
+| Cancelar a tarefa | Com confirmação na interface; depois, `/cancelar` pelo contrato (operação 5) | Na instância isolada: confirmação em 34 ms e o turno cancelado entregue em 220 ms (`⏹ Pedido interrompido.`) |
+
+- **Comando de voz:** fica para uma etapa posterior.
+- **Limitação:** nenhuma no núcleo. A confirmação é só da interface.
+
+**D4 — Resposta longa.** O texto aparece aos poucos; a fala é sintetizada em blocos por frase; a resposta completa fica no
+histórico.
+- **Evidência:**
+  - O histórico guarda a resposta inteira (instância isolada: `assistant "⏹ Pedido interrompido."` sob `web:<sessionId>`).
+  - Frase a frase (H2) evita o aviso de ~3 s do Pipecat com texto longo (Etapa 0).
+- **Limitação:** o NewClaw entrega a resposta **de uma vez**; a outbox não tem fluxo parcial (contrato, operação 4). "Aos
+  poucos" só pode ser apresentação: o harness revela o texto frase a frase, no ritmo da fala.
+- **Menor alteração proposta:** nenhuma no núcleo agora. Um fluxo parcial de verdade seria uma versão nova do contrato, com
+  ADR própria, e só se a medição mostrar necessidade.
+
+**D5 — Identidade e sessões.** Usam a identidade e a memória do NewClaw. As sessões são explícitas, e o Pipecat não guarda
+memória.
+- **O que a API oferece hoje** (conferido):
+  - **Nova conversa:** basta um `sessionId` novo em `POST /api/chat`.
+  - **Continuar uma conversa do chat web:** `GET /api/conversations` lista `{ id, sessionId }`; o harness reenvia aquele
+    `sessionId` e lê o histórico pelo `id`.
+  - **Memória de longo prazo:** é do NewClaw e vale para qualquer canal.
+- **Limitações:**
+  - A lista só traz conversas do canal web (`provider = 'web'`, `DashboardMemoryRepository.listWebConversations`), então
+    continuar uma conversa do Telegram ou do Discord não é possível pela API.
+  - O histórico usa `web:<sessionId>`, não o `sessionId` (achado da Etapa 1; com o `sessionId`, volta vazio, sem erro).
+- **Menor alteração proposta:** nada no núcleo. O Jarvis usa sessões do canal web, e "continuar" vale para as conversas que
+  a lista mostra. Unir conversas entre canais é conceito novo, com ADR própria.
+
+**D6 — Progresso.** Só eventos significativos confirmados pelo backend; nada repetitivo nem fictício.
+
+| Evento | Sinal do backend (contrato, operações 2 e 3) |
+|---|---|
+| Aceito | `202` com `turnId` |
+| Fase mudou | `accepted`, `running`, `awaiting_approval` ou `finished` |
+| Relato novo | `progresso` com `em` diferente do anterior (ADR-027, `RELATO_DE_PROGRESSO_MIN`, padrão 5 min) |
+| Resposta | Entrega na outbox |
+
+- **Regra:** o harness fala ou mostra só quando um desses sinais muda.
+- **Limitação:** entre relatos não há sinal nenhum, e `accepted` pode durar enquanto o modelo classifica (4 s na instância
+  isolada, sem relato). A interface mostra "trabalhando" e o tempo (`elapsedMs`), sem inventar etapas.
+
+**D7 — Som e voz.**
+- **Sinal de aceito:** curto, quando chega o `202`, gerado pela própria interface e independente do TTS.
+- **Kokoro:** pode ser a opção inicial, como exemplo documentado de servidor compatível com a API OpenAI de síntese. Voz e
+  idioma vêm de `VOZ_TTS_VOZ` e `VOZ_IDIOMA`. Vazios, a ausência é reportada: nenhuma voz é escolhida no código.
+- **Sem TTS:** sem `VOZ_TTS_URL`, a janela funciona em modo texto (tabela 4).
+- **Evidência:** a Etapa 0 provou a fala via `client-message` → `TTSSpeakFrame`, com o conserto do cabeçalho WAV, que serve
+  a qualquer servidor compatível.
+- **Limitação:** a lista de vozes e de idiomas aceitos depende do servidor de TTS do usuário.
+
+**D8 — Modelo.** O roteamento do Cognitive Kernel é preservado e o harness não tem modelo fixo.
+- **Evidência:**
+  - A prova da Etapa 0 roda sem LLM nenhum no pipeline.
+  - A resposta vem só do NewClaw, pelos perfis dele.
+  - O contrato acrescenta milissegundos: aceitação 6 ms e consulta 16 ms de mediana (Etapa 1).
+  - O tempo dominante é o do turno: Venus p50 69,8 s; Windows p50 152,7 s (Etapa 0).
+- **Limitação:** a latência por tipo de turno com modelo real não foi medida numa instância isolada (precisa de OK de cota).
+- **Próximo passo:** medir na Etapa 6, por etapa, antes de qualquer proposta de mudança.
+
+**Alinhamento com a matriz:**
+- **D1:** volta à tabela, com o sentido novo.
+- **H2:** aprovada pela D4.
+- **D10:** passa a usar o `id` que a lista dá ao `sessionId`.
+- **D11:** coerente com a D3 (nada de efeito por comando de voz nesta fase).
+- **D9, D12–D13 e D15:** não mudam.
 
 ## Etapa 1 — resultado (29/10/2026)
 
