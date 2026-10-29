@@ -317,6 +317,11 @@ export class MessageBus {
         }
     }
 
+    /** Contexto do cofre (S460). Falha ao ler o histórico não impede a proteção — só a deixa sem esse contexto. */
+    private ultimaFalaDoAssistente(msg: NormalizedMessage): string | null {
+        try { return this.sessionManager.ultimaFalaDoAssistente({ channel: msg.channel, userId: msg.userId }); } catch { return null; }
+    }
+
     /**
      * Portão de entrada: deduplica, envia ACK se necessário e enfileira.
      * Retorna imediatamente — o processamento real ocorre em background via ConversationQueueManager.
@@ -346,13 +351,13 @@ export class MessageBus {
         let guardados: string[] = [];
         let falhaNoCofre = '';
         try {
-            const protegida = protegerEntrada(msg.text);
+            const protegida = protegerEntrada(msg.text, undefined, { ultimaFalaDoAssistente: this.ultimaFalaDoAssistente(msg) });
             msg = { ...msg, text: protegida.texto };
             guardados = protegida.guardados;
         } catch (e) {
             falhaNoCofre = errorMessage(e);
             let texto = mascararSegredos(msg.text);
-            for (const v of detectarSegredos(texto)) texto = texto.split(v).join('<SEGREDO:nao_guardado>');
+            for (const v of detectarSegredos(texto, { ultimaFalaDoAssistente: this.ultimaFalaDoAssistente(msg) })) texto = texto.split(v).join('<SEGREDO:nao_guardado>');
             msg = { ...msg, text: texto };
         }
         if ((guardados.length > 0 || falhaNoCofre) && adapter) {

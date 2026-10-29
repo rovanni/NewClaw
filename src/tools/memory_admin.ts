@@ -25,6 +25,7 @@ import { modeloDeEmbedding } from '../memory/EmbeddingService';
 
 export class MemoryAdminTool implements ToolExecutor {
     name = 'memory_admin';
+    guardaOMarcador = true as const;   // ADR-019/S463: a memória guarda <SEGREDO:nome>, nunca o valor
     description = 'Administrar e diagnosticar o grafo cognitivo. Ações: stats, list, orphans, duplicates, ghosts, cleanup, domains, reindex, recalc, inspect. Use para manter a memória organizada e sem problemas.';
     parameters = {
         type: 'object',

@@ -317,13 +317,15 @@ export class GoalOrchestrator {
             const outputSnippet = recentGoal.finalOutput
                 ? ` — output: "${recentGoal.finalOutput.slice(0, 300)}"`
                 : '';
+            // O pedido entendido pela conversa (ADR-029), não o literal — "goal concluído: "Pode fazer?"" não diz qual (S461).
+            const pedidoAnterior = recentGoal.objective || recentGoal.intent;
             const followUpContext = {
                 role: 'assistant',
-                content: `[${elapsedSec}s atrás — goal concluído: "${recentGoal.intent.slice(0, 200)}" — sucesso: ${recentGoal.success}${outputSnippet}]`,
+                content: `[${elapsedSec}s atrás — goal concluído: "${pedidoAnterior.slice(0, 200)}" — sucesso: ${recentGoal.success}${outputSnippet}]`,
             };
             classifyMessages = [followUpContext, ...(recentMessages ?? [])];
             apoioDoRoteador.push(followUpContext.content);
-            log.info(`[GoalOrchestrator] recent goal context injected for classification (${elapsedSec}s ago): "${recentGoal.intent.slice(0, 80)}"`);
+            log.info(`[GoalOrchestrator] recent goal context injected for classification (${elapsedSec}s ago): "${pedidoAnterior.slice(0, 80)}"`);
         }
 
         // Preferências salvas relevantes à mensagem — mesma técnica já usada e validada em
@@ -430,6 +432,12 @@ export class GoalOrchestrator {
             }
         }
 
+        // O pedido entendido pela conversa, só quando o juiz o REESCREVEU. Quando ele só copiou (o pedido já se entendia sozinho
+        // — é o que a instrução dele manda), a cópia não acrescenta nada e não deve apagar o objetivo que o classificador
+        // escreveu (S461, achado do review do PR #18). Vale para os três registros de objetivo abaixo (agente, inline, goal).
+        const pedidoEntendido = pedidoCompleto && pedidoCompleto.trim().toLowerCase() !== message.trim().toLowerCase()
+            ? pedidoCompleto : undefined;
+
         // P0.2 — Fail-open: GoalExtractor timeout ou conteúdo não-JSON (thinking recuperado).
         // Em vez de aceitar uma classificação arbitrária, roteamos para AgentLoop
         // que demonstrou resolver tarefas de criação sem GoalPlanner.
@@ -482,7 +490,7 @@ export class GoalOrchestrator {
             if (!existingIsRecentGoal) {
                 this.recentCompletedGoals.set(sessionKey, {
                     intent: message,
-                    objective: message.slice(0, 200),
+                    objective: (pedidoEntendido || message).slice(0, 200),
                     finalOutput: agentOutputText.slice(0, 500),
                     completedAt: Date.now(),
                     success: true,
@@ -545,7 +553,7 @@ export class GoalOrchestrator {
             // isGoal=true porque passou pela classificação de goal (mesmo que roteado inline).
             this.recentCompletedGoals.set(sessionKey, {
                 intent: message,
-                objective: classification.objective || message,
+                objective: pedidoEntendido || classification.objective || message,
                 finalOutput: (typeof inlineResult === 'string' ? inlineResult : '').slice(0, 1000),
                 completedAt: Date.now(),
                 success: true,
@@ -573,7 +581,7 @@ export class GoalOrchestrator {
         if (signal.aborted) return MENSAGEM_PEDIDO_INTERROMPIDO;   // cancelado antes de existir o goal: nada é criado
         // ADR-029: o objetivo é o pedido entendido pela conversa; `userIntent` continua o texto literal (o planejador lê os
         // dois — o literal protege contra uma reescrita errada). Sem o pedido completo (juiz sem veredito ou desligado): como antes.
-        const objetivo = pedidoCompleto || classification.objective || message;
+        const objetivo = pedidoEntendido || classification.objective || message;
         if (pedidoCompleto) log.info(`[PEDIDO-COMPLETO] cru="${message.slice(0, 120)}" completo="${pedidoCompleto.slice(0, 300)}"`);
         const goal = this.goalStore.create({
             sessionKey,

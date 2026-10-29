@@ -141,7 +141,7 @@ console.log('\n=== S247 — o fix está presente estruturalmente no source ===')
         path.join(process.cwd(), 'src', 'loop', 'GoalExecutionLoop.ts'), 'utf-8'
     );
     assert(
-        /const lastSuccess = \[\.\.\.goal\.attempts\]\.reverse\(\)\s*\n\s*\.find\(a => a\.result === 'success' && \(a\.planGeneration \?\? 0\) === currentGeneration\s*\n\s*&& producesUserReadableText\(a\.toolName\)\);/.test(loopSource),
+        /const lastSuccess = \[\.\.\.goal\.attempts\]\.reverse\(\)\s*\n\s*\.find\(a => a\.result === 'success' && \(a\.planGeneration \?\? 0\) === currentGeneration\s*\n\s*&& legivel\(a\.toolName\)\);/.test(loopSource),   // S462: legivel = producesUserReadableText + send_audio
         'o find() de lastSuccess já filtra por segurança-para-entrega-crua, não só por result==="success"',
     );
 }
