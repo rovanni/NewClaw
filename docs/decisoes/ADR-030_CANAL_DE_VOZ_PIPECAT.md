@@ -498,7 +498,7 @@ usuário". Vale para qualquer pessoa, em Windows, Linux e macOS (`AGENTS.md`, re
 | `VOZ_STT_MODELO` | Modelo do Whisper (local) ou do servidor (`url`) | nenhum (obrigatório quando ligado) |
 | `VOZ_STT_URL`, `VOZ_STT_CHAVE` | Só no motor `url` | nenhum |
 | `VOZ_TTS_MOTOR` | `local` (Kokoro) ou `url` | nenhum; vazio = síntese desligada |
-| `VOZ_TTS_VOZ` | Voz (local: uma das vozes do arquivo de vozes do Kokoro, conferida nele) | nenhum (obrigatório quando ligado) |
+| `VOZ_TTS_VOZ` | Local: só a voz com que o motor começa (todas as vozes do Kokoro vêm instaladas num arquivo; a escolha e a troca são na interface, decisão de 29/10/2026). Servidor: a voz do pedido | local: nenhum, e até a escolha na interface a resposta fica em texto; servidor: obrigatório |
 | `VOZ_TTS_MODELO`, `VOZ_TTS_URL`, `VOZ_TTS_CHAVE` | Só no motor `url` | nenhum |
 | `VOZ_DISPOSITIVO` | `auto` (medido), `cpu` ou `cuda` | `auto`: decide pela medição, nunca por suposição |
 | `VOZ_MODELOS_DIR` | Pasta dos modelos baixados | uma pasta do próprio harness |
