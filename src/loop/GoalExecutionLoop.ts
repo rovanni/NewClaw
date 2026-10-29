@@ -5030,10 +5030,13 @@ Se a intenção original pedia uma explicação condicional (ex: "se não conseg
      */
     private pickBestAvailableContent(goal: Goal, fallbackText: string | undefined): string | undefined {
         const currentGeneration = goal.planGeneration ?? 0;
+        // send_audio devolve o texto falado (FERRAMENTAS_DE_ENTREGA §4) — conteúdo para o usuário, não dump operacional (S462).
+        // Só aqui: no AgentLoop, DIRECT_DELIVERABLE_TOOLS também decide pular a síntese, o que não se aplica ao áudio.
+        const legivel = (t: string | undefined) => producesUserReadableText(t) || t === 'send_audio';
         const lastSuccess = [...goal.attempts].reverse()
             .find(a => a.result === 'success' && (a.planGeneration ?? 0) === currentGeneration
-                && producesUserReadableText(a.toolName));
-        const lastSuccessIsSafeToDeliverRaw = !!lastSuccess && producesUserReadableText(lastSuccess.toolName);
+                && legivel(a.toolName));
+        const lastSuccessIsSafeToDeliverRaw = !!lastSuccess && legivel(lastSuccess.toolName);
         const hasGenericSummary = fallbackText === GENERIC_CRITERIA_SUMMARY;
         return (lastSuccessIsSafeToDeliverRaw ? (lastSuccess?.output || undefined) : undefined)
             ?? (!hasGenericSummary ? fallbackText : undefined);
@@ -5171,7 +5174,10 @@ Se a intenção original pedia uma explicação condicional (ex: "se não conseg
         // `buildLanguageDirective(config.language)` no system prompt, enquanto o prompt do
         // validador é fixo em pt-BR e não recebe diretiva nenhuma — para um usuário en-US/es-ES,
         // preferir o resumo entregava a mensagem final no idioma errado.
-        const hasSeparateDelivery = (goal.sentArtifacts ?? []).length > 0;
+        // O áudio NÃO é entrega separada do texto: o que foi falado É a resposta, e quem não pode ouvir precisa dela escrita
+        // (FERRAMENTAS_DE_ENTREGA). A sentinela contava como arquivo e o parecer do avaliador virava a mensagem — "Objetivo
+        // concluído: obtida a cotação… A resposta final foi entregue ao usuário" (River, VPS, 17–19/10; issue 066 D-a; S462).
+        const hasSeparateDelivery = (goal.sentArtifacts ?? []).some(a => a !== '__send_audio_delivered__');
         // Numa falha, `overrideOutput` é a explicação do que deu errado (GracefulDeliveryOrchestrator,
         // blockReason, erro de envio) — continua tendo prioridade, como sempre teve.
         const summaryIsCoverNote = !success || hasSeparateDelivery;

@@ -205,7 +205,7 @@ console.log('\n=== S175-4 — sem NENHUM conteúdo real, ainda mostra algo (sem 
 console.log('\n=== S175-5 — D2 presente estruturalmente em buildResult() ===');
 {
     assert(
-        /const hasSeparateDelivery = \(goal\.sentArtifacts \?\? \[\]\)\.length > 0;/.test(SOURCE),
+        /const hasSeparateDelivery = \(goal\.sentArtifacts \?\? \[\]\)\.some\(a => a !== '__send_audio_delivered__'\);/.test(SOURCE), // S462: o áudio não é entrega separada
         'a existência de entrega separada é derivada de goal.sentArtifacts — sinal que o goal já mantém',
     );
     assert(
@@ -220,7 +220,7 @@ console.log('\n=== S175-5 — D2 presente estruturalmente em buildResult() ===')
     // — compartilhada com o ramo de falha de envio diferido (ver S234). Guarda contra duplicação.
     assert(
         // Issue 059: o gate passou a ser o predicado único producesUserReadableText (ToolRegistry).
-        (SOURCE.match(/const lastSuccessIsSafeToDeliverRaw = !!lastSuccess && producesUserReadableText\(lastSuccess\.toolName\);/g) ?? []).length === 1,
+        (SOURCE.match(/const lastSuccessIsSafeToDeliverRaw = !!lastSuccess && legivel\(lastSuccess\.toolName\);/g) ?? []).length === 1,
         'a lógica de "seguro para entrega crua" existe em UM lugar só — não duplicada em buildResult() e no ramo de falha',
     );
     assert(
@@ -230,7 +230,7 @@ console.log('\n=== S175-5 — D2 presente estruturalmente em buildResult() ===')
     // Achado A (14/08/2026): o gate por identidade de tool existe e reusa a MESMA allowlist que
     // AgentLoop.ts já usava para o bypass de síntese — fonte única em core/ToolRegistry.ts.
     assert(
-        /const lastSuccessIsSafeToDeliverRaw = !!lastSuccess && producesUserReadableText\(lastSuccess\.toolName\);/.test(SOURCE),
+        /const lastSuccessIsSafeToDeliverRaw = !!lastSuccess && legivel\(lastSuccess\.toolName\);/.test(SOURCE),
         'lastSuccessIsSafeToDeliverRaw existe como gate explícito, não implícito',
     );
     assert(

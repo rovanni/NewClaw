@@ -410,7 +410,7 @@ console.log('\n=== S230-18 — Não-regressão: delivery (hasSeparateDelivery) p
 {
     const source = fs.readFileSync(path.join(process.cwd(), 'src', 'loop', 'GoalExecutionLoop.ts'), 'utf-8');
     assert(
-        /const hasSeparateDelivery = \(goal\.sentArtifacts \?\? \[\]\)\.length > 0;/.test(source),
+        /const hasSeparateDelivery = \(goal\.sentArtifacts \?\? \[\]\)\.some\(a => a !== '__send_audio_delivered__'\);/.test(source), // S462
         'lógica de hasSeparateDelivery (Causa B / S175) não foi alterada por esta Sprint — provenance e response contract são responsabilidades separadas',
     );
 }
