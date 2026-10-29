@@ -1,6 +1,6 @@
 # ADR-031 — Experiências opcionais não impõem dependências ao núcleo (harness)
 
-Data: 28/10/2026. Status: **proposta** — princípio pedido pela operadora; aguarda aprovação. Relacionada:
+Data: 28/10/2026. Status: **aprovada em 29/10/2026** — princípio pedido pela operadora e confirmado na decisão R1 da ADR-030 (harness em repositório separado, dependência por contratos documentados). Relacionada:
 `ADR-030_CANAL_DE_VOZ_PIPECAT.md` (Jarvis), `docs/ARCHITECTURE.md`, RFC-008.
 
 ## Fase 1 — Compreensão
@@ -70,11 +70,16 @@ A operadora quer preservar a autoria e a autonomia do núcleo: *o harness usa o 
 - **Um cliente público desse contrato:** módulo neutro, sem dependências, servido pelo próprio núcleo. Painel, suplemento e
   harnesses passam a usar o mesmo módulo, e as cópias somem, cada migração numa etapa própria com teste.
 
+Feito na Etapa 1 da ADR-030 (29/10/2026):
+- o contrato, em `docs/CONTRATO_DO_TURNO.md`, versão anunciada em `GET /api/status` → `status.contracts.turn`;
+- o cliente público, em `src/dashboard/public/turn-client.js`;
+- a conformidade, no teste `S457`.
+
 ### Fora do escopo desta ADR
 
 - Corrigir os acoplamentos já existentes do suplemento do PowerPoint (exceção de CORS, prefixo, broker): ficam registrados
   como débito, com migração possível para o contrato público.
-- Decidir o repositório do Jarvis: decisão R1 da ADR-030, com a evidência de licenças de lá.
+- O repositório do Jarvis: decidido na R1 da ADR-030 (repositório separado, 29/10/2026).
 
 ## Fase 5 — Validação
 

@@ -1,7 +1,8 @@
 # ADR-030 — Jarvis: experiência de voz opcional (harness) sobre o NewClaw, com Pipecat como ouvido e boca
 
-Data: 28/10/2026. Status: **Etapa 0 concluída** (provas e auditoria, nada no produto). A Etapa 1 aguarda autorização
-explícita da operadora. Princípio de fronteira: `ADR-031_EXPERIENCIAS_OPCIONAIS_NAO_IMPOEM_DEPENDENCIAS_AO_NUCLEO.md`.
+Data: 28/10/2026. Status: **Etapa 0 concluída** (provas e auditoria, nada no produto). **Decisões aprovadas em
+29/10/2026** (seção "Decisões da operadora"); **Etapa 1 feita** só no núcleo — o contrato público do turno
+(`docs/CONTRATO_DO_TURNO.md`). Princípio de fronteira: `ADR-031_EXPERIENCIAS_OPCIONAIS_NAO_IMPOEM_DEPENDENCIAS_AO_NUCLEO.md`.
 
 ## O pedido e o enquadramento
 
@@ -33,7 +34,7 @@ Requisitos que continuam valendo:
 | **Medido** | TTS, STT, conexão WebRTC, tempo até a primeira fala e interrupção (tabela de latência). Linha de base do NewClaw a partir dos logs |
 | **Achados que pedem decisão** | Binários **GPL** (`libx264`, `libx265`) dentro do pacote PyAV para Linux, que o WebRTC do Pipecat exige; LGPL em `soxr` e `num2words`; o Kokoro do lab não envia o áudio em partes (texto longo espera tudo e dispara um aviso de "contexto sem áudio" aos ~3 s) |
 | **Não provado ainda** | Interrupção por voz real (precisa de microfone real; o protótipo dela já faz isso); pacotes do Pipecat no Windows; tempo de aceitação, de progresso e de polling no NewClaw (exige instância isolada do NewClaw) |
-| **Decisões dela** | R1 (repositório), L1 (como tratar os binários GPL), H1–H4 e as revisões da matriz |
+| **Decisões** | R1, L1, H1, H3, D2 e D15 aprovadas e D9 adiada em 29/10 (seção "Decisões da operadora"); H2 e H4 seguem propostas |
 
 ## Etapa 0 — Resultados por prioridade
 
@@ -234,36 +235,132 @@ precisar de mais de um formato.
 - a pilha diferente;
 - a regra 1 da ADR-031.
 
-A decisão é dela.
+**Aprovada em 29/10/2026** (R1).
 
 ## Decisões
 
 | # | Decisão | Recomendação | Status |
 |---|---|---|---|
-| R1 | Onde mora o harness | Repositório separado | **dela** |
-| L1 | Binários GPL/LGPL de terceiros | Distribuir só código-fonte; nunca empacotar ambiente Python, wheels ou contêiner sem análise própria; listar no inventário | **dela** |
-| H1 | Forma do harness | Um processo: interface + login + repasse + sinalização + motor de voz | **dela** |
+| R1 | Onde mora o harness | Repositório separado | **aprovada** (29/10) |
+| L1 | Binários GPL/LGPL de terceiros | Distribuir só código-fonte; nunca empacotar ambiente Python, wheels ou contêiner sem análise própria; listar no inventário | **aprovada com ressalvas** (29/10) |
+| H1 | Forma do harness | Um processo: interface + login + repasse + sinalização + motor de voz | **aprovada** (29/10) — subprocesso permitido se uma dependência exigir |
 | H2 | Frase a frase no TTS | Sim (por pontuação) | proposta |
-| H3 | HTTPS para acesso remoto | O harness termina TLS com certificado do usuário, opcional; sem ele, só `localhost` com microfone | **dela** |
+| H3 | HTTPS para acesso remoto | O harness termina TLS com certificado do usuário, opcional; sem ele, só `localhost` com microfone | **aprovada com critérios** (29/10) |
 | H4 | STUN/TURN | Nenhum por padrão; `enableDefaultIceServers: false` | proposta |
-| D2 | STT | Revisada: só no harness; o Core não muda | **dela** (revisão) |
+| D2 | STT | Revisada: só no harness; o Core não muda | **aprovada** (29/10) |
 | D3 | Cancelar | Botão Parar → `/cancelar` | mantida |
 | D4 | Resposta longa | Falar tudo, frase a frase, mostrando o texto | mantida |
 | D5 | Conversa | Uma por aparelho, visível no painel | mantida |
 | D6 | Frequência do progresso | Manter `RELATO_DE_PROGRESSO_MIN` | mantida |
 | D7 | Som e voz | Só estado visual; voz = `VOZ_TTS_VOZ` | mantida |
 | D8 | Modelo de conversa | Nada muda (perfis do NewClaw) | mantida |
-| D9 | Link no painel | **Retirada**: o núcleo não conhece o harness (ADR-031) | revista |
+| D9 | Link no painel | Nenhum link específico do Jarvis no painel | **adiada** (29/10) — o harness é acessado diretamente |
 | D10 | Ao reabrir | Mostrar sem falar, pelo histórico | mantida |
 | D11 | Ação perigosa | Só por clique; nunca por voz | mantida |
 | D12–D13 | Supervisão e transporte | O harness cuida de si (sem PM2 do núcleo); SmallWebRTC | revistas |
-| D15 | Protocolo do turno | Contrato público + cliente público no núcleo (opção b) | **dela** |
+| D15 | Protocolo do turno | Contrato público + cliente público no núcleo (opção b) | **aprovada e prioritária** (29/10) |
+
+## Decisões da operadora (29/10/2026)
+
+- **R1 — repositório separado.** O Jarvis é um harness opcional noutro repositório. Ele depende do NewClaw por contratos
+  documentados; o núcleo não depende dele. O harness não duplica memória, roteamento de modelos nem execução. A estratégia
+  de distribuição definitiva respeita a auditoria de licenças.
+- **L1 — código-fonte, com ressalvas.** Na primeira versão, nada de ambiente Python pronto nem contêiner com as dependências
+  do harness: só o código-fonte e os arquivos de dependências que reproduzem a instalação. Antes de publicar, o harness tem
+  de:
+  - auditar as licenças diretas e transitivas;
+  - verificar os binários de fato instalados, incluindo PyAV/FFmpeg, os pacotes para Windows e os modelos ONNX;
+  - documentar versões, avisos e obrigações de redistribuição.
+
+  Distribuir só o código não elimina por si as obrigações das dependências instaladas, e o harness não declara conformidade
+  jurídica sem evidência suficiente.
+- **H1 — um processo principal.** Simplifica iniciar, configurar, diagnosticar e encerrar. Não obriga tudo na mesma thread,
+  e um subprocesso fica permitido se alguma dependência exigir; estabilidade e segurança vêm antes do processo único.
+- **H3 — acesso remoto com critérios de segurança:**
+  - em `localhost`, uso simples, sem certificado manual;
+  - acesso remoto documentado e protegido por HTTPS com certificado confiável;
+  - o serviço de voz nunca exposto direto à Internet por padrão;
+  - autenticação, autorização e proteção dos tokens valem com ou sem HTTPS;
+  - a documentação diz as limitações do token atual do NewClaw: acesso amplo e sem expiração automática.
+- **D2 — transcrição no harness.** O STT em tempo real é do harness, e o Core mantém a entrada de voz atual. O Core não muda só
+  para compartilhar a configuração de transcrição, e a documentação avisa que o usuário pode precisar configurar o STT nos dois
+  recursos.
+- **D15 — contrato público de turnos, aprovado e prioritário.** O contrato:
+  - nasce das APIs e dos estados reais;
+  - evita a duplicação entre painel, suplemento e clientes futuros;
+  - preserva os consumidores existentes e tem testes de conformidade;
+  - é independente do Jarvis e de qualquer fornecedor de voz;
+  - não mexe em memória, roteamento de modelos nem execução.
+- **D9 — adiada.** Nenhum link do Jarvis no painel agora. Uma integração futura pode vir por um mecanismo genérico de
+  extensões, sem o núcleo depender do Jarvis.
+
+**Etapa 1 autorizada** só para o contrato público de turnos no repositório do NewClaw, sem push nem deploy, sem Pipecat, React
+ou dependência do harness no Core, e sem migrar painel nem suplemento. Resultado: `docs/CONTRATO_DO_TURNO.md`.
+
+## Etapa 1 — resultado (29/10/2026)
+
+**Menor alteração compatível.** O contrato descreve as rotas que já existem, e nenhuma delas mudou de comportamento. No
+núcleo, a etapa entregou:
+
+| O quê | Onde | Por quê |
+|---|---|---|
+| Documento do contrato, versão 1 | `docs/CONTRATO_DO_TURNO.md` | A definição pública: operações, fases, comportamentos reais, consumidores |
+| `TURN_CONTRACT_VERSION = 1` | `src/dashboard/routes/chat.ts` | A versão mora junto das rotas que a cumprem |
+| `status.contracts.turn` | `src/dashboard/routes/status.ts` | O cliente confere a versão antes de usar (ADR-031, regra 5). Campo aditivo |
+| Cliente público | `src/dashboard/public/turn-client.js` | A implementação única do protocolo, servida em `/turn-client.js` (estático, como `shared.js`) |
+| Teste de conformidade | `src/__tests__/regression/S457_ContratoDoTurno_Conformidade.test.ts` | Impede o documento e o servidor de divergirem |
+
+O cliente público é um módulo ES sem dependências e sem DOM, com `fetch` injetável. Ele decide a fase só por sinais
+estruturais e não conhece cliente, canal nem fornecedor de voz; o `S457` confere isso no código.
+
+**Gate "extensão antes de criação":**
+- O cliente público é arquivo novo, porque nenhuma das duas cópias serve como ele.
+  - A do suplemento mora fora do núcleo, que não pode depender dela (ADR-031, regra 1), e só lê a outbox.
+  - A do painel está dentro do script da página.
+- O teste é novo porque nenhum teste existente sobe as rotas reais com os dois clientes.
+- A versão e o campo de status são extensões de arquivos que já existiam.
+
+**Achados que o contrato registra (comportamento real, não alterado):**
+- **Aviso de fila:**
+  - Com a conversa ocupada, o aviso de fila é a primeira entrega do `turnId`, e a resposta final sai depois com o mesmo
+    `turnId`.
+  - Se ninguém tiver retirado o aviso, a resposta final o substitui na outbox.
+  - Não há campo que marque a entrega como provisória.
+- **Complemento de objetivo:** a mensagem enviada durante um objetivo recebe só a nota "Anotado".
+- **A fase `accepted` pode durar:** enquanto a classificação espera o modelo, o turno não aparece em `active` (na instância
+  isolada, 4 s inteiros).
+- **O histórico não usa o `sessionId`:** a chave é `web:<sessionId>`, e ela vem da lista de conversas. Com o `sessionId`, a
+  lista volta vazia, sem erro.
+- **O painel usa uma reserva:** sem a própria conversa em `active`, ele usa "a primeira conversa ativa". O cliente público
+  casa pelo id exato.
+
+**Validação:**
+- **Linha de base antes da mudança:** 449/451 (2 ignorados, 0 falhas).
+- **Depois da mudança:** 450/452 — o `S457` novo passou, sem falhas, inconsistências nem timeouts. Os 2 ignorados são os mesmos de antes.
+- **`S457`:** 61/61, em quatro execuções seguidas.
+- **Tipos e build:** `tsc --noEmit` e o build (`tsc`) passaram.
+- **Instância isolada, com um provedor local que não responde:** os números estão em `docs/CONTRATO_DO_TURNO.md`,
+  seção "Validação".
+  - A versão anunciada foi 1, igual à do cliente.
+  - A aceitação levou 6 ms de mediana, e uma consulta a `/active`, 16 ms.
+  - O cancelamento confirmou em 34 ms; o turno cancelado recebeu `⏹ Pedido interrompido.` em 220 ms, e as duas mensagens
+    ficaram no histórico.
+- Nenhuma chamada a modelo e nenhuma cota usada.
+
+**Limitações que ficam:**
+- **Token:** dá acesso total e não expira.
+- **Entrega provisória:** o aviso de fila não tem marcação estrutural; distinguir exigiria um campo novo, que viria numa
+  versão nova do contrato, com decisão própria.
+- **Histórico:** o formato das rotas não foi congelado.
+- **Migrações:** o painel e o suplemento ainda têm as próprias cópias, e migrá-los é a etapa 7.
+- **Fluxo com modelo real:** não foi exercitado (precisa de OK de cota); o `S457` cobre as entregas pelas mesmas chamadas que
+  o `MessageBus` faz ao adapter.
 
 ## Etapas seguintes (cada uma só com autorização)
 
 | Etapa | Onde | O que entrega | Pronto quando |
 |---|---|---|---|
-| 1 — Contrato público do turno | núcleo (único ponto do núcleo) | Contrato documentado e versionado; teste de conformidade na suíte; módulo cliente neutro servido pelo NewClaw; aceitação e polling medidos sem cota (via `/cancelar`) numa instância isolada | Teste de conformidade e suíte completa passando; nenhum comportamento do chat muda |
+| 1 — Contrato público do turno (**feita em 29/10**, seção "Etapa 1 — resultado") | núcleo (único ponto do núcleo) | Contrato documentado e versionado; teste de conformidade na suíte; módulo cliente neutro servido pelo NewClaw; aceitação e polling medidos sem cota (via `/cancelar`) numa instância isolada | Teste de conformidade e suíte completa passando; nenhum comportamento do chat muda |
 | 2 — Motor de voz | harness | Pipeline da prova, com frase a frase, interrupção por VAD real, configuração da tabela 4, sem LLM | Testes das funções puras; interrupção por voz real provada; sem configuração, sai com aviso claro |
 | 3 — Servidor do harness | harness | Login, repasse com Bearer, sinalização com checagem de origem, TLS opcional, verificação de requisitos e de versão | Testes de segurança: sem login → 401; outra origem → recusada; motor de voz inalcançável pela rede |
 | 4 — Janela Jarvis | harness | Interface React a partir do molde, só com o transporte SmallWebRTC; estados; modo texto; Parar; aprovação por clique; histórico | Testes da máquina de estados; build reproduzível; inventário de licenças gerado |

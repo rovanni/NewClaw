@@ -13,6 +13,14 @@ import { ToolRegistry } from '../../core/ToolRegistry';
 // serialização pra persistir anexos entregues, e Core não pode importar de dashboard/).
 export { mimeTypeForFile, serializeAttachment };
 
+/**
+ * Versão do contrato público do turno (`docs/CONTRATO_DO_TURNO.md`) que as rotas deste arquivo cumprem — anunciada em
+ * `GET /api/status` → `status.contracts.turn`. Mudança incompatível nas rotas abaixo (campo removido, status ou fase com outro
+ * significado) exige subir este número junto com o documento e o teste de conformidade S457; campo novo não exige. O cliente
+ * público (`public/turn-client.js`) declara a mesma versão, e o S457 confere que as duas coincidem.
+ */
+export const TURN_CONTRACT_VERSION = 1;
+
 const chatRateLimit = new Map<string, number[]>();
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX = 10;
