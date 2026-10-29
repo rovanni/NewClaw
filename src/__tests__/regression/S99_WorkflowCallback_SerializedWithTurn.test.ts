@@ -54,6 +54,7 @@ async function main() {
     };
 
     const fakeAgentLoop = {
+        esquecerAutorizacao: (_txnId: string) => {}, // S456
         resumeFromWorkflow: async (_userId: string, _result: unknown) => {
             return 'Workflow resumido com sucesso!';
         }

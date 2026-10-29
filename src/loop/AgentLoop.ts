@@ -680,6 +680,15 @@ export class AgentLoop {
     // ── Síntese pós-workflow (chamado pelo AgentController) ───────────────────
 
     /**
+     * A transação foi resolvida (botão ou expiração) — a pendência dela não pode sobrar no authManager. Sem isto, no passo de
+     * objetivo (que não passa por resumeFromWorkflow) a próxima mensagem curta ("ok", "não") virava decisão sobre uma transação
+     * já encerrada (S456).
+     */
+    esquecerAutorizacao(txnId: string): void {
+        this.authManager.removePendingByTxn(txnId);
+    }
+
+    /**
      * Recebe o resultado de um passo de workflow já executado pelo WorkflowEngine
      * e produz uma resposta final para o usuário com uma única chamada compacta ao LLM.
      *
