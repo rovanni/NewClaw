@@ -133,6 +133,9 @@ contexto, nem credencial.
 
 ### 4. Configuração de voz portável
 
+> Revista em 29/10/2026: transcrição e síntese passam a ser locais por padrão, com servidor externo só como opção. A tabela
+> nova está na seção "Revisão de 29/10/2026". A tabela abaixo fica como registro da Etapa 0.
+
 Sem nenhum valor do lab. Vazio = recurso desligado e reportado, nunca adivinhado.
 
 | Variável (prefixo do harness) | Para quê | Padrão |
@@ -249,12 +252,12 @@ precisar de mais de um formato.
 | H3 | HTTPS para acesso remoto | O harness termina TLS com certificado do usuário, opcional; sem ele, só `localhost` com microfone | **aprovada com critérios** (29/10) |
 | H4 | STUN/TURN | Nenhum por padrão; `enableDefaultIceServers: false` | proposta |
 | D1 | Onde o Pipecat roda | Na infraestrutura que o usuário configurar, de preferência junto ao harness; nenhuma máquina nem sistema como requisito | **aprovada** (29/10) |
-| D2 | STT | Em tempo real, no harness/Pipecat, com provedor configurável; o texto vai ao NewClaw pela API existente; o Core não muda | **aprovada** (29/10) |
+| D2 | STT | Em tempo real, no harness/Pipecat, com provedor configurável; o texto vai ao NewClaw pela API existente; o Core não muda | **aprovada** (29/10); **revista** em 29/10 — transcrição local no harness (seção "Revisão de 29/10/2026") |
 | D3 | Cancelar | Botão Parar, separando "interromper o áudio" de "cancelar a tarefa" (esta com confirmação); comando de voz depois | **aprovada** (29/10) |
 | D4 | Resposta longa | Texto aparece aos poucos; fala sintetizada em blocos por frase; resposta completa no histórico | **aprovada** (29/10) |
 | D5 | Identidade e sessões | Identidade e memória do NewClaw; sessões explícitas; nenhuma memória no Pipecat; continuar conversas só no que a API oferece | **aprovada** (29/10) |
 | D6 | Progresso | Só eventos significativos confirmados pelo backend; nada repetitivo nem fictício | **aprovada** (29/10) |
-| D7 | Som e voz | Sinal curto, independente do TTS, quando o pedido é aceito; Kokoro como opção inicial, voz e idioma configuráveis; sem TTS, modo texto | **aprovada** (29/10) |
+| D7 | Som e voz | Sinal curto, independente do TTS, quando o pedido é aceito; Kokoro como opção inicial, voz e idioma configuráveis; sem TTS, modo texto | **aprovada** (29/10); **revista** em 29/10 — síntese local no harness (seção "Revisão de 29/10/2026") |
 | D8 | Modelo | Roteamento do Cognitive Kernel preservado; nenhum modelo fixo no harness; mudança só depois de medir por etapa | **aprovada** (29/10) |
 | D9 | Link no painel | Nenhum link específico da interface de voz no painel | **adiada** (29/10) — o harness é acessado diretamente |
 | D10 | Ao reabrir | Mostrar sem falar, pelo histórico (com o `id` que a lista de conversas dá para o `sessionId`) | mantida, alinhada à D5 |
@@ -457,6 +460,67 @@ estruturais e não conhece cliente, canal nem fornecedor de voz; o `S457` confer
 - **Migrações:** o painel e o suplemento ainda têm as próprias cópias, e migrá-los é a etapa 7.
 - **Fluxo com modelo real:** não foi exercitado (precisa de OK de cota); o `S457` cobre as entregas pelas mesmas chamadas que
   o `MessageBus` faz ao adapter.
+
+## Revisão de 29/10/2026 — voz na máquina do usuário (D2 e D7)
+
+**Motivo, nas palavras da operadora:** o desenho com servidores de transcrição e síntese noutra máquina deixava o harness
+dependente de outro sistema. O ideal é "depender de nada, instalar na própria máquina do usuário e utilizar via máquina do
+usuário". Vale para qualquer pessoa, em Windows, Linux e macOS (`AGENTS.md`, regra 3).
+
+**O que já existia, antes de criar algo** (`AGENTS.md`, regra 12):
+
+| Onde | Transcrição | Síntese |
+|---|---|---|
+| Núcleo do NewClaw | `agentMediaHandlers.ts`: API remota opcional, senão `whisper` local (`WHISPER_PATH`) | `send_audio.ts`: API compatível com OpenAI, senão Piper local como subprocesso (GPL-3.0, ADR-008), senão edge-tts (serviço na nuvem) |
+| Pipecat 1.12 instalado | `WhisperSTTService` (faster-whisper, no processo, CPU ou CUDA; extra `whisper`) | `KokoroTTSService` (kokoro-onnx, no processo; extra `kokoro`) e `PiperTTSService` (extra `piper`) |
+| Etapa 0 (lab) | `whisper-proxy` → whisper.cpp noutra máquina | Kokoro-FastAPI noutra máquina |
+
+**Decisão revista:**
+- **Padrão: tudo local, dentro do motor do harness.**
+  - Transcrição com faster-whisper.
+  - Síntese com Kokoro (kokoro-onnx).
+  - Os dois vêm do próprio Pipecat; nada novo é escrito para isso.
+- **Servidor externo compatível com a API OpenAI:** continua como opção declarada, para quem quiser. Deixa de ser o caminho
+  principal.
+- **O que a pessoa escolhe** (`NUNCA_ADIVINHAR`):
+  - modelo, voz e idioma vêm da configuração dela, e o código não tem padrão para nenhum deles;
+  - sem escolha, a ausência é reportada.
+- **O que é medido, não escrito:** se há GPU e quais tipos de cálculo ela aceita (CTranslate2/ONNX Runtime) é perguntado ao
+  sistema na hora (`AGENTS.md`, regra 11). Sem GPU, roda no processador.
+- **Piper fica fora do processo:** é GPL-3.0. Se entrar, entra como subprocesso, como o núcleo já faz.
+- **O núcleo não muda.** Unificar a voz do núcleo com a do harness seria outra decisão, com ADR própria.
+
+**Configuração (substitui a tabela 4 para transcrição e síntese):**
+
+| Variável | Para quê | Padrão |
+|---|---|---|
+| `VOZ_STT_MOTOR` | `local` (faster-whisper) ou `url` (servidor compatível com OpenAI) | nenhum; vazio = transcrição desligada |
+| `VOZ_STT_MODELO` | Modelo do Whisper (local) ou do servidor (`url`) | nenhum (obrigatório quando ligado) |
+| `VOZ_STT_URL`, `VOZ_STT_CHAVE` | Só no motor `url` | nenhum |
+| `VOZ_TTS_MOTOR` | `local` (Kokoro) ou `url` | nenhum; vazio = síntese desligada |
+| `VOZ_TTS_VOZ` | Voz (local: uma das vozes do arquivo de vozes do Kokoro, conferida nele) | nenhum (obrigatório quando ligado) |
+| `VOZ_TTS_MODELO`, `VOZ_TTS_URL`, `VOZ_TTS_CHAVE` | Só no motor `url` | nenhum |
+| `VOZ_DISPOSITIVO` | `auto` (medido), `cpu` ou `cuda` | `auto`: decide pela medição, nunca por suposição |
+| `VOZ_MODELOS_DIR` | Pasta dos modelos baixados | uma pasta do próprio harness |
+
+**Riscos, a medir antes de afirmar:**
+- **GPU:** suporte do CTranslate2 às placas mais novas (série 50 da NVIDIA, nesta máquina).
+- **Licenças:**
+  - O kokoro-onnx pode depender do espeak-ng (GPL), carregado no processo. Isso fica a conferir na auditoria L1 antes de
+    publicar; se for o caso, o Kokoro vai para subprocesso (H1 permite).
+  - As licenças dos pesos (Whisper, Kokoro) também ficam a conferir na mesma auditoria.
+- **Downloads:**
+  - Os modelos vêm do Hugging Face (Whisper) e do GitHub (Kokoro) no primeiro uso.
+  - O harness avisa antes, mostra o tamanho e guarda os modelos em `VOZ_MODELOS_DIR`.
+  - Depois do download, funciona sem rede.
+
+**Sprints da Etapa 2, revistas** (detalhe em `docs/SPRINTS.md` do newclaw-ivox):
+- 3: transcrição local, com a GPU medida;
+- 4: síntese local, frase a frase;
+- 5: fluxo completo, mais interrupção por voz real no microfone;
+- 6: Linux.
+
+**Aprovada pela operadora em 29/10/2026**, com as instalações e os downloads da Sprint 3.
 
 ## Etapas seguintes (cada uma só com autorização)
 
