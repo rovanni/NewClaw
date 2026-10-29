@@ -79,7 +79,7 @@ Feito na Etapa 1 da ADR-030 (29/10/2026):
 
 - Corrigir os acoplamentos já existentes do suplemento do PowerPoint (exceção de CORS, prefixo, broker): ficam registrados
   como débito, com migração possível para o contrato público.
-- O repositório da interface de voz: decidido na R1 da ADR-030 (repositório separado `newclaw-ivoz`, 29/10/2026).
+- O repositório da interface de voz: decidido na R1 da ADR-030 (repositório separado `newclaw-ivox`, 29/10/2026).
 
 ## Fase 5 — Validação
 
