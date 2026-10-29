@@ -255,6 +255,15 @@ export class SessionManager {
         });
     }
 
+    /**
+     * A última fala do assistente, se foi ela a última mensagem da conversa — o contexto que o cofre usa para reconhecer uma
+     * senha respondida sozinha (S460). Lê do banco: vale também depois de reiniciar o processo.
+     */
+    ultimaFalaDoAssistente(key: SessionKey): string | null {
+        const [ultima] = this.memory.getRecentMessages(this.conversationId(key), 1);
+        return ultima && ultima.role === 'assistant' ? ultima.content : null;
+    }
+
     async recordSystemMessage(key: SessionKey, content: string, meta?: TranscriptMeta): Promise<number> {
         const sid = this.sessionKey(key);
         return this.withMutex(sid, async () => {

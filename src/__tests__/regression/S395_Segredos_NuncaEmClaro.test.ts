@@ -110,7 +110,7 @@ async function main(): Promise<void> {
         console.log('\n=== S395-6 — a ordem no caminho real da mensagem ===');
         const bus = src('channels', 'MessageBus.ts');
         const proc = bus.slice(bus.indexOf('async processMessage('), bus.indexOf('private async processMessageCore('));
-        const iProteger = proc.indexOf('protegerEntrada(msg.text)');
+        const iProteger = proc.indexOf('protegerEntrada(msg.text'); // S460: agora com o contexto da conversa
         const iLog = proc.indexOf("log.info('message_received'");
         assert(iProteger > 0 && iLog > iProteger, 'MessageBus protege a entrada ANTES do primeiro log do texto');
         assert(/<SEGREDO:nao_guardado>/.test(proc), 'se o cofre falhar, o valor sai da mensagem mesmo assim');

@@ -32,11 +32,36 @@ export const SENHA_DE_APP = /\b(?:[a-z]{4} ){3}[a-z]{4}\b/g;
 const PALAVRA_DE_CREDENCIAL = /\b(senhas?|password|passwd|pwd|contrase(ñ|n)as?|claves?|chaves?|tokens?|api[ _-]?keys?|secret|segredo)\b/i;
 
 /**
+ * A fala do assistente que pede (ou fala de) uma credencial — mais estreita que PALAVRA_DE_CREDENCIAL: "chave"/"clave" ficam
+ * de fora porque o assistente as usa o tempo todo em outro sentido ("palavra-chave", "as chaves do JSON"), e a resposta curta
+ * seguinte (um nome de arquivo, por exemplo) iria para o cofre.
+ */
+const CREDENCIAL_PEDIDA = /\b(senhas?|password|passwd|contrase(ñ|n)as?|tokens?|api[ _-]?keys?|secret|segredo)\b/i;
+
+/**
  * "senha: X", "password = X", "a senha é X", "a senha do servidor de teste é X", "my password is X", "la contraseña es X".
  * Até 6 palavras entre o rótulo e o verbo/sinal. O verbo é procurado depois de ESPAÇO, não de `\b`: sem o modo unicode,
  * `\b` não vê fronteira antes de "é" — achado na validação real de 14/10/2026 (a frase acima passou em claro).
  */
 const VALOR_ROTULADO = /\b(?:senhas?|password|passwd|pwd|contrase(?:ñ|n)as?|claves?|chaves?|token|api[ _-]?key|secret)\b(?:\s+[^\s:=]+){0,6}?(?:\s*[:=]|\s+(?:é|e|is|es|será|são|son))\s*["'`]?([^\s"'`]{6,})/gi;
+
+/**
+ * "senha 123456789", "password Xy9!q2w3e": o rótulo seguido direto do valor, sem sinal nem verbo (S458 — achado de 22/10/2026,
+ * a senha de uma VM digitada assim ficou em log, banco e workspace). Só a palavra IMEDIATAMENTE seguinte conta: com palavras no
+ * meio ("a senha do servidor X") qualquer palavra viraria valor; esse caso continua exigindo sinal ou verbo (VALOR_ROTULADO).
+ */
+const VALOR_COLADO_NO_ROTULO = /\b(?:senhas?|password|passwd|pwd|contrase(?:ñ|n)as?|token|api[ _-]?key|secret)\s+["'`]?([^\s"'`]{6,})/gi;
+
+/**
+ * Token privado dentro de um link — quem tem o link tem o acesso (S459, achado A3: o link `.../private-<token>/basic.ics` de
+ * uma agenda ficou no log, na memória e no workspace). Dois formatos: o segmento `private-<token>` (calendários) e o
+ * parâmetro de consulta com nome de credencial. Só o token vai ao cofre — o resto do link continua legível, e a ferramenta
+ * recebe o valor pelo marcador como qualquer outro segredo. Mínimo de 16 caracteres: `?key=en` ou `?token=1` não são acesso.
+ */
+const TOKEN_EM_LINK = [
+    /\/private-([A-Za-z0-9_-]{16,})/g,
+    /[?&](?:access_token|token|api_?key|apikey|key|secret|signature|sig|password|pwd|auth)=([A-Za-z0-9._~%-]{16,})/gi,
+];
 
 /** Variável com nome sensível cujo VALOR não é segredo (ex.: WHATSAPP_AUTH_DIR é uma pasta) — não é mascarada. */
 const NAO_E_VALOR_SECRETO = /_(DIR|PATH|FILE|URL|MODE|ENABLED|TIMEOUT|PORT)$/i;
@@ -44,8 +69,12 @@ const NAO_E_VALOR_SECRETO = /_(DIR|PATH|FILE|URL|MODE|ENABLED|TIMEOUT|PORT)$/i;
 const PREFIXO = 'SEGREDO_';
 const MARCADOR = /<SEGREDO:([A-Za-z0-9_]+)>/g;
 
-/** Um valor rotulado só conta se tiver cara de senha — "a senha é complicada" não guarda "complicada". */
+/**
+ * Um valor rotulado só conta se tiver cara de senha — "a senha é complicada" não guarda "complicada". Só dígitos, a partir de 6,
+ * também conta (PIN, código, "senha 123456789"): depois de um rótulo de credencial, um número não é prosa (S458).
+ */
 function temCaraDeSenha(v: string): boolean {
+    if (/^[0-9]{6,}$/.test(v)) return true;
     if (v.length < 8) return false;
     const classes = [/[a-z]/, /[A-Z]/, /[0-9]/, /[^A-Za-z0-9]/].filter((r) => r.test(v)).length;
     return classes >= 2;
@@ -139,19 +168,51 @@ function semPontuacaoNoFim(v: string): string {
     return v.slice(0, fim);
 }
 
-/** Valores com cara de credencial num texto de entrada (sem decidir nada além disso). */
-export function detectarSegredos(texto: string): string[] {
+/** O valor sem aspas em volta ("`Abc12345`" → "Abc12345"). Laço, pelo mesmo motivo de semPontuacaoNoFim. */
+const ASPAS = new Set(['"', "'", '`']);
+function semAspasNasPontas(v: string): string {
+    let ini = 0, fim = v.length;
+    while (ini < fim && ASPAS.has(v[ini])) ini++;
+    while (fim > ini && ASPAS.has(v[fim - 1])) fim--;
+    return v.slice(ini, fim);
+}
+
+/**
+ * O que veio antes na conversa e muda o sentido da mensagem: a última fala do assistente. Fato estrutural da conversa, sem
+ * LLM — perguntar ao modelo "isto é uma senha?" já seria o vazamento.
+ */
+export interface ContextoDaEntrada { ultimaFalaDoAssistente?: string | null }
+
+/**
+ * Valores com cara de credencial num texto de entrada (sem decidir nada além disso).
+ *
+ * Com o assistente tendo acabado de falar de senha/chave/token (S460, achado A1: pediu "a senha de app" e a resposta veio só
+ * com os 4 grupos de 4 letras, que ficaram em claro em 4 tabelas, no log e num script), a resposta é lida nesse contexto: a
+ * resposta que é inteira um valor só — a senha de app, ou um valor sem espaço com cara de senha — vai ao cofre. Prosa continua não sendo senha — "sim, pode usar a mesma" não tem valor nenhum com cara de senha.
+ */
+export function detectarSegredos(texto: string, contexto: ContextoDaEntrada = {}): string[] {
     const achados = new Set<string>();
     for (const f of FORMATOS_DE_CREDENCIAL) {
         const g = new RegExp(f.source, f.flags.includes('g') ? f.flags : f.flags + 'g');
         for (const m of texto.match(g) ?? []) achados.add(m);
     }
-    if (PALAVRA_DE_CREDENCIAL.test(texto)) {
-        for (const m of texto.match(SENHA_DE_APP) ?? []) achados.add(m);
-        for (const m of texto.matchAll(VALOR_ROTULADO)) {
-            const v = semPontuacaoNoFim(m[1]);
-            if (temCaraDeSenha(v)) achados.add(v);
+    for (const f of TOKEN_EM_LINK) for (const m of texto.matchAll(f)) achados.add(m[1]);
+    const pedidaAgora = !!contexto.ultimaFalaDoAssistente && CREDENCIAL_PEDIDA.test(contexto.ultimaFalaDoAssistente);
+    if (PALAVRA_DE_CREDENCIAL.test(texto) || pedidaAgora) {
+        if (PALAVRA_DE_CREDENCIAL.test(texto)) for (const m of texto.match(SENHA_DE_APP) ?? []) achados.add(m);
+        for (const re of [VALOR_ROTULADO, VALOR_COLADO_NO_ROTULO]) {
+            for (const m of texto.matchAll(re)) {
+                const v = semPontuacaoNoFim(m[1]);
+                if (temCaraDeSenha(v)) achados.add(v);
+            }
         }
+    }
+    if (pedidaAgora) {
+        // Só a resposta INTEIRA: a senha de app no meio de uma frase sem palavra de credencial continua ambígua ("esta casa fica
+        // logo ali" tem o mesmo formato).
+        const sozinho = semAspasNasPontas(semPontuacaoNoFim(texto.trim()));
+        const ehSenhaDeApp = /^(?:[a-z]{4} ){3}[a-z]{4}$/.test(sozinho);
+        if (ehSenhaDeApp || (!/\s/.test(sozinho) && !/<SEGREDO:/.test(sozinho) && temCaraDeSenha(sozinho))) achados.add(sozinho);
     }
     return [...achados].sort((a, b) => b.length - a.length);
 }
@@ -211,7 +272,7 @@ export interface EntradaProtegida { texto: string; guardados: string[] }
  *  - um valor reconhecido (detectarSegredos) já guardado reaparece com o nome que tem; um novo vai para o cofre como
  *    senha_N. Em ambos os casos o texto segue com <SEGREDO:nome> no lugar do valor.
  */
-export function protegerEntrada(texto: string, envPath: string = caminhoDoEnv()): EntradaProtegida {
+export function protegerEntrada(texto: string, envPath: string = caminhoDoEnv(), contexto: ContextoDaEntrada = {}): EntradaProtegida {
     if (!texto) return { texto, guardados: [] };
     const guardados: string[] = [];
     const cmd = texto.match(/^\/segredo\s+([A-Za-z][A-Za-z0-9_]{0,40})\s+(\S[\s\S]*)$/);
@@ -220,7 +281,7 @@ export function protegerEntrada(texto: string, envPath: string = caminhoDoEnv())
         return { texto: `/segredo ${nome} <SEGREDO:${nome}>`, guardados: [nome] };
     }
     let r = mascararSegredos(texto);
-    for (const valor of detectarSegredos(r)) {
+    for (const valor of detectarSegredos(r, contexto)) {
         if (/<SEGREDO:/.test(valor)) continue;
         const nome = guardarSegredo(proximoNome(), valor, envPath);
         r = r.split(valor).join(`<SEGREDO:${nome}>`);
