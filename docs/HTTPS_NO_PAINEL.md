@@ -27,7 +27,7 @@ Um certificado de uma autoridade pública exige um domínio. Numa rede local, o 
 emitir com ela o certificado do servidor e instalar a autoridade (só o `.crt`, nunca a chave) em cada aparelho que for
 abrir o painel.
 
-Com `openssl` (vem com o Git no Windows e com o Linux e o macOS). Troque `192.168.0.10` pelo IP do seu servidor:
+Com `openssl` (vem com o Git no Windows e com o Linux e o macOS). Troque `192.0.2.10` pelo IP do seu servidor:
 
 ```bash
 # 1. Autoridade local (guarde autoridade-local.key em lugar privado: quem a tem emite certificados aceitos pelos seus aparelhos)
@@ -35,8 +35,8 @@ openssl req -x509 -newkey rsa:3072 -sha256 -days 3650 -nodes -keyout autoridade-
   -subj "/CN=Autoridade local" -addext "basicConstraints=critical,CA:TRUE,pathlen:0" -addext "keyUsage=critical,keyCertSign,cRLSign"
 
 # 2. Certificado do servidor, válido para o IP dele (825 dias: o limite que o macOS e o iOS aceitam)
-openssl req -newkey rsa:2048 -sha256 -nodes -keyout painel.key -out painel.csr -subj "/CN=192.168.0.10"
-printf "basicConstraints=CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\nsubjectAltName=IP:192.168.0.10,IP:127.0.0.1,DNS:localhost\n" > painel.ext
+openssl req -newkey rsa:2048 -sha256 -nodes -keyout painel.key -out painel.csr -subj "/CN=192.0.2.10"
+printf "basicConstraints=CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\nsubjectAltName=IP:192.0.2.10,IP:127.0.0.1,DNS:localhost\n" > painel.ext
 openssl x509 -req -in painel.csr -CA autoridade-local.crt -CAkey autoridade-local.key -CAcreateserial -out painel.crt -days 825 -sha256 -extfile painel.ext
 ```
 
