@@ -7,6 +7,9 @@ import { DashboardContext } from './types';
 import { createLogger } from '../../shared/AppLogger';
 import { dashboardAuth, getEffectiveSecret } from './auth';
 import { powerpointBroker } from './powerpointBroker';
+import { createIntegracoesOpcionaisRouter } from './integracoesOpcionais';
+import { GerenciadorDeIntegracoes } from '../integracoesOpcionais/gerenciador';
+import { dependenciasReais } from '../integracoesOpcionais/dependencias';
 
 const log = createLogger('Integrations');
 
@@ -46,8 +49,13 @@ function getOwnerId(token: string): string {
     return crypto.createHmac('sha256', getEffectiveSecret()).update(token).digest('hex');
 }
 
-export function createIntegrationsRouter(_ctx: DashboardContext, spawnFn: any = spawn): Router {
+export function createIntegrationsRouter(_ctx: DashboardContext, spawnFn: any = spawn, gerenciador?: GerenciadorDeIntegracoes): Router {
     const router = Router();
+
+    // Instalador genérico de integrações opcionais (ADR-030, Etapa 5). A integração usa sempre o HTTP local deste NewClaw.
+    router.use('/opcionais', createIntegracoesOpcionaisRouter(
+        gerenciador ?? new GerenciadorDeIntegracoes(dependenciasReais(`http://127.0.0.1:${_ctx?.config?.dashboardPort || 3090}`)),
+    ));
 
     router.get('/powerpoint/commands', (req: Request, res: Response) => {
         const sessionId = req.query.sessionId as string;
