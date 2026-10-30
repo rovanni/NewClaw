@@ -213,18 +213,20 @@ export class GoalExtractor {
               '\n\n'
             : '\n\n';
 
-        const prompt = `Classifique a mensagem abaixo em cinco dimensões:
+        const prompt = `Classifique a mensagem abaixo em cinco dimensões (e numa sexta, só quando houver o bloco de esclarecimento):
 1. É um goal (requer execução de tarefas com ferramentas)?
 2. Se for goal, a intenção é AMBÍGUA (não está claro qual arquivo, formato ou ação específica)?
 3. É um projeto de construção de software ou desenvolvimento de funcionalidade complexa (ex: criar um jogo, desenvolver um site, implementar um sistema, criar um módulo ou script complexo)?
 4. Existe evidência textual EXPLÍCITA do objetivo no texto do usuário, ou o objetivo foi inferido a partir dos dados fornecidos?
 5. É uma REFINAMENTO/CLARIFICAÇÃO de um goal recente do contexto (o usuário está complementando ou corrigindo o pedido anterior, sem criar um objetivo completamente novo)?
+6. Se a mensagem traz o bloco "[ESCLARECIMENTO — o assistente perguntou: …; o usuário respondeu: …]": a resposta do usuário RESPONDE à pergunta feita?
 ${conversationSnippet}Mensagem atual do usuário (íntegra): "${message}"
 
 Responda APENAS com JSON válido, sem markdown:
-{"is_goal": boolean, "confidence": 0.0-1.0, "objective": "descrição se for goal", "required_tools": ["tool1"], "reason": "motivo", "is_ambiguous": boolean, "clarification_question": "pergunta ao usuário se is_ambiguous=true", "is_construction": boolean, "has_explicit_evidence": boolean, "is_refinement": boolean}
+{"is_goal": boolean, "confidence": 0.0-1.0, "objective": "descrição se for goal", "required_tools": ["tool1"], "reason": "motivo", "is_ambiguous": boolean, "clarification_question": "pergunta ao usuário se is_ambiguous=true", "is_construction": boolean, "has_explicit_evidence": boolean, "is_refinement": boolean, "responde_ao_esclarecimento": boolean ou null}
 
 Regras:
+- responde_ao_esclarecimento: null quando não há o bloco [ESCLARECIMENTO …]. Com o bloco: true quando a resposta do usuário responde à pergunta (escolhe uma opção, informa o dado pedido, confirma, corrige o pedido); false quando é outra coisa — uma saudação ("oi, tudo bem?"), um agradecimento, um assunto novo ou um pedido diferente.
 - is_ambiguous=true SOMENTE quando is_goal=true E a intenção é genuinamente vaga (sem arquivo, sem erro específico)
 - is_refinement=true quando: (a) o contexto recente mostra um goal concluído, (b) a mensagem atual é contextual/descritiva sem verbo imperativo novo, e (c) a mensagem complementa o goal anterior em vez de iniciar um objetivo diferente. Neste caso is_goal deve ser false.
 - Exemplo is_refinement=true: contexto="gere discurso de encerramento do curso de TI", mensagem="Assistente de TI é um curso de montagem, instalação de SO e redes" — o usuário está descrevendo o curso para contextualizar o pedido anterior, não pedindo algo novo.
@@ -327,6 +329,9 @@ Regras:
                 clarificationQuestion: parsed.clarification_question || undefined,
                 isConstruction: Boolean(parsed.is_construction),
                 hasExplicitEvidence: parsed.has_explicit_evidence !== false,
+                // Só um booleano é veredito; null, ausente ou outro tipo = sem veredito (o orquestrador mantém o de antes).
+                respondeAoEsclarecimento: typeof parsed.responde_ao_esclarecimento === 'boolean'
+                    ? parsed.responde_ao_esclarecimento : undefined,
             };
         } catch {
             return { isGoal: false, confidence: 0.5, reason: 'parse_error' };
@@ -337,13 +342,17 @@ Regras:
     async classify(
         message: string,
         context: ChannelContext,
-        recentMessages?: Array<{ role: string; content: string }>
+        recentMessages?: Array<{ role: string; content: string }>,
+        opcoes?: { semAtalhos?: boolean },
     ): Promise<GoalClassification> {
         const startMs = Date.now();
         let usedLLM = false;
         let result: GoalClassification;
 
-        const quick = this.quickClassify(message);
+        // `semAtalhos`: a pergunta só o modelo responde (ex.: se a resposta responde ao esclarecimento pendente). Os atalhos
+        // por palavra-chave não dão esse veredito — validação real (30/10/2026): a mensagem combinada caiu no atalho
+        // positivo e o veredito nunca veio.
+        const quick = opcoes?.semAtalhos ? null : this.quickClassify(message);
 
         if (quick === true) {
             log.debug(`[GoalExtractor] quick=goal message="${message.slice(0, 60)}"`);
@@ -360,7 +369,7 @@ Regras:
             result = { isGoal: false, confidence: GOAL_LIMITS.QUICK_CLASSIFY_THRESHOLD, reason: 'heuristic_negative' };
         } else {
             // Tool-specific shortcut: frases com tool dedicada nunca precisam de clarificação
-            const isUnambiguousTool = UNAMBIGUOUS_TOOL_PATTERNS.some(p => p.test(message.trim()));
+            const isUnambiguousTool = !opcoes?.semAtalhos && UNAMBIGUOUS_TOOL_PATTERNS.some(p => p.test(message.trim()));
             if (isUnambiguousTool) {
                 log.info(`[GoalExtractor] unambiguous_tool_match — skipping LLM classify for "${message.slice(0, 60)}"`);
                 result = {

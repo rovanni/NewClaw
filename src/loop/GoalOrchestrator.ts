@@ -229,6 +229,10 @@ export class GoalOrchestrator {
         );
 
         // ── Resolver clarificação pendente ──────────────────────────────────
+        // A mensagem como chegou: se o classificador disser que ela não responde ao esclarecimento, é com ela que o turno
+        // segue (ver logo depois da classificação).
+        const mensagemDoUsuario = message;
+        let juntouAoEsclarecimento = false;
         const pending = this.pendingClarifications.get(sessionKey);
         if (pending) {
             this.pendingClarifications.delete(sessionKey);
@@ -239,6 +243,7 @@ export class GoalOrchestrator {
                 message = pending.pergunta
                     ? `${pending.originalMessage}\n\n[ESCLARECIMENTO — o assistente perguntou: "${pending.pergunta}"; o usuário respondeu: "${message}". Atenda o pedido acima usando esta resposta.]`
                     : `${pending.originalMessage}\n\n[RESPOSTA DO USUÁRIO]: ${message}`;
+                juntouAoEsclarecimento = Boolean(pending.pergunta);
                 log.info(`[GoalOrchestrator] [GOAL] user response attached to existing goal context`);
                 log.info(`[GoalOrchestrator] [GOAL] resuming goal execution with combined context`);
             } else {
@@ -356,11 +361,26 @@ export class GoalOrchestrator {
         }
 
         const classifyStart = Date.now();
-        const classification = await this.extractor.classify(
+        // Com a resposta juntada ao esclarecimento, a classificação vai sempre ao modelo: só ele dá o veredito abaixo.
+        let classification = await this.extractor.classify(
             message,
             context ?? { channel: 'unknown', chatId: conversationId },
-            classifyMessages
+            classifyMessages,
+            { semAtalhos: juntouAoEsclarecimento },
         );
+        // A resposta pendente não responde à pergunta (uma saudação, um assunto novo): quem decide é o classificador, que leu
+        // o pedido, a pergunta e a resposta inteiros. O turno segue com a mensagem como chegou, como pedido novo, e é
+        // classificado de novo por ela. Sem veredito, fica tudo como antes. Caso real (30/10/2026, interface de voz):
+        // "Olá, tudo bem?" foi juntado a um esclarecimento sobre "Romântica básica." e respondido como se fosse sobre ela.
+        if (juntouAoEsclarecimento && classification.respondeAoEsclarecimento === false) {
+            log.info(`[GoalOrchestrator] [GOAL] resposta não responde ao esclarecimento pendente — segue como pedido novo: "${mensagemDoUsuario.slice(0, 80)}"`);
+            message = mensagemDoUsuario;
+            classification = await this.extractor.classify(
+                message,
+                context ?? { channel: 'unknown', chatId: conversationId },
+                classifyMessages
+            );
+        }
         const classificationMs = Date.now() - classifyStart;
 
         // Fase 3 da migração GoalExtractor → UnifiedIntentRouter (ver

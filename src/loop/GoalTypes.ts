@@ -153,6 +153,12 @@ export interface GoalClassification {
     timedOut?: boolean;
     /** true quando o fast path determinístico foi usado — LLM não foi chamado */
     usedFastPath?: boolean;
+    /**
+     * Só quando a mensagem traz o bloco [ESCLARECIMENTO …] (havia uma pergunta pendente): a resposta do usuário responde
+     * à pergunta (true) ou é outra coisa — saudação, assunto novo, outro pedido (false). Ausente = sem veredito (caminho
+     * heurístico, falha ou campo não devolvido): o orquestrador mantém a resposta junto do pedido, como antes.
+     */
+    respondeAoEsclarecimento?: boolean;
 }
 
 // ── Avaliação de step (heurística + escalation) ───────────────────────────────

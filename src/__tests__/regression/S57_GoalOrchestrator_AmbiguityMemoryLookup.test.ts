@@ -59,7 +59,8 @@ console.log('\n=== S57-1 — GoalOrchestrator.ts: preferências chegam ANTES de 
 {
     const source = fs.readFileSync(path.join(process.cwd(), 'src', 'loop', 'GoalOrchestrator.ts'), 'utf-8');
     const lookupIdx = source.indexOf('this.memory.getPreferences()');
-    const classifyIdx = source.indexOf('const classification = await this.extractor.classify(');
+    // `let` desde o S466: com o esclarecimento recusado, a classificação é refeita com a mensagem como chegou.
+    const classifyIdx = source.search(/(?:const|let) classification = await this\.extractor\.classify\(/);
     assert(lookupIdx > -1, 'a classificação usa a fonte única de preferências (MemoryManager.getPreferences)');
     assert(classifyIdx > -1, 'chamada extractor.classify() encontrada no source');
     assert(lookupIdx > -1 && classifyIdx > -1 && lookupIdx < classifyIdx, 'preferências entram ANTES da classificação — a única forma de evitar a pergunta de clarificação desnecessária');

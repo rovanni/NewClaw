@@ -350,6 +350,11 @@ function selfTest() {
     // arquivo (nem stdout, nem stderr, exit 0), o que mascarava justamente os casos de
     // falha que este selftest existe para provar. Subpasta temporária de src/__tests__/, removida no fim.
     const tmpDir = fs.mkdtempSync(path.join(__dirname, '..', 'src', '__tests__', 'selftest_scratch_'));
+    // Limite por arquivo no cenário misto. Vale para TODOS os fixtures, não só o pendurado: é o tempo que um arquivo
+    // normal pode levar numa máquina lenta. Com 6 s, o fixture da exceção estourou no Windows do CI (PR #28, 30/10/2026:
+    // ~1,9 s por fixture no resto do cenário; 1 falha em 60 execuções). 20 s = ~10x o normal medido no CI; o fixture
+    // pendurado espera 10x isso, então só ele chega ao limite. Custo: o autoteste espera 20 s pelo pendurado.
+    const LIMITE_DOS_FIXTURES_MS = 20000;
     let ok = true;
     const verifica = (cond, msg, detalhe) => { if (!cond) { console.error(`SELFTEST FALHOU: ${msg}`, detalhe ?? ''); ok = false; } };
     // Roda ESTE runner como um processo à parte, sobre uma pasta de fixtures (cenário controlado e isolado).
@@ -374,7 +379,7 @@ function selfTest() {
         escrever(mista, 'c_fail_throw.test.ts', `throw new Error('fixture uncaught exception');\n`);
         // O caso real que causou falso verde: assertion falha, o processo segue e sai com 0 — agora INCONSISTENTE.
         escrever(mista, 'd_fail_silent_continue.test.ts', `console.error('  ❌ FALHOU: assertion'); console.log('mas o processo segue rodando e sai com 0');\n`);
-        escrever(mista, 'e_hang_timeout.test.ts', `console.log('pendurado'); setTimeout(() => {}, 60000);\n`);
+        escrever(mista, 'e_hang_timeout.test.ts', `console.log('pendurado'); setTimeout(() => {}, ${LIMITE_DOS_FIXTURES_MS * 10});\n`);
         escrever(mista, 'f_slow_known.test.ts', `console.log('começo'); setTimeout(() => { console.log('fim'); process.exit(0); }, 900);\n`);
         // Resumo com "Falhou: 0" (como nos testes reais) NÃO pode virar inconsistência.
         escrever(mista, 'g_summary_zero_failures.test.ts', `console.log('  ❌ Falhou: 0'); console.log('RESULTADO: ✅ 3 passou | ❌ 0 falhou'); process.exit(0);\n`);
@@ -383,7 +388,7 @@ function selfTest() {
             `const { spawnSync } = require('child_process');\n` +
             `const r = spawnSync(process.execPath, ['-e', 'process.exit(/regression-preload/.test(process.env.NODE_OPTIONS || "") || process.env.NC_TIMING_FILE ? 1 : 0)'], { env: process.env });\n` +
             `console.log('filho sem hook:', r.status === 0); process.exit(r.status === 0 ? 0 : 1);\n`);
-        const m = rodarRunner(mista, ['--timeout', '6000']);
+        const m = rodarRunner(mista, ['--timeout', String(LIMITE_DOS_FIXTURES_MS)]);
         const st = (nome) => m.json && m.json.testes.find((t) => t.arquivo === nome);
         verifica(m.code === 1, 'suíte mista com falhas deveria sair com exit 1', m.code);
         verifica(m.json != null, 'o relatório estruturado deveria ser gravado', m.out.slice(-300));
