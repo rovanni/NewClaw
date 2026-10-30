@@ -4,6 +4,11 @@ name: regressao
 # O runner (scripts/run-regression-tests.cjs) é a ÚNICA fonte da decisão passa/falha: falha quando nenhum teste é descoberto,
 # quando um teste pendura (timeout) ou sai com 0 mas imprimiu "FALHOU:"; e grava um relatório estruturado com a duração de cada teste.
 # Sem segredos e sem serviços externos: nada aqui chama a nuvem.
+#
+# Pull request: só os testes AFETADOS pelas mudanças (scripts/testes-afetados.cjs, conservador: na dúvida o teste roda; mudança no
+# executor, nas dependências ou neste arquivo roda tudo). Push no main: a suíte COMPLETA, que também grava o mapa do que cada teste
+# leu e o guarda no cache — os PRs seguintes o restauram para escolher melhor. Decisão da operadora (30/10/2026): a completa em todo
+# PR fazia cada um esperar ~28 min; uma quebra fora do que o PR alcança passa a aparecer no main, logo depois do merge.
 
 on:
   push:
@@ -35,6 +40,9 @@ jobs:
         node: [22.22.2, 24.15.0]   # mínimos declarados; cada runner instala npm 12.2.0
     steps:
       - uses: actions/checkout@v4
+        with:
+          # O PR compara com a base (git diff origin/<base>): precisa do histórico, não só do último commit.
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
@@ -58,8 +66,29 @@ jobs:
       - name: Autoteste do runner
         run: npm run test:regression:selftest
 
-      - name: Suíte de regressão
+      # Depois do npm ci (que apaga node_modules): o mapa mora em node_modules/.cache/newclaw-regressao.
+      - name: Restaurar o mapa de leituras da última suíte completa do main
+        if: github.event_name == 'pull_request'
+        uses: actions/cache/restore@v4
+        with:
+          path: node_modules/.cache/newclaw-regressao
+          key: regressao-mapa-${{ runner.os }}-node${{ matrix.node }}-${{ github.sha }}
+          restore-keys: regressao-mapa-${{ runner.os }}-node${{ matrix.node }}-
+
+      - name: Testes afetados pelo PR
+        if: github.event_name == 'pull_request'
+        run: npm run test:regression -- --afetados --base "origin/${{ github.base_ref }}" --report regressao-relatorio.json
+
+      - name: Suíte de regressão completa
+        if: github.event_name != 'pull_request'
         run: npm run test:regression -- --report regressao-relatorio.json
+
+      - name: Guardar o mapa de leituras para os PRs
+        if: github.event_name == 'push' && success()
+        uses: actions/cache/save@v4
+        with:
+          path: node_modules/.cache/newclaw-regressao
+          key: regressao-mapa-${{ runner.os }}-node${{ matrix.node }}-${{ github.sha }}
 
       - name: Relatório (duração por teste)
         if: always()

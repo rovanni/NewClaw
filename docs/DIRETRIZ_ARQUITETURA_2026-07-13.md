@@ -100,16 +100,14 @@ Só começar quando: nenhuma alternativa significativamente melhor tiver sido en
 Para toda mudança arquitetural relevante (mesmo critério de escopo da Fase 1), a validação segue quatro etapas obrigatórias, nesta ordem, antes de considerar a mudança pronta para merge:
 
 1. **Testes unitários** — funções isoladas, sem I/O real.
-2. **Testes de regressão** — os testes que a mudança alcança, incluindo os casos novos que a cobrem
-   (`node scripts/run-regression-tests.cjs --filter <Sxxx>`, um por teste afetado), mais `npx tsc --noEmit`.
-   "Afetado" não se escolhe de memória: muitos testes leem o código-fonte e procuram texto exato. A lista sai de
-   `grep -rlE "Arquivo1\.ts|Arquivo2\.ts" src/__tests__/regression/` com cada arquivo do diff (PR #28: o S57 ficou de fora
-   da escolha feita de cabeça e quebrou nos quatro jobs do CI).
-   A suíte completa (`npm run test:regression`) já roda no CI de todo PR, em Windows e Ubuntu e em duas
-   versões do Node; rodá-la também na máquina só repete esse trabalho. Localmente, a suíte inteira só roda
-   quando a mudança alcança código usado por todo o sistema (o loop, o `MessageBus`, o runner de testes,
-   configuração global) e não dá para dizer quais testes ela afeta. Decisão da operadora em 30/10/2026,
-   para economizar tempo.
+2. **Testes de regressão** — os testes que a mudança alcança, incluindo os casos novos que a cobrem, mais
+   `npx tsc --noEmit`. A escolha é do executor, nunca de memória: `npm run test:regression -- --afetados`
+   (`scripts/testes-afetados.cjs`: imports, quem cita o arquivo pelo nome, o que cada teste leu na última suíte
+   completa; na dúvida, o teste roda). Escolhidos de cabeça no PR #28, o S57 ficou de fora e quebrou nos quatro jobs.
+   O CI faz o mesmo em todo PR, em Windows e Ubuntu e em duas versões do Node; a suíte completa roda no CI a cada
+   push no main, logo depois do merge. Decisão da operadora em 30/10/2026, para economizar tempo: uma quebra fora do
+   que o PR alcança aparece no main, não no PR. Localmente, a suíte inteira só roda quando o próprio `--afetados`
+   a pede (mudança no executor, nas dependências ou no CI).
 3. **Testes end-to-end sintéticos** — fluxo completo do componente, com dependências externas (LLM, HTTP, filesystem) mockadas.
 4. **Execução em ambiente real** — app real rodando, LLM real, HTTP real, planner real, filesystem real. Numa instância isolada (porta/DB/workspace separados de qualquer processo em uso), nunca contra dado de produção.
 

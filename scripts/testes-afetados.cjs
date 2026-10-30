@@ -1,7 +1,7 @@
 /**
  * Seleção dos testes de regressão AFETADOS por um conjunto de arquivos alterados — usada por
- * `node scripts/run-regression-tests.cjs --afetados` durante o trabalho; a suíte COMPLETA continua sendo a referência antes de
- * enviar ao GitHub (o CI roda a completa em todo push/PR).
+ * `node scripts/run-regression-tests.cjs --afetados` durante o trabalho e pelo CI em todo pull request (desde 30/10/2026); a suíte
+ * COMPLETA roda no CI a cada push no main, e é ela que grava o mapa observado que os PRs restauram do cache.
  *
  * A seleção é CONSERVADORA: na dúvida, o teste roda. Um teste é afetado quando:
  *   1. ele próprio mudou;
@@ -34,6 +34,8 @@ const MUDA_TUDO = [
     'tsconfig.json',
     'package.json',
     'package-lock.json',
+    // O CI decide aqui quais testes rodam em cada PR: mudar o workflow roda a suíte inteira.
+    '.github/workflows/regressao.yml',
 ];
 
 const RE_IMPORT = /(?:from\s+|import\s*\(\s*|require\s*\(\s*|import\s+)['"](\.{1,2}\/[^'"]*)['"]/g;
