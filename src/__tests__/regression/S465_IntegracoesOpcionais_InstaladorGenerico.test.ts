@@ -200,8 +200,9 @@ function testarAmbiente(): void {
         PATH: '/usr/bin', HOME: '/home/x', DASHBOARD_PASSWORD: 'segredo', TELEGRAM_BOT_TOKEN: 't', OPENAI_API_KEY: 'k', NEWCLAW_TOKEN: 'n',
     });
     assert(env.PATH === '/usr/bin' && env.HOME === '/home/x', 'passa o que um programa comum precisa');
-    assert(!('DASHBOARD_PASSWORD' in env) && !('TELEGRAM_BOT_TOKEN' in env) && !('OPENAI_API_KEY' in env) && !('NEWCLAW_TOKEN' in env),
-        'não passa senha, tokens nem chaves do NewClaw', env);
+    // Em caso de falha, mostra só os NOMES que vazaram: o valor de um segredo nunca vai para o log.
+    const vazaram = ['DASHBOARD_PASSWORD', 'TELEGRAM_BOT_TOKEN', 'OPENAI_API_KEY', 'NEWCLAW_TOKEN'].filter((k) => k in env);
+    assert(vazaram.length === 0, 'não passa senha, tokens nem chaves do NewClaw', vazaram.join(', '));
 }
 
 // ── 5. Regra 1 da ADR-031 ───────────────────────────────────────────────────
