@@ -1964,7 +1964,7 @@
    "todos": [],
    "risks": [
     "WhatsApp and Signal channels are not handled in the download branch of handleDocumentAttachment/handlePhotoAttachment (only 'telegram', 'discord' with url, and generic attachment.data are handled) — matches the documented ARCHITECTURE.md gap that WhatsApp/Signal attachments fail silently into the error branch",
-    "transcribeAttachment hardcodes a private/internal default Whisper URL ('http://10.0.0.1:8177') as a fallback when WHISPER_API_URL is unset — an internal IP baked into public OSS source, borderline violation of the project's own 'no sensitive data in repo' memory guidance though it is a private/non-routable RFC1918 address overridable via env var",
+    "transcribeAttachment hardcodes a private/internal default Whisper URL ('http://<rede-privada>:8177') as a fallback when WHISPER_API_URL is unset — an internal IP baked into public OSS source, borderline violation of the project's own 'no sensitive data in repo' memory guidance though it is a private/non-routable RFC1918 address overridable via env var",
     "processVision has two different provider-resolution code paths (providerFactory.getProviderWithModel vs. a dynamic `new OllamaProvider(...)` fallback when providerFactory is undefined) — a second, less-tested code path that only triggers when providerFactory is not passed",
     "isLikelyHallucination() is a hand-tuned heuristic (word-repetition ratio, interrogative-word-first heuristic) with no test-backed thresholds visible in this file — could produce false positives on legitimately short/repetitive voice messages",
     "handleDocumentAttachment/handlePhotoAttachment use require('fs')/require('path') mixed with dynamic import('fs/promises') in the same function — inconsistent module-loading style"
@@ -14343,7 +14343,7 @@
    "layer": "Tools",
    "path": "src/tools/server_config.ts",
    "loc": 37,
-   "responsibility": "ServerConfig — Centralized server mapping and safety rules Configure hosts via environment variables. NO built-in defaults to avoid leaking private infrastructure details in public repos. Env vars: NEWCLAW_SSH_HOSTS = \"alias:user@host,alias2:user@host2\" Example: NEWCLAW_SSH_HOSTS=\"prod:admin@192.168.1.10,staging:dev@192.168.1.20\"",
+   "responsibility": "ServerConfig — Centralized server mapping and safety rules Configure hosts via environment variables. NO built-in defaults to avoid leaking private infrastructure details in public repos. Env vars: NEWCLAW_SSH_HOSTS = \"alias:user@host,alias2:user@host2\" Example: NEWCLAW_SSH_HOSTS=\"prod:admin@192.0.2.10,staging:dev@192.0.2.20\"",
    "interfaces_implemented": [],
    "exports": [
     {

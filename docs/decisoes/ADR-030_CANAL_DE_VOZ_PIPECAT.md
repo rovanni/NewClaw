@@ -107,8 +107,8 @@ contexto, nem credencial.
 |---|---|
 | `POST /start`, `POST/PATCH /api/offer` **sem autenticação** | `runner/run.py:682, 1000, 1031`; teste: `/start` respondeu `200` sem credencial |
 | CORS do runner reflete **qualquer origem**, com credenciais, se `--allowed-origins` não for passado | `run.py:603-609`; teste: `Origin: http://atacante.example` voltou em `Access-Control-Allow-Origin` |
-| HTTP preso a `127.0.0.1` funciona (a rede não alcança a porta) | teste: `10.0.0.5:7861` recusado |
-| O áudio usa UDP efêmero na interface da rede (`10.0.0.5:55805`) e o mDNS (5353) | `ss -lunp` durante a sessão |
+| HTTP preso a `127.0.0.1` funciona (a rede não alcança a porta) | teste: `<IP do laboratório>:7861` recusado |
+| O áudio usa UDP efêmero na interface da rede (`<IP do laboratório>:55805`) e o mDNS (5353) | `ss -lunp` durante a sessão |
 | Mídia WebRTC é sempre cifrada (DTLS-SRTP); só quem recebeu as credenciais ICE pela sinalização consegue conversar com aquela porta | padrão WebRTC; `aiortc` / `pylibsrtp` |
 | STUN do Google só entra se o cliente pedir `enableDefaultIceServers: true` — **o molde do kit pede** | `run.py:752-758`; `config.ts.jinja2` do molde |
 | O bot do lab hoje escuta em `0.0.0.0:7860`, sem TLS nem autenticação | `systemd/pipecat-bot.service` |
