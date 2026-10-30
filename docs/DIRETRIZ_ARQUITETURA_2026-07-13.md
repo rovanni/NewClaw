@@ -102,6 +102,9 @@ Para toda mudança arquitetural relevante (mesmo critério de escopo da Fase 1),
 1. **Testes unitários** — funções isoladas, sem I/O real.
 2. **Testes de regressão** — os testes que a mudança alcança, incluindo os casos novos que a cobrem
    (`node scripts/run-regression-tests.cjs --filter <Sxxx>`, um por teste afetado), mais `npx tsc --noEmit`.
+   "Afetado" não se escolhe de memória: muitos testes leem o código-fonte e procuram texto exato. A lista sai de
+   `grep -rlE "Arquivo1\.ts|Arquivo2\.ts" src/__tests__/regression/` com cada arquivo do diff (PR #28: o S57 ficou de fora
+   da escolha feita de cabeça e quebrou nos quatro jobs do CI).
    A suíte completa (`npm run test:regression`) já roda no CI de todo PR, em Windows e Ubuntu e em duas
    versões do Node; rodá-la também na máquina só repete esse trabalho. Localmente, a suíte inteira só roda
    quando a mudança alcança código usado por todo o sistema (o loop, o `MessageBus`, o runner de testes,
