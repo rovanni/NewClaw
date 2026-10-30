@@ -1,6 +1,7 @@
 import { showToast } from '../components/Toast.js';
 import { runtimeStore } from '../state.js';
 import { guideBox } from '../app.js';
+import { renderOpcionais } from './IntegracoesOpcionais.js';
 
 export function render(container) {
   const isWindows = runtimeStore.snap().platform === 'win32';
@@ -34,11 +35,14 @@ export function render(container) {
           </div>
         </div>
 
+        <div id="integracoes-opcionais" style="display: contents;"></div>
+
       </div>
     </div>
   `;
 
   let pollInterval = null;
+  const pararOpcionais = renderOpcionais(document.getElementById('integracoes-opcionais'));
 
   const setupUI = (installed) => {
     const card = document.getElementById('pptx-card');
@@ -174,5 +178,6 @@ export function render(container) {
 
   return () => {
     if (pollInterval) clearInterval(pollInterval);
+    pararOpcionais();
   };
 }
