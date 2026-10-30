@@ -13,6 +13,8 @@ import express from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import path from 'path';
+import fs from 'fs';
+import https from 'https';
 import { Server } from 'http';
 import { AgentController, NewClawConfig } from '../core/AgentController';
 import { ProviderFactory } from '../core/ProviderFactory';
@@ -40,6 +42,7 @@ import { createValidatorsRouter } from './routes/validators';
 import { createIntegrationsRouter } from './routes/integrations';
 import { DashboardContext } from './routes/types';
 import { isUnsafeExposedBoot } from './hostSafety';
+import { planejarEscuta } from './hostSafety';
 import { createHostGate } from './hostSafety';
 
 const log = createLogger('Dashboardserver');
@@ -49,6 +52,7 @@ export { isUnsafeExposedBoot };
 export class DashboardServer {
     private app: express.Express;
     private server?: Server;
+    private httpsServer?: https.Server;
     private ctx: DashboardContext;
     private ownsCurator = false;
     // Achado na revisão de segurança independente desta campanha (item C): isUnsafeExposedBoot()
@@ -166,7 +170,10 @@ export class DashboardServer {
 
         // Bind em 127.0.0.1 por padrão para evitar exposição em interfaces públicas.
         // Para expor em LAN/proxy reverso defina DASHBOARD_HOST=0.0.0.0 (e DASHBOARD_PASSWORD).
-        const host = process.env.DASHBOARD_HOST || '127.0.0.1';
+        // Com DASHBOARD_TLS_CERT/KEY, quem fica exposto é o HTTPS; o HTTP passa a escutar só em
+        // 127.0.0.1 (hostSafety.planejarEscuta).
+        const plano = planejarEscuta(process.env, port);
+        const host = plano.https?.host ?? plano.http.host;
 
         if (!this.authPersistenceLoaded) {
             // Falha alta, não silenciosa: sem isto, dashboardAuth.enabled só reflete
@@ -204,9 +211,34 @@ export class DashboardServer {
             process.exit(1);
         }
 
-        this.server = this.app.listen(port, host, () => {
-            log.info(`NewClaw Dashboard rodando em http://${host}:${port}${dashboardAuth.enabled ? ' (auth ON)' : ' (auth OFF — somente localhost)'}`);
+        // HTTPS configurado pela metade, ou certificado ilegível: falha alta, pelo mesmo motivo da senha acima.
+        if (plano.erro) {
+            log.error(plano.erro);
+            console.error(`[Dashboardserver] ${plano.erro}`);
+            process.exit(1);
+        }
+        let tls: { cert: Buffer; key: Buffer } | undefined;
+        if (plano.https) {
+            try {
+                tls = { cert: fs.readFileSync(plano.https.certFile), key: fs.readFileSync(plano.https.keyFile) };
+            } catch (e) {
+                const motivo = `Não consegui ler o certificado HTTPS (DASHBOARD_TLS_CERT/DASHBOARD_TLS_KEY): ${(e as Error).message}`;
+                log.error(motivo);
+                console.error(`[Dashboardserver] ${motivo}`);
+                process.exit(1);
+            }
+        }
+
+        const auth = dashboardAuth.enabled ? ' (auth ON)' : ' (auth OFF — somente localhost)';
+        this.server = this.app.listen(plano.http.port, plano.http.host, () => {
+            log.info(`NewClaw Dashboard rodando em http://${plano.http.host}:${plano.http.port}${auth}`);
         });
+        if (plano.https && tls) {
+            const { host: hostHttps, port: portaHttps } = plano.https;
+            this.httpsServer = https.createServer(tls, this.app).listen(portaHttps, hostHttps, () => {
+                log.info(`NewClaw Dashboard (HTTPS) rodando em https://${hostHttps}:${portaHttps}${auth}`);
+            });
+        }
     }
 
     public async stop(): Promise<void> {
@@ -215,15 +247,17 @@ export class DashboardServer {
             this.ownsCurator = false;
         }
 
-        if (!this.server) return;
-
-        await new Promise<void>((resolve, reject) => {
-            this.server?.close((error) => {
-                if (error) reject(error);
-                else resolve();
+        for (const servidor of [this.server, this.httpsServer]) {
+            if (!servidor) continue;
+            await new Promise<void>((resolve, reject) => {
+                servidor.close((error) => {
+                    if (error) reject(error);
+                    else resolve();
+                });
             });
-        });
+        }
 
         this.server = undefined;
+        this.httpsServer = undefined;
     }
 }
