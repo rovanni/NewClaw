@@ -40,6 +40,13 @@ const quiet = async <T>(fn: () => Promise<T>): Promise<T> => {
 const COMBINADA = 'Romântica básica.\n\n[ESCLARECIMENTO — o assistente perguntou: "o que é \'romântica básica\'?"; '
     + 'o usuário respondeu: "Olá, tudo bem?". Atenda o pedido acima usando esta resposta.]';
 
+// A da prova real (instância isolada, glm-5.3-flash:cloud): a pergunta cita "criar uma apresentação…", e isso basta para
+// o atalho por palavra-chave decidir sozinho.
+const COMBINADA_DA_PROVA = 'Romântica básica.\n\n[ESCLARECIMENTO — o assistente perguntou: "O que você gostaria que eu '
+    + 'fizesse com o tema \'romântica básica\' — criar uma apresentação, um texto, um áudio ou outra coisa? Me diga o '
+    + 'material e, se for o caso, o arquivo de destino."; o usuário respondeu: "Olá, tudo bem?". Atenda o pedido acima '
+    + 'usando esta resposta.]';
+
 function extratorQueResponde(json: object): { ex: GoalExtractor; prompts: string[] } {
     const prompts: string[] = [];
     // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -82,6 +89,17 @@ async function main(): Promise<void> {
     const r: any = await quiet(() => (semCampo as any).llmClassify('Olá, tudo bem?', {}, []));
     assert(r.respondeAoEsclarecimento === undefined, 'campo ausente → sem veredito');
 
+    console.log('\n=== S466-2b — com esclarecimento, a classificação vai ao modelo (sem atalhos) ===');
+    // Validação real (30/10/2026): a mensagem combinada caiu no atalho por palavra-chave e o veredito nunca veio.
+    const comAtalho = extratorQueResponde({ ...BASE, responde_ao_esclarecimento: false });
+    const rAtalho: any = await quiet(() => comAtalho.ex.classify(COMBINADA_DA_PROVA, {} as any, []));
+    assert(comAtalho.prompts.length === 0 && rAtalho.respondeAoEsclarecimento === undefined,
+        'sem a opção, a combinada cai no atalho e fica sem veredito (o que a prova real mostrou)', rAtalho.reason);
+    const semAtalho = extratorQueResponde({ ...BASE, responde_ao_esclarecimento: false });
+    const rModelo: any = await quiet(() => semAtalho.ex.classify(COMBINADA_DA_PROVA, {} as any, [], { semAtalhos: true }));
+    assert(semAtalho.prompts.length === 1 && rModelo.respondeAoEsclarecimento === false,
+        'com semAtalhos, vai ao modelo e o veredito chega');
+
     console.log('\n=== S466-3 — o orquestrador consome o veredito ===');
     const src = fs.readFileSync(path.join(process.cwd(), 'src', 'loop', 'GoalOrchestrator.ts'), 'utf-8');
     const inicio = src.indexOf('// ── Resolver clarificação pendente');
@@ -97,6 +115,7 @@ async function main(): Promise<void> {
     assert(/message = mensagemDoUsuario;/.test(desfaz) && /classification = await this\.extractor\.classify\(/.test(desfaz),
         'com false: segue com a mensagem como chegou e classifica de novo');
     assert(/let classification = await this\.extractor\.classify\(/.test(bloco), 'a classificação pode ser refeita');
+    assert(/\{ semAtalhos: juntouAoEsclarecimento \}/.test(bloco), 'com a junção, a 1ª classificação vai sem atalhos');
 
     console.log(`\n${'─'.repeat(60)}`);
     console.log(`S466 RESULTADO: ✅ ${passed} passou | ❌ ${failed} falhou`);

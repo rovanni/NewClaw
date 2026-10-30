@@ -361,10 +361,12 @@ export class GoalOrchestrator {
         }
 
         const classifyStart = Date.now();
+        // Com a resposta juntada ao esclarecimento, a classificação vai sempre ao modelo: só ele dá o veredito abaixo.
         let classification = await this.extractor.classify(
             message,
             context ?? { channel: 'unknown', chatId: conversationId },
-            classifyMessages
+            classifyMessages,
+            { semAtalhos: juntouAoEsclarecimento },
         );
         // A resposta pendente não responde à pergunta (uma saudação, um assunto novo): quem decide é o classificador, que leu
         // o pedido, a pergunta e a resposta inteiros. O turno segue com a mensagem como chegou, como pedido novo, e é

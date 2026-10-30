@@ -342,13 +342,17 @@ Regras:
     async classify(
         message: string,
         context: ChannelContext,
-        recentMessages?: Array<{ role: string; content: string }>
+        recentMessages?: Array<{ role: string; content: string }>,
+        opcoes?: { semAtalhos?: boolean },
     ): Promise<GoalClassification> {
         const startMs = Date.now();
         let usedLLM = false;
         let result: GoalClassification;
 
-        const quick = this.quickClassify(message);
+        // `semAtalhos`: a pergunta só o modelo responde (ex.: se a resposta responde ao esclarecimento pendente). Os atalhos
+        // por palavra-chave não dão esse veredito — validação real (30/10/2026): a mensagem combinada caiu no atalho
+        // positivo e o veredito nunca veio.
+        const quick = opcoes?.semAtalhos ? null : this.quickClassify(message);
 
         if (quick === true) {
             log.debug(`[GoalExtractor] quick=goal message="${message.slice(0, 60)}"`);
@@ -365,7 +369,7 @@ Regras:
             result = { isGoal: false, confidence: GOAL_LIMITS.QUICK_CLASSIFY_THRESHOLD, reason: 'heuristic_negative' };
         } else {
             // Tool-specific shortcut: frases com tool dedicada nunca precisam de clarificação
-            const isUnambiguousTool = UNAMBIGUOUS_TOOL_PATTERNS.some(p => p.test(message.trim()));
+            const isUnambiguousTool = !opcoes?.semAtalhos && UNAMBIGUOUS_TOOL_PATTERNS.some(p => p.test(message.trim()));
             if (isUnambiguousTool) {
                 log.info(`[GoalExtractor] unambiguous_tool_match — skipping LLM classify for "${message.slice(0, 60)}"`);
                 result = {
