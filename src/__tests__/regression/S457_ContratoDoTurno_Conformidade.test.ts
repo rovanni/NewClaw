@@ -22,6 +22,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import express from 'express';
 import cookieParser from 'cookie-parser';
+import { rateLimit } from 'express-rate-limit';
 import type { AddressInfo } from 'net';
 import type { NormalizedMessage } from '../../channels/ChannelAdapter';
 import { waitForTurnResponse } from '../../../addins/powerpoint-addin/src/taskpane/turnPolling';
@@ -145,6 +146,10 @@ function buildApp(controller: unknown): express.Express {
     app.set('trust proxy', true); // cada seção usa um X-Forwarded-For próprio: o limite de 10 envios/min é por IP
     app.use(express.json());
     app.use(cookieParser());
+    // Limite geral, como em produção (DashboardServer.ts: rateLimitMiddleware, 120/min por IP), na frente da autorização.
+    // Com o express-rate-limit, e não com o createRateLimiter próprio: o CodeQL (js/missing-rate-limiting) só reconhece
+    // limitadores de bibliotecas conhecidas — mesmo motivo de maintenance.ts e do S441.
+    app.use(rateLimit({ windowMs: 60 * 1000, limit: 120, standardHeaders: 'draft-7', legacyHeaders: false }));
     app.use(authMiddleware);
     app.use(csrfOriginCheck);
     app.use(express.static(PUBLIC_DIR, { redirect: false }));
