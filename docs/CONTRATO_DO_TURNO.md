@@ -51,6 +51,9 @@ Fora do contrato: memória, roteamento de modelos, execução. O cliente não de
 
   Um servidor intermediário deve guardar o token do lado dele, nunca no navegador. O servidor também aceita o token em
   `?token=`, mas um cliente não deve usar isso, porque a URL vai parar em logs.
+- **Cookie devolvido no login:** o login também devolve o cookie `newclaw_session` do painel. Um cliente de API não deve
+  guardá-lo nem reenviá-lo. Com cookie e sem `Origin`, a checagem contra CSRF recusa o pedido, inclusive o próximo login
+  (achado da Etapa 4 da ADR-030: um cliente HTTP que guarda cookies por padrão passou a ter o segundo login recusado).
 
 ## Limites de requisição
 
