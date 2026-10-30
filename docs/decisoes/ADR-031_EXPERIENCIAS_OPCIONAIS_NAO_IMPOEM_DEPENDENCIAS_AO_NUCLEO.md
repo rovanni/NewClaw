@@ -63,6 +63,14 @@ A operadora quer preservar a autoria e a autonomia do núcleo: *o harness usa o 
 7. **Contrato antes do cliente:** quando um harness precisa de algo do núcleo, a extensão entra no núcleo como **interface
    pública genérica**, útil a qualquer cliente, nunca como exceção para um cliente específico.
 
+**Nota de 30/10/2026 — ativação pelo painel (ADR-030, Etapa 5).** A operadora quis instalar a interface de voz por
+Configurações → Integrações. Para não quebrar a regra 1, o núcleo ganha um **instalador genérico de integrações
+opcionais**, guiado por um manifesto que cada integração publica no próprio repositório; o núcleo conhece só o formato do
+manifesto. A única menção a um harness no núcleo é uma linha num **catálogo** (dado, não código): nome e endereço do
+manifesto. A regra 1 passa a ser verificada assim: nenhum código do núcleo menciona um harness; o catálogo é o único
+arquivo que pode listá-lo, e tirá-lo de lá não muda nada no núcleo. O instalador é genérico pela regra 7: serve a qualquer
+integração que publique um manifesto.
+
 ### O que o núcleo passa a oferecer (genérico, não "para a interface de voz")
 
 - **Contrato do turno documentado e versionado:** envio, aceitação, andamento, progresso, resposta, cancelamento, aprovação

@@ -530,7 +530,7 @@ usuário". Vale para qualquer pessoa, em Windows, Linux e macOS (`AGENTS.md`, re
 | 2 — Motor de voz (**feita em 29/10**, em 6 sprints: `docs/SPRINTS.md` do newclaw-ivox; interrupção pela voz provada com a operadora no microfone) | harness | Pipeline da prova, com frase a frase, interrupção por VAD real, configuração da tabela 4, sem LLM | Testes das funções puras; interrupção por voz real provada; sem configuração, sai com aviso claro |
 | 3 — Servidor do harness (**feita em 29/10**: 20 testes de segurança e prova real contra NewClaw isolado, sem cota; o idioma, quando `VOZ_IDIOMA` está vazio, vem de `GET /api/config`, rota fora do contrato do turno) | harness | Login, repasse com Bearer, sinalização com checagem de origem, TLS opcional, verificação de requisitos e de versão | Testes de segurança: sem login → 401; outra origem → recusada; motor de voz inalcançável pela rede |
 | 4 — Janela de voz (**feita em 30/10**, em 4 sprints: `docs/SPRINTS.md` do newclaw-ivox; aprovada pela operadora no microfone; visual a partir da maquete dela em `docs/referencia-visual/`) | harness | Interface React só com o transporte SmallWebRTC; estados; modo texto; Parar; aprovação por clique; histórico | Testes da máquina de estados (34); build reproduzível (`npm ci && npm run build`, versões fixas); inventário de licenças gerado (29 pacotes, todos permissivos) |
-| 5 — Instalação e documentação | harness | Ativação que verifica requisitos; guia; avisos de terceiros | Instalação limpa em Windows e Linux; NewClaw sem harness idêntico |
+| 5 — Instalação e documentação (**em andamento desde 30/10**: aceite das licenças no instalador feito; ativação pelo painel em "Etapa 5 — ativação pelo painel") | harness + núcleo (instalador genérico) | Ativação que verifica requisitos; guia; avisos de terceiros | Instalação limpa em Windows e Linux; NewClaw sem harness idêntico |
 | 6 — Validação real | ambos | Instância isolada, LLM real só com OK de cota | Os testes de aceitação (T1–T15 das versões anteriores) |
 | 7 — Migrações opcionais | núcleo | Painel e suplemento passam a usar o cliente público | Suíte do chat e do suplemento iguais |
 
@@ -541,6 +541,47 @@ usuário". Vale para qualquer pessoa, em Windows, Linux e macOS (`AGENTS.md`, re
 - **Complexidade:** o núcleo não cresce com Python, React nem exceções de CORS; a duplicação do protocolo do turno passa de
   duas cópias (e uma terceira a caminho) para uma.
 - **Reversível:** remover o harness não muda nada no NewClaw.
+
+## Etapa 5 — ativação pelo painel: instalador genérico de integrações opcionais (30/10/2026)
+
+**Pedido da operadora:** uma pessoa leiga não deve precisar de terminal nem saber em que pasta o NewClaw ou a interface de
+voz estão. Ela quer instalar em **Configurações → Integrações**, como o suplemento do PowerPoint.
+
+**Conflito encontrado:** um cartão com rotas próprias da interface de voz faria o núcleo **conhecer** o harness, e a
+ADR-031 (regra 1) proíbe isso. Opções apresentadas: (A) cartão só da voz, com exceção na ADR-031; (B) instalador genérico
+guiado por manifesto; (C) só um link para o guia. **Decisão da operadora (30/10): B.**
+
+**Como funciona:**
+- **Manifesto (na integração, não no núcleo):** cada integração opcional publica um `newclaw-integracao.json` no próprio
+  repositório: nome e descrição; de onde baixar; o que precisa na máquina e como conferir; os comandos que listam as
+  opções e as licenças (em JSON); o comando de instalar; o de iniciar; o endereço para abrir e o de saúde.
+- **Catálogo (no núcleo):** uma lista curta de integrações conhecidas, cada uma com nome e o endereço do manifesto. É
+  dado, não código: tirar a interface de voz do catálogo não muda nada no núcleo.
+- **O mecanismo (no núcleo):** baixa o pacote para uma pasta padrão na pasta do usuário, roda os comandos declarados,
+  acompanha o andamento, registra o processo no PM2 (como o `newclaw-pptx-addin`), liga, desliga e desinstala. Conhece o
+  formato do manifesto e nada da voz.
+- **O cartão (no painel):** o mesmo para qualquer integração do catálogo: requisitos medidos, escolhas, licenças com a
+  caixa "Li e aceito" (o clique é o aceite da pessoa e vai registrado), andamento, e depois Abrir, Ligar/Desligar e
+  Desinstalar.
+
+**Segurança (o núcleo vai executar comandos descritos num arquivo baixado):**
+- manifesto e pacote só por HTTPS, de hosts permitidos no catálogo (`github.com`, `raw.githubusercontent.com`,
+  `codeload.github.com`);
+- validação estrita do manifesto: campo desconhecido, comando fora do formato ou espaço reservado desconhecido → recusa
+  com o motivo;
+- comandos como lista de argumentos (sem shell), executados dentro da pasta da integração; os únicos espaços reservados
+  são os do núcleo (`{python}`, `{newclaw_url}`, `{pasta}`, e as escolhas da pessoa, cujos valores vêm só da lista que a
+  própria integração ofereceu);
+- nada roda sem um clique da pessoa no painel autenticado; a confiança é a mesma de rodar o instalador do repositório à
+  mão, e o cartão mostra de onde vem cada coisa.
+
+**Sprints:** (1) newclaw-ivox: manifesto e instalador chamável pelo painel (opções e licenças em JSON, modo sem
+perguntas com andamento em JSON, endereço do NewClaw recebido, build da janela); (2) núcleo: catálogo, validação do
+manifesto e o mecanismo, com testes usando um manifesto falso; (3) núcleo: o cartão genérico e os textos nos três
+idiomas; (4) PR, CI, publicação e instalação real pelo painel do Windows.
+
+**Pronto quando:** uma pessoa instala, abre, liga, desliga e desinstala a interface de voz só pelo painel, numa pasta
+nova, sem terminal; e o NewClaw sem nenhuma integração instalada se comporta como antes (suíte de regressão).
 
 ## Etapa 4 — o que a prova real ensinou (30/10/2026)
 
