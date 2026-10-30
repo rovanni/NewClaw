@@ -7,6 +7,7 @@ import { errorMessage } from '../../shared/errors';
 import { createLogger } from '../../shared/AppLogger';
 import { getEventLoopMonitor } from '../../shared/EventLoopMonitor';
 import { DashboardContext } from './types';
+import { TURN_CONTRACT_VERSION } from './chat';
 import { assertNotSsrfTarget } from '../../core/ssrfGuard';
 
 const log = createLogger('Dashboardserver');
@@ -146,6 +147,8 @@ export function createStatusRouter(ctx: DashboardContext): Router {
                     heapTotal: formatBytes(mem.heapTotal),
                 },
                 version: getAppVersion(),
+                // Contratos públicos que este servidor cumpre, por versão — o cliente confere antes de usar (ADR-031, regra 5).
+                contracts: { turn: TURN_CONTRACT_VERSION },
                 nodeVersion: process.version,
                 platform: process.platform,
                 arch: process.arch,
