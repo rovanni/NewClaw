@@ -43,6 +43,13 @@ const SRC_DIR = path.join(ROOT, 'src');
 const EXTRA_FILES = ['.env.example', 'install.sh', 'install.ps1'].map(f => path.join(ROOT, f));
 
 /**
+ * Documentação pública (docs/ e os .md da raiz): só a verificação 1 (faixa privada). Os endereços reais da rede da
+ * operadora tinham ido parar em ADRs, sprints e na documentação gerada (30/10/2026) — num repositório público, um
+ * `10.x`/`192.168.x` num documento é a topologia real de alguém. Exemplos usam a RFC 5737 (192.0.2.x).
+ */
+const DOCS_DIR = path.join(ROOT, 'docs');
+
+/**
  * Faixas RFC1918 + link-local + CGNAT. Loopback (127.x) fica de fora de propósito.
  *   10.x.x.x | 172.16-31.x.x | 192.168.x.x | 169.254.x.x | 100.64-127.x.x
  */
@@ -94,11 +101,17 @@ const files = [
     ...EXTRA_FILES.filter(f => fs.existsSync(f)),
 ];
 
-check(files.length > 0, `varredura encontrou arquivos para inspecionar`, `${files.length} arquivo(s)`);
+const docFiles = [
+    ...collectFiles(DOCS_DIR, ['.md', '.json', '.html']),
+    ...fs.readdirSync(ROOT).filter(f => f.endsWith('.md')).map(f => path.join(ROOT, f)),
+];
 
-// ── 1. Nenhum endereço de faixa privada em lugar nenhum ─────────────────────
+check(files.length > 0, `varredura encontrou arquivos para inspecionar`, `${files.length} arquivo(s)`);
+check(docFiles.length > 0, `varredura encontrou documentação para inspecionar`, `${docFiles.length} arquivo(s)`);
+
+// ── 1. Nenhum endereço de faixa privada em lugar nenhum (código, instaladores e documentação) ─
 const privateHits: string[] = [];
-for (const file of files) {
+for (const file of [...files, ...docFiles]) {
     if (path.basename(file) === path.basename(__filename)) continue; // este teste cita as faixas
     const lines = fs.readFileSync(file, 'utf-8').split('\n');
     lines.forEach((line, i) => {

@@ -14,7 +14,7 @@ entre as conversas", "não quero reinventar a roda: analise como os agentes atua
 | 11:26 | "Eu queria criar uma versão desse programa, utilizando Rust e HTML é possível?" → disse que sim | — |
 | 11:32 | **"Pode fazer?"** | Objetivo gravado: `"Pode fazer?"`. Plano: "redigir a resposta de confirmação de capacidades"; os passos mexeram com **rustscan** (cargo, rustc). 9 min. |
 | 11:51 | "Quando falei de pode fazer estava me referindo a criar uma versão tipo camscanner…" | Ela teve de corrigir; aí fez o CamScanner. |
-| 12:05 | **"Essa porta é muito comum, consegue verificar nas redes 10.0.0.0/24 e 192.168.3.0/24?"** | O plano começou pela **porta 30000 do Luanti** (assunto de dias antes); 3 replanejamentos até a 8080. 24 min. |
+| 12:05 | **"Essa porta é muito comum, consegue verificar nas redes <rede A>/24 e <rede B>/24?"** | O plano começou pela **porta 30000 do Luanti** (assunto de dias antes); 3 replanejamentos até a 8080. 24 min. |
 
 ### A causa, medida
 
@@ -144,7 +144,7 @@ autorizada pela operadora; 42 chamadas) — passou.** A mesma sequência da prod
 | Mensagem | Pedido completo (`[PEDIDO-COMPLETO]`) | Plano |
 |---|---|---|
 | "Pode fazer?" (depois do CamScanner em Rust e HTML) | "Pode criar uma versão do aplicativo CamScanner, utilizando Rust e HTML?" | verificar o Rust → gerar o projeto `camscanner` → compilar → subir e testar o servidor → empacotar → entregar |
-| "Essa porta é muito comum, consegue verificar nas redes 10.0.0.0/24 e 192.168.3.0/24." (depois de a conversa fixar a 8080) | "A porta 8080 é muito comum, consegue verificar nas redes 10.0.0.0/24 e 192.168.3.0/24." | script de varredura da **8080** nas duas redes → executar → identificar o serviço |
+| "Essa porta é muito comum, consegue verificar nas redes <rede A>/24 e <rede B>/24." (depois de a conversa fixar a 8080) | "A porta 8080 é muito comum, consegue verificar nas redes <rede A>/24 e <rede B>/24." | script de varredura da **8080** nas duas redes → executar → identificar o serviço |
 
 Na produção, os mesmos pedidos viraram "redigir a confirmação de capacidades" (com rustscan) e a auditoria da porta 30000.
 Os dois objetivos foram cancelados logo depois do plano para poupar cota (a varredura não chegou a rodar). `userIntent`
