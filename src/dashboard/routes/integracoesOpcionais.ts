@@ -6,6 +6,8 @@
  *   GET    /:id/opcoes               → escolhas que a integração oferece (baixa o pacote na 1ª vez)
  *   POST   /:id/licencas             → peças de terceiros das escolhas  { escolhas }
  *   POST   /:id/instalar             → instala em segundo plano  { escolhas, aceito: true } → 202 { andamento }
+ *   POST   /:id/atualizar            → pacote mais novo com as mesmas escolhas e o mesmo aceite → 202 { andamento };
+ *                                       409 { motivo: 'revisar' } quando as licenças ou as escolhas mudaram
  *   GET    /:id/andamento/:andamento → linhas e estado da instalação
  *   POST   /:id/ligar | /:id/desligar
  *   DELETE /:id                      → desinstala (só pasta criada pelo NewClaw)
@@ -26,7 +28,8 @@ export function createIntegracoesOpcionaisRouter(gerenciador: GerenciadorDeInteg
     const responder = (res: Response, e: unknown) => {
         const status = e instanceof ErroDaIntegracao ? e.status : 500;
         if (status >= 500) log.warn(`integração opcional: ${errorMessage(e)}`);
-        res.status(status).json({ error: errorMessage(e) });
+        const motivo = e instanceof ErroDaIntegracao ? e.motivo : undefined;
+        res.status(status).json({ error: errorMessage(e), ...(motivo ? { motivo } : {}) });
     };
     const escolhasDo = (req: Request): Record<string, unknown> => {
         const e = req.body?.escolhas;
@@ -69,6 +72,15 @@ export function createIntegracoesOpcionaisRouter(gerenciador: GerenciadorDeInteg
             const m = await gerenciador.manifesto(req.params.id);
             const a = await gerenciador.instalar(m, escolhasDo(req), req.body?.aceito === true);
             log.info(`instalação da integração '${m.id}' começou (${a.id}); licenças aceitas no painel`);
+            res.status(202).json({ andamento: a.id });
+        } catch (e) { responder(res, e); }
+    });
+
+    router.post('/:id/atualizar', async (req, res) => {
+        try {
+            const m = await gerenciador.manifesto(req.params.id);
+            const a = await gerenciador.atualizar(m);
+            log.info(`atualização da integração '${m.id}' começou (${a.id}); mesmas escolhas e mesma lista de licenças aceita`);
             res.status(202).json({ andamento: a.id });
         } catch (e) { responder(res, e); }
     });

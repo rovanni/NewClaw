@@ -101,6 +101,8 @@ async function gerenciadorFalso(opcoes: { redirecionar?: string } = {}) {
     const t = spawnSync(TAR, ['-czf', tgz, '-C', fonte, 'integracao-main']);
     if (t.status !== 0) throw new Error(`tar falhou: ${t.stderr}`);
     const executados: { programa: string; args: string[]; pasta?: string }[] = [];
+    // O que a integração falsa responde, mudável no meio do teste (licenças de um pacote novo, instalação que falha).
+    const falso = { licencas: [{ id: 'x', licenca: 'MIT' }] as unknown[], codigoDaInstalacao: 0 };
     const d: Dependencias = {
         async baixar(url) {
             if (url.endsWith('newclaw-integracao.json')) return { urlFinal: url, status: 200, corpo: Buffer.from(JSON.stringify(BASE)) };
@@ -113,7 +115,7 @@ async function gerenciadorFalso(opcoes: { redirecionar?: string } = {}) {
                 return { codigo: r.status ?? 1, saida: String(r.stdout), erro: String(r.stderr) };
             }
             if (a.includes('--opcoes')) return { codigo: 0, saida: JSON.stringify(OFERECIDAS), erro: '' };
-            if (a.includes('--licencas')) return { codigo: 0, saida: JSON.stringify({ versao: 1, itens: [{ id: 'x', licenca: 'MIT' }] }), erro: '' };
+            if (a.includes('--licencas')) return { codigo: 0, saida: JSON.stringify({ versao: 1, itens: falso.licencas }), erro: '' };
             if (a.includes('jlist')) return { codigo: 0, saida: JSON.stringify([{ name: `newclaw-integracao-${ID}`, pm2_env: { status: 'online' } }]), erro: '' };
             return { codigo: 0, saida: '', erro: '' };
         },
@@ -121,8 +123,8 @@ async function gerenciadorFalso(opcoes: { redirecionar?: string } = {}) {
             executados.push({ programa, args: a, pasta });
             aoLer(JSON.stringify({ texto: '▸ Licenças de terceiros' }));
             aoLer('Collecting pipecat-ai==1.12.0');
-            aoLer(JSON.stringify({ fim: true, codigo: 0 }));
-            return 0;
+            aoLer(JSON.stringify({ fim: true, codigo: falso.codigoDaInstalacao }));
+            return falso.codigoDaInstalacao;
         },
         pm2: ['node', 'pm2.js'],
         tar: TAR,
@@ -130,7 +132,7 @@ async function gerenciadorFalso(opcoes: { redirecionar?: string } = {}) {
         plataforma: 'linux',
         newclawUrl: 'http://127.0.0.1:3090',
     };
-    return { g: new GerenciadorDeIntegracoes(d), home, executados };
+    return { g: new GerenciadorDeIntegracoes(d), home, executados, falso };
 }
 
 async function esperar(cond: () => boolean): Promise<void> {
@@ -139,7 +141,7 @@ async function esperar(cond: () => boolean): Promise<void> {
 
 async function testarGerenciador(): Promise<void> {
     console.log('\n3. Gerenciador (rede e processos falsos; tar de verdade)');
-    const { g, home, executados } = await gerenciadorFalso();
+    const { g, home, executados, falso } = await gerenciadorFalso();
     const man = await g.manifesto(ID);
     const pasta = path.join(home, 'integracao-teste');
 
@@ -172,6 +174,8 @@ async function testarGerenciador(): Promise<void> {
     const est = await g.estado(man);
     assert(est.instalada && est.ligada && est.abrir === 'http://127.0.0.1:7860', 'estado: instalada e ligada, com o endereço de abrir', est);
 
+    await testarAtualizar(g, man, pasta, executados, falso);
+
     await g.desinstalar(man);
     assert(!fs.existsSync(pasta), 'desinstalar apaga a pasta que o NewClaw criou');
 
@@ -191,6 +195,59 @@ async function testarGerenciador(): Promise<void> {
         assert((e as Error).message.includes('fora dos hosts permitidos'), 'download redirecionado para outro host: recusa', (e as Error).message);
     }
     fs.rmSync(redirecionado.home, { recursive: true, force: true });
+}
+
+// ── 3b. Atualizar ───────────────────────────────────────────────────────────
+// Mesmas escolhas e mesmo aceite; só reaproveita o aceite se a lista de licenças for idêntica; desliga durante e religa no fim.
+async function testarAtualizar(
+    g: GerenciadorDeIntegracoes, man: ReturnType<typeof validarManifesto>, pasta: string,
+    executados: { programa: string; args: string[]; pasta?: string }[], falso: { licencas: unknown[]; codigoDaInstalacao: number },
+): Promise<void> {
+    console.log('\n3b. Atualizar');
+    const lerMarcador = () => JSON.parse(fs.readFileSync(path.join(pasta, '.newclaw-integracao.json'), 'utf-8'));
+    const marcador = lerMarcador();
+    assert(JSON.stringify(marcador.escolhas) === JSON.stringify({ transcricao: 'local', modelo: 'small' }) && typeof marcador.licencas_aceitas === 'string',
+        'a instalação guarda as escolhas e o resumo da lista de licenças aceita', marcador);
+
+    const antes = executados.length;
+    const a = await g.atualizar(man);
+    await esperar(() => a.estado !== 'rodando');
+    const depois = executados.slice(antes);
+    const iParar = depois.findIndex((e) => e.args.includes('stop'));
+    const iInstalar = depois.findIndex((e) => e.args.includes('--sem-perguntas'));
+    const iLigar = depois.findIndex((e) => e.args.includes('start'));
+    assert(a.estado === 'concluida', 'atualização concluída', a);
+    assert(iParar > -1 && iParar < iInstalar && iInstalar < iLigar, 'desliga antes de instalar e religa depois', depois.map((e) => e.args.join(' ')));
+    assert(depois[iInstalar].args.join(' ').includes('--transcricao local --modelo small'), 'repete as escolhas guardadas', depois[iInstalar].args);
+    assert(depois.some((e) => e.programa === localizarTar()), 'baixa e extrai o pacote mais novo');
+    assert(!!(await g.estado(man)).atualizada_em, 'estado mostra quando foi atualizada');
+
+    // Instalação que falha na atualização: a integração volta a ligar como estava.
+    falso.codigoDaInstalacao = 1;
+    const antesDaFalha = executados.length;
+    const f = await g.atualizar(man);
+    await esperar(() => f.estado !== 'rodando' && f.fim !== undefined);
+    assert(f.estado === 'falhou' && executados.slice(antesDaFalha).some((e) => e.args.includes('start')),
+        'atualização que falha religa a integração', f);
+    falso.codigoDaInstalacao = 0;
+
+    // Lista de licenças diferente no pacote novo: não reaproveita o aceite, nem desliga nada.
+    falso.licencas = [{ id: 'x', licenca: 'MIT' }, { id: 'nova', licenca: 'GPL-3.0' }];
+    const antesDaRevisao = executados.length;
+    try { await g.atualizar(man); assert(false, 'licenças mudaram'); } catch (e) {
+        assert(e instanceof ErroDaIntegracao && e.status === 409 && e.motivo === 'revisar', 'licenças mudaram: pede revisão (motivo revisar)', (e as Error).message);
+    }
+    assert(!executados.slice(antesDaRevisao).some((e) => e.args.includes('stop') || e.args.includes('--sem-perguntas')),
+        'com revisão pendente, não desliga nem instala');
+    falso.licencas = [{ id: 'x', licenca: 'MIT' }];
+
+    // Instalação de antes deste botão (sem escolhas guardadas): pede revisão.
+    const semEscolhas = lerMarcador();
+    delete semEscolhas.escolhas;
+    fs.writeFileSync(path.join(pasta, '.newclaw-integracao.json'), JSON.stringify(semEscolhas));
+    try { await g.atualizar(man); assert(false, 'sem escolhas'); } catch (e) {
+        assert(e instanceof ErroDaIntegracao && e.motivo === 'revisar', 'instalação sem escolhas guardadas: pede revisão', (e as Error).message);
+    }
 }
 
 // ── 4. Ambiente ─────────────────────────────────────────────────────────────
