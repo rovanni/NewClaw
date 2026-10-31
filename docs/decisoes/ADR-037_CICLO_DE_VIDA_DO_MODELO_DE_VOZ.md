@@ -1,7 +1,8 @@
 # ADR-037 — Ciclo de vida explícito do modelo de reconhecimento de voz
 
 Data: 31/10/2026. Status: **aprovada pela operadora em 31/10/2026** (direção e decisões D1–D7, abaixo); implementação no
-repositório da interface de voz (newclaw-ivox), fora do núcleo.
+repositório da interface de voz (newclaw-ivox), fora do núcleo; **implementada e provada na GPU em 31/10/2026** (seção
+"Resultado da prova").
 
 Relacionadas: ADR-030 (interface de voz), ADR-031 (experiências opcionais não impõem dependências ao núcleo),
 `docs/ARCHITECTURE/NUNCA_ADIVINHAR.md`, `docs/ARCHITECTURE/LOCALIDADE_DA_RECUPERACAO.md`,
@@ -146,3 +147,20 @@ quando há mais de uma — com uma GPU só não há ambiguidade; com várias, a 
 | 4 | Controles na janela | Estado inicial "Modelo descarregado"; texto e fala continuam |
 | 5 | Tentar na CPU com confirmação | Falha na GPU → pergunta; CPU só com o clique |
 | 6 | Prova real: carga, uso, descarga e recuperação de falha, com a VRAM medida antes e depois | Só com autorização, sem tocar no Strata |
+
+## Resultado da prova (31/10/2026)
+
+Prova autorizada pela operadora em 31/10/2026: harness isolado na porta 7861, NewClaw falso só para o login, Strata
+desligado, nenhuma cota; carga e descarga pelas rotas `/api/modelo`, VRAM medida por fora pela NVML.
+
+| Ciclo | Carga | VRAM ao carregar | VRAM ao descarregar |
+|---|---|---|---|
+| 1 | 17,4 s (com a inicialização da CUDA) | +1,17 GB | −2,09 GB |
+| 2 | 6,4 s | +2,10 GB | −2,09 GB (100%) |
+
+- **Hipótese 1 confirmada:** `unload_model()` mais a remoção das referências devolve a VRAM. A alternativa B fica; a C
+  (processo filho) não é necessária.
+- **Limite da medida, visto na prática:** no ciclo 1 outro programa liberou memória da GPU durante a carga, e a diferença
+  do dispositivo deu 1,17 GB em vez de ~2,1 GB. No Windows (WDDM) o driver não informa a memória por processo; o consumo
+  gravado é um aviso antes de carregar, não uma garantia — como a decisão já previa.
+- Na CPU (mesmo dia): carga em 22,5 s; descarregar devolveu ~0,87 GB de RAM ao processo.
