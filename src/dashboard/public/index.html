@@ -643,6 +643,15 @@
           <div class="conv-meta">${c.messages?.length || 0} msgs · ${fmtTime(c.updatedAt)}</div>
         </div>`).join('');
     }
+    // A interface de voz abre suas conversas com o sessionId `voz-…` (convenção dela): ganham 🎙 no título, para se
+    // distinguirem das escritas aqui. Continuam sendo conversas comuns — dá para seguir escrevendo nelas pelo painel.
+    function tituloPelasMensagens(c) {
+      const primeira = (c.messages || []).filter(m => m.role === 'user' && m.content)
+        .sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0))[0];
+      if (!primeira) return null;
+      const texto = primeira.content.slice(0, 50) + (primeira.content.length > 50 ? '...' : '');
+      return (String(c.id).startsWith('voz-') ? '🎙 ' : '') + texto;
+    }
     function newConversation() {
       const c = { id: 'conv_' + Date.now(), title: 'Nova conversa', messages: [], createdAt: Date.now(), updatedAt: Date.now() };
       conversations.unshift(c); currentConvId = c.id; save(); renderSidebar(); renderChat();
@@ -706,6 +715,11 @@
           }
         }
         if (forceUtcResync) localStorage.setItem(UTC_FIX_KEY, '1');
+        // Conversa que só existia no servidor (outra aba, outro navegador, a janela de voz) chegava com o id cru como
+        // título ("voz-633dc7d7"). Ganha o mesmo título que o painel dá às suas: a primeira frase da pessoa.
+        for (const c of conversations) {
+          if (c.title === c.id || c.title === c.serverId) c.title = tituloPelasMensagens(c) || c.title;
+        }
         save(); renderSidebar();
         if (abertaMudou) renderChat();
       } catch (e) { console.warn('[SYNC] Failed:', e); }

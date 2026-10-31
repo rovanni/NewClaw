@@ -137,6 +137,12 @@ body {
   box-shadow: var(--shadow-sm);
 }
 [data-theme="dark"] .newclaw-tabs a.active { background: var(--bg-input); }
+/* Atalhos das integrações ligadas: abas como as outras, separadas por um traço (abrem numa aba nova). */
+.newclaw-atalhos { display: contents; }
+.newclaw-atalhos a:first-child { margin-left: 6px; position: relative; }
+.newclaw-atalhos a:first-child::before {
+  content: ''; position: absolute; left: -4px; top: 25%; height: 50%; border-left: 1px solid var(--border-color, var(--text-soft));
+}
 
 .newclaw-btn-icon {
   width: 36px; height: 36px; border-radius: var(--radius-sm); border: none;
