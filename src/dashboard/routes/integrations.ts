@@ -53,9 +53,17 @@ export function createIntegrationsRouter(_ctx: DashboardContext, spawnFn: any = 
     const router = Router();
 
     // Instalador genérico de integrações opcionais (ADR-030, Etapa 5). A integração usa sempre o HTTP local deste NewClaw.
-    router.use('/opcionais', createIntegracoesOpcionaisRouter(
-        gerenciador ?? new GerenciadorDeIntegracoes(dependenciasReais(`http://127.0.0.1:${_ctx?.config?.dashboardPort || 3090}`)),
-    ));
+    if (!gerenciador) {
+        gerenciador = new GerenciadorDeIntegracoes(dependenciasReais(`http://127.0.0.1:${_ctx?.config?.dashboardPort || 3090}`));
+        // As que a pessoa deixou ligadas voltam com o NewClaw (depois de reiniciar o computador, o PM2 não as traz).
+        void gerenciador.restaurar().then((lista) => {
+            for (const r of lista) {
+                if (r.resultado === 'falhou') log.warn(`integração opcional '${r.id}' não foi religada: ${r.erro}`);
+                else log.info(`integração opcional '${r.id}': ${r.resultado === 'religada' ? 'religada' : 'já estava ligada'}`);
+            }
+        }).catch((e) => log.warn(`religar integrações opcionais: ${errorMessage(e)}`));
+    }
+    router.use('/opcionais', createIntegracoesOpcionaisRouter(gerenciador));
 
     router.get('/powerpoint/commands', (req: Request, res: Response) => {
         const sessionId = req.query.sessionId as string;

@@ -98,5 +98,6 @@ export function dependenciasReais(newclawUrl: string): Dependencias {
         home: os.homedir(),
         plataforma: process.platform,
         newclawUrl,
+        registro: path.join(process.cwd(), 'data', 'integracoes-opcionais.json'),
     };
 }
