@@ -68,7 +68,9 @@ com outros assistentes, e o próprio desenho do SQLite confirma.
   agente a errar. Mas exigir aprovação de toda skill importada criaria duas regras para a mesma coisa: desde a ADR-017,
   a skill aprendida localmente já nasce ativa (`APRENDIZADO_DE_SKILLS=automatico`, o padrão), com aviso e desfazer
   (`/skill_desativar`). A importada, aprendida e validada da mesma forma noutra instalação, segue **a mesma
-  configuração**, com uma proteção a mais: caminho de outro sistema vai sempre para revisão (ADR-020).
+  configuração**, com uma proteção a mais: caminho de outro sistema vai sempre para revisão (ADR-020). Como uma skill
+  declara a própria origem e escreve caminhos portáveis (cabeçalho e marcadores) fica na ADR-035; a importação desta
+  ADR lê esse cabeçalho quando ele existe e, sem ele, usa o detector de caminhos.
 
 ## Fase 3 — Alternativas
 
