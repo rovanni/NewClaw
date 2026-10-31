@@ -1,8 +1,9 @@
 # ADR-034 — NewClaw Sync Agent: o conhecimento entre instalações por uma pasta sincronizada
 
-Data: 31/10/2026. Status: **proposta, revisão 3** (revisão 3: ordem da publicação, retenção pelos cursores,
+Data: 31/10/2026. Status: **proposta, revisão 4** (revisão 4: skill importada segue a mesma regra de ativação da
+skill aprendida localmente, ADR-017, em vez de sempre esperar aprovação; revisão 3: ordem da publicação, retenção pelos cursores,
 validação da origem, regras da trava, skills pendentes protegidas da limpeza e os 12 testes de aceitação). Revisão 2 (ajustes pedidos pela operadora na primeira leitura: pacotes
-imutáveis, SHA-256, uma importação por vez, versionamento na pasta, skills sempre com aprovação, V1/V2/V3 e a tela
+imutáveis, SHA-256, uma importação por vez, versionamento na pasta, skills sempre com aprovação (revisto na 4), V1/V2/V3 e a tela
 "Sincronização de Conhecimento"). Nada será implementado antes da aprovação.
 
 Relacionadas: ADR-020 (backup e importação mesclando — esta ADR a automatiza), ADR-028 (apagar memória só com
@@ -64,8 +65,10 @@ com outros assistentes, e o próprio desenho do SQLite confirma.
   com a versão antiga nas outras, e uma apagada continua nas outras. Resolver isso automaticamente é o passo mais
   arriscado, porque pode apagar o que a pessoa quer manter. Fica fora da 1ª versão, como etapa própria (abaixo).
 - **Skill de uma máquina ativa noutra.** Uma skill aprendida na VPS com comandos de Linux, ativa no Windows, ensina o
-  agente a errar; uma instrução problemática se espalharia pelas três. Por decisão da operadora (D2), **toda skill que
-  chega de outra instalação espera aprovação**, mesmo vinda do mesmo sistema.
+  agente a errar. Mas exigir aprovação de toda skill importada criaria duas regras para a mesma coisa: desde a ADR-017,
+  a skill aprendida localmente já nasce ativa (`APRENDIZADO_DE_SKILLS=automatico`, o padrão), com aviso e desfazer
+  (`/skill_desativar`). A importada, aprendida e validada da mesma forma noutra instalação, segue **a mesma
+  configuração**, com uma proteção a mais: caminho de outro sistema vai sempre para revisão (ADR-020).
 
 ## Fase 3 — Alternativas
 
@@ -153,14 +156,21 @@ Sob a trava `data/sync.lock`, que o `newclaw import` à mão também respeita, p
    pasta passar por terceiros (mesma etapa da cifra);
 5. `importarPacote`, com as mudanças desta ADR:
    - o pacote de segurança só é gerado se algo vai entrar, e fica com retenção (os últimos 10);
-   - **skills que chegam esperam aprovação, de qualquer origem.** As aprendidas (`auto_skills`) entram com
-     `status = 'proposed'` mesmo que estejam ativas na origem, e com a coluna nova `origem_instalacao`. As em arquivo
-     novas entram como `SKILL.md.revisar`. O agente só carrega `SKILL.md` (`SkillLoader`) e uma skill aprendida só vira
-     arquivo quando é aprovada (`SkillLearner.exportSkillFile`): nada importado age antes da aprovação;
+   - **skills que chegam seguem a regra de ativação desta instalação (ADR-017):**
+
+     | `APRENDIZADO_DE_SKILLS` aqui | Skill ativa na origem, sem caminho de outro sistema | Com caminho de outro sistema |
+     |---|---|---|
+     | `automatico` (padrão) | entra **ativa**, com aviso no painel e no canal ("chegou do PC: X; `/skill_desativar X` desfaz") | entra **proposta** (`SKILL.md.revisar`) |
+     | `proposta` | entra **proposta** | entra **proposta** |
+     | `desligado` | entra **proposta** (quem desliga o aprendizado não ganha skills ativas por outra via) | entra **proposta** |
+
+     Skill proposta, recusada ou desativada na origem chega **proposta**, nunca ativa. Toda skill importada leva a
+     coluna nova `origem_instalacao`, para o aviso, a tela e o desfazer dizerem de onde veio. O agente só carrega
+     `SKILL.md` (`SkillLoader`): uma proposta não age até ser aprovada;
    - **o estado da skill local nunca muda numa importação:** `INSERT OR IGNORE` mantém o que já existe, então uma
      recusada continua recusada e uma pendente continua pendente;
-   - **a limpeza automática do `SkillLearner` deixa as importadas em paz.** Hoje ela apaga propostas cujo padrão já
-     está ativo (`cleanupDuplicateKnownPatternProposals`); passa a ignorar linhas com `origem_instalacao`;
+   - **a limpeza automática do `SkillLearner` deixa as importadas propostas em paz.** Hoje ela apaga propostas cujo
+     padrão já está ativo (`cleanupDuplicateKnownPatternProposals`); passa a ignorar linhas com `origem_instalacao`;
 6. registra o relatório (o que entrou, o que já existia, o que está para revisar, erros) e atualiza o cursor no
    próprio `manifest.json`.
 
@@ -186,10 +196,10 @@ esta instalação mandou não duplica nada.
 - Esta instalação: ligada ou desligada, a pasta, o último pacote publicado, as memórias compartilhadas e as marcadas
   "só desta máquina".
 - Uma linha por instalação vista na pasta (PC, notebook, VPS): último pacote dela, quando foi importado aqui, o que
-  entrou, as memórias que ela compartilha (do manifesto), as **skills pendentes de aprovação** e os **erros** (pacote
+  entrou, as memórias que ela compartilha (do manifesto), as **skills que chegaram dela** (ativas, com desativar, e as
+  pendentes, com aprovar e recusar) e os **erros** (pacote
   com SHA errado, versão de esquema mais nova, pasta sem escrita).
-- Botões "sincronizar agora" e "aprovar" / "recusar" para cada skill pendente (reaproveita a revisão de skills que já
-  existe).
+- Botão "sincronizar agora"; aprovar, recusar e desativar reaproveitam o painel de skills que já existe.
 
 O que a tela mostra sobre as outras máquinas é o que os manifestos delas dizem; uma máquina não consulta a outra.
 
@@ -197,7 +207,7 @@ O que a tela mostra sobre as outras máquinas é o que os manifestos delas dizem
 
 | Versão | Entrega |
 |---|---|
-| **V1 (esta ADR)** | Compartilhar memórias novas e skills (com aprovação); tela de sincronização |
+| **V1 (esta ADR)** | Compartilhar memórias novas e skills (pela regra da ADR-017); tela de sincronização |
 | V2 | Edição: quando a mesma memória foi corrigida em duas máquinas, resolver o conflito. Exige a origem e a hora de cada mudança, para não trocar uma correção local por uma versão antiga |
 | V3 | Exclusão: as outras recebem uma **sugestão de remoção**, nunca a remoção; confirmação pela ADR-028 e histórico de auditoria |
 | Depois | Cifra do pacote com senha, se a pasta passar por nuvem de terceiros |
@@ -207,7 +217,7 @@ O que a tela mostra sobre as outras máquinas é o que os manifestos delas dizem
 | # | Decisão |
 |---|---|
 | D1 | **Dois níveis:** "compartilhar" (padrão) e "só desta máquina". O que a importação já trata como local continua automático (identidade, estrutura, caminhos de outro sistema, perfil dos juízes, `.env`). |
-| D2 | **Toda skill vinda de outra instalação espera aprovação**, mesmo do mesmo sistema. |
+| D2 | **Skill importada segue a regra local de ativação (ADR-017):** no padrão `automatico`, entra ativa com aviso e desfazer; com caminho de outro sistema, ou com `proposta`/`desligado`, espera aprovação. (Revisão 4: a operadora lembrou que a aprovação manual já não é a regra local.) |
 | D3 | **Syncthing**, com versionamento de arquivos ligado na pasta, pelo menos na VPS. |
 | — | Sync Agent **interno**, sem dependência externa obrigatória; SQLite continua a fonte de verdade local; transporte por **zips imutáveis**; Zengram e Mem0 não entram agora. |
 
@@ -227,7 +237,7 @@ O que a tela mostra sobre as outras máquinas é o que os manifestos delas dizem
 |---|---|---|
 | 1 | Configuração, UUID e nome; pasta e manifesto (SHA-256, cursores); publicação na ordem da seção 4; retenção pelos cursores | Arquivo parcial nunca aparece com o nome final; manifesto nunca aponta para zip inacabado; sem mudança, sem pacote novo; retenção não apaga o último confirmado por cada uma |
 | 2 | Importar: trava, só o mais novo, SHA e origem conferidos, pacote incompleto adiado, segurança só se algo entra, cursor no fim | Ver os testes de aceitação |
-| 3 | "Só desta máquina" (D1); skills pendentes (D2), `origem_instalacao` e a limpeza que as respeita | Ver os testes de aceitação |
+| 3 | "Só desta máquina" (D1); skills pela regra da ADR-017 (D2), aviso, `origem_instalacao` e a limpeza que respeita as propostas importadas | Ver os testes de aceitação |
 | 4 | Tela "Sincronização de Conhecimento" | — |
 | 5 | Prova real: PC, notebook e VPS com Syncthing | Ver os testes de aceitação |
 
@@ -243,7 +253,7 @@ O que a tela mostra sobre as outras máquinas é o que os manifestos delas dizem
 | 6 | Hash errado e origem divergente são rejeitados, com o erro na tela | Regressão |
 | 7 | O mesmo pacote importado 10 vezes = 1 vez | Regressão (contagens iguais) |
 | 8 | Importação automática e manual nunca simultâneas; trava abandonada é retomada | Regressão com dois processos |
-| 9 | Skill importada pendente não age, não é ativada nem apagada pela limpeza | Regressão (`SkillLoader`, `SkillLearner`) |
+| 9 | Skill importada segue `APRENDIZADO_DE_SKILLS` (os três valores); com caminho de outro sistema, fica proposta; proposta não age e não é apagada pela limpeza; `/skill_desativar` desfaz uma importada; reimportar não reativa o que foi desativado aqui | Regressão (`SkillLoader`, `SkillLearner`) |
 | 10 | Falha no meio da importação: banco intacto, cursor não avança, a rodada seguinte completa | Regressão com falha injetada |
 | 11 | O pacote de segurança anterior à importação restaura o estado | Regressão (restaurar e comparar) |
 | 12 | Pasta indisponível (desmontada, sem permissão): as três instalações seguem funcionando, só a tela avisa | Regressão + prova real |
