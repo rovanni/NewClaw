@@ -253,6 +253,7 @@ const TRANSLATIONS = {
     opc_ligada: "Ligada",
     opc_desligada: "Desligada",
     opc_abrir: "Abrir",
+    atalho_abrir_dica: "Abrir {nome} numa aba nova",
     opc_ligar: "Ligar",
     opc_desligar: "Desligar",
     opc_desinstalar: "Desinstalar",
@@ -1128,6 +1129,7 @@ const TRANSLATIONS = {
     opc_ligada: "Running",
     opc_desligada: "Stopped",
     opc_abrir: "Open",
+    atalho_abrir_dica: "Open {nome} in a new tab",
     opc_ligar: "Start",
     opc_desligar: "Stop",
     opc_desinstalar: "Uninstall",
@@ -2602,6 +2604,7 @@ const TRANSLATIONS = {
     opc_ligada: "En marcha",
     opc_desligada: "Detenida",
     opc_abrir: "Abrir",
+    atalho_abrir_dica: "Abrir {nome} en una pestaña nueva",
     opc_ligar: "Iniciar",
     opc_desligar: "Detener",
     opc_desinstalar: "Desinstalar",
@@ -2716,13 +2719,14 @@ function newclawHeader(activePage) {
   ).join('');
 
   const initials = 'U';
+  setTimeout(newclawPreencherAtalhos, 0);  // o cabeçalho é texto; os atalhos entram quando ele já está na página
 
   return '<div class="newclaw-header">' +
     '<div class="newclaw-header-left">' +
       '<div class="newclaw-header-logo" onclick="newclawDevModeClick()">N</div>' +
       '<div class="newclaw-header-title">NewClaw</div>' +
     '</div>' +
-    '<nav class="newclaw-tabs">' + navLinks + '</nav>' +
+    '<nav class="newclaw-tabs">' + navLinks + '<span id="newclaw-atalhos" class="newclaw-atalhos"></span></nav>' +
     '<div class="newclaw-header-right">' +
       '<div id="newclaw-host-badge" class="newclaw-host-badge"></div>' +
       '<div class="newclaw-lang-selector">' +
@@ -2734,6 +2738,39 @@ function newclawHeader(activePage) {
       '<div class="newclaw-avatar" title="' + t('chat') + '">' + initials + '</div>' +
     '</div>' +
   '</div>';
+}
+
+// ── Atalhos das integrações opcionais ────────────────────────────
+// Cada integração instalada, ligada e com endereço de abrir ganha um link no cabeçalho, em toda página — antes, era
+// Config → Integrações → Abrir a cada vez. A lista é a mesma do cartão (`GET /api/integrations/opcionais`); nenhum nome
+// de integração aparece aqui. A última lista fica na aba (sessionStorage) para o atalho aparecer já ao trocar de página;
+// a consulta nova só confirma. Sem login ou com erro, o cabeçalho fica como sempre foi.
+const NEWCLAW_ATALHOS_KEY = NEWCLAW_KEY + 'atalhos';
+
+function newclawDesenharAtalhos(lista) {
+  const alvo = document.getElementById('newclaw-atalhos');
+  if (!alvo) return;
+  const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  alvo.innerHTML = lista.map((a) =>
+    `<a href="${esc(a.abrir)}" target="_blank" rel="noopener noreferrer" title="${esc(t('atalho_abrir_dica', { nome: a.nome }))}">${esc(a.nome)} ↗</a>`
+  ).join('');
+}
+
+async function newclawPreencherAtalhos() {
+  try { newclawDesenharAtalhos(JSON.parse(sessionStorage.getItem(NEWCLAW_ATALHOS_KEY) || '[]')); } catch { /* sem armazenamento */ }
+  try {
+    const token = newclawGetToken();
+    const r = await fetch('/api/integrations/opcionais', {
+      credentials: 'same-origin', headers: token ? { Authorization: 'Bearer ' + token } : {},
+    });
+    if (!r.ok) return;
+    const { integracoes } = await r.json();
+    const lista = (integracoes || [])
+      .filter((i) => i.instalada && i.ligada && /^https?:\/\//.test(i.abrir || ''))
+      .map((i) => ({ nome: i.nome, abrir: i.abrir }));
+    try { sessionStorage.setItem(NEWCLAW_ATALHOS_KEY, JSON.stringify(lista)); } catch { /* sem armazenamento */ }
+    newclawDesenharAtalhos(lista);
+  } catch { /* sem atalhos: o cabeçalho continua igual */ }
 }
 
 // ── Modo Desenvolvedor ───────────────────────────────────────────
