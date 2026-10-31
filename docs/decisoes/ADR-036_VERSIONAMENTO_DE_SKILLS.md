@@ -186,17 +186,33 @@ nem aparece em qualquer ramo do histórico (`git log --all`). Não há `git rm` 
 - **`skills-lock.json`.** Registra a skill `security-audit`, que vive em `.claude/skills` (ferramental do Claude Code, não
   skill do NewClaw), pasta que o `.gitignore` já ignora. Recomendação anterior: não versionar e incluí-lo no `.gitignore`.
   Continua aberto.
-- **A skill aprendida solta na árvore de trabalho** (`executar-script-node-windows`): permanece onde está, sem commit.
-  Deve ser investigada depois do `.gitignore` e dos testes, inclusive a codificação dos caracteres e a formatação dos
-  blocos de código.
+- **A skill aprendida solta na árvore de trabalho** (`executar-script-node-windows`): investigada em 31/10/2026, depois do
+  `.gitignore` e dos testes.
+  - *Blocos de código sem cerca — causa encontrada e corrigida.* `primeiroObjeto` (`aprendizadoDeSkills.ts`) apagava toda
+    ocorrência de ```` ``` ```` do texto cru da resposta do LLM antes de ler o JSON, inclusive as cercas dentro do campo
+    `procedimento`; ```` ```powershell ```` virava `powershell`. O JSON embrulhado em bloco já era lido pelo recorte do primeiro
+    `{` ao último `}`, então o replace era desnecessário. Corrigido e coberto no S393 (com o código antigo, 3 asserts
+    falham). Vale para todas as skills aprendidas pelo `SkillLearner`, não só para esta.
+  - *Caractere `U+FFFD` em "est�" — origem não determinada.* Há um único `U+FFFD`, no trecho copiado do pedido do usuário
+    ("está"); os demais acentos, escritos pelo LLM, estão corretos. O S393 passou a conferir que o montador do corpo da skill preserva
+    acentos do pedido, então a corrupção não nasce ali. Se ela veio do emissor do pedido ou da recepção dele pelo NewClaw
+    (HTTP, sessão), **não foi determinado**: esse trecho não foi testado. Não encontrei log nem banco que guarde o
+    pedido original (a linha da skill não está no `data/newclaw.db` do repositório nem no da produção), e a causa no
+    emissor não foi provada. Fica registrado como indeterminado (`NUNCA_ADIVINHAR`).
+  - *Fonte.* Não localizei o banco que gerou a skill; o `SKILL.md` solto é a única cópia conhecida. Não foi alterado nem apagado. Como
+    o `.gitignore` o cobre agora, ele deixou de aparecer no `git status`. Corrigi-lo à mão (restaurar as cercas e o "á")
+    cria divergência entre arquivo e banco; decisão pendente da operadora: manter como está, corrigir à mão ou apagar.
+  - *Como a skill foi parar em `./skills` do repositório:* alguma instância rodou com a pasta de skills do repositório
+    (o padrão `./skills`, relativo ao diretório de execução). Não identifiquei qual. Isso reforça a avaliação da alternativa
+    B (pasta separada, ou `SKILLS_DIR` próprio nas instâncias de validação).
 
 ### Sequência de trabalho
 
 Sem implementar tudo de uma vez, e só depois da confirmação:
 
-1. Revisar e consolidar esta ADR (esta revisão).
-2. Confirmar D1–D5 e as pendências acima.
-3. Implementar a regra de ignore (alternativa A).
-4. Criar os testes de regressão (Fase 5).
-5. Investigar a skill aprendida solta.
+1. Revisar e consolidar esta ADR. *Feito.*
+2. Confirmar D1–D5 e as pendências acima. *Feito (D1–D5); pendências abertas.*
+3. Implementar a regra de ignore (alternativa A). *Feito (`1984bce`).*
+4. Criar os testes de regressão (Fase 5). *Feito os critérios 1, 2 e 4, estendendo o S393 (`e0c8a5b`); o 2 já era coberto. Falta o critério 3 (reconstrução a partir do pacote do ADR-020).*
+5. Investigar a skill aprendida solta. *Feito: cercas corrigidas (`37b4f18`); `U+FFFD` indeterminado; destino do arquivo pendente.*
 6. Só então avaliar a evolução para armazenamento separado (B).
