@@ -1,6 +1,7 @@
 # ADR-034 — NewClaw Sync Agent: o conhecimento entre instalações por uma pasta sincronizada
 
-Data: 31/10/2026. Status: **proposta, revisão 2** (ajustes pedidos pela operadora na primeira leitura: pacotes
+Data: 31/10/2026. Status: **proposta, revisão 3** (revisão 3: ordem da publicação, retenção pelos cursores,
+validação da origem, regras da trava, skills pendentes protegidas da limpeza e os 12 testes de aceitação). Revisão 2 (ajustes pedidos pela operadora na primeira leitura: pacotes
 imutáveis, SHA-256, uma importação por vez, versionamento na pasta, skills sempre com aprovação, V1/V2/V3 e a tela
 "Sincronização de Conhecimento"). Nada será implementado antes da aprovação.
 
@@ -116,14 +117,23 @@ NewClaw-Sync/                         <- sincronizada pelo programa (versionamen
 - **`manifest.json` da instalação:** id, nome, sistema, versão do app e do esquema, e a lista dos pacotes com número,
   hora, tamanho, **SHA-256 do arquivo** e as contagens (memórias compartilhadas, skills). O SHA vai aqui, fora do zip,
   porque um arquivo não carrega o próprio resumo.
-- **Retenção:** os últimos 5 pacotes de cada instalação. A instalação apaga só os próprios; o versionamento do
-  programa guarda o resto.
+- **Cursores:** o `manifest.json` de cada instalação também diz o último pacote que ela importou de cada uma das
+  outras (`importados: { "<id>": 42 }`). É assim que uma máquina sabe, sem consultar a outra, o que já chegou lá.
+- **Retenção:** a instalação apaga só os próprios pacotes, e só os que todas as instalações conhecidas já passaram
+  (número menor que o menor cursor delas), mantendo sempre os 5 mais novos. Instalação que não publicou cursor, ou
+  cursor ilegível, conta como "não recebeu": na dúvida, o pacote fica. Como cada pacote é uma fotografia completa,
+  quem volta precisa só do mais novo; a regra garante que o último confirmado por cada uma continue lá enquanto o
+  mais novo ainda está em trânsito. O versionamento do programa é uma proteção a mais, não a única: o backup do banco
+  do próprio NewClaw (ADR-020) continua independente.
 
 ### 4. Exportar
 
 - Só quando o conhecimento compartilhável mudou desde o último pacote (resumo das tabelas e de `skills/`).
-- `criarPacote` para `.000043.zip.parcial` na própria subpasta, depois renomeado para `000043.zip`; só então o
-  `manifest.json` é reescrito, também por arquivo temporário e renomeação.
+- **Ordem da publicação** (o manifesto nunca anuncia um pacote inacabado):
+  1. `criarPacote` para `.000043.zip.parcial`, na própria subpasta;
+  2. arquivo fechado, calcula o SHA-256 e o tamanho;
+  3. renomeia para `000043.zip`;
+  4. reescreve o `manifest.json` por arquivo temporário e renomeação.
 - Cada pacote é uma **fotografia completa**, não um incremento.
 - Memórias marcadas "só desta máquina" (D1) não entram.
 
@@ -132,14 +142,40 @@ NewClaw-Sync/                         <- sincronizada pelo programa (versionamen
 Sob a trava `data/sync.lock`, que o `newclaw import` à mão também respeita, para cada subpasta de outra instalação:
 1. lê o `manifest.json`; o número mais novo é o único que interessa (fotografia completa);
 2. se o número não for maior que o último importado daquela instalação (guardado em `data/`), não há nada a fazer;
-3. confere o arquivo: existe, tem o tamanho e o **SHA-256** do manifesto, e `lerPacote` o aceita. Se o programa ainda
-   não terminou de copiar (manifesto chegou antes do zip, ou zip pela metade), fica para a próxima rodada, sem erro alto;
-4. `importarPacote`, com as mudanças desta ADR:
+3. confere o arquivo: existe, tem o tamanho e o **SHA-256** do manifesto, e `lerPacote` o aceita (nomes seguros,
+   sem `../`, banco SQLite válido, esquema não mais novo que o local). Se o programa ainda não terminou de copiar
+   (manifesto chegou antes do zip, ou zip pela metade), fica para a próxima rodada, sem erro alto;
+4. confere a **origem**: o id do `manifest.json` bate com o da subpasta, e o manifesto interno do zip traz o mesmo id e
+   o mesmo número. Divergência é erro na tela, e o pacote não entra.
+
+   O SHA-256 detecta corrupção, não prova autoria. Na V1, quem pode escrever na pasta é só quem foi pareado no
+   Syncthing (as três máquinas da operadora): essa é a fronteira de confiança. Assinatura dos pacotes fica para quando a
+   pasta passar por terceiros (mesma etapa da cifra);
+5. `importarPacote`, com as mudanças desta ADR:
    - o pacote de segurança só é gerado se algo vai entrar, e fica com retenção (os últimos 10);
-   - **skills que chegam esperam aprovação.** As aprendidas (`auto_skills`) entram com `status = 'proposed'`, o
-     estado que o painel já mostra para revisão (`SkillLearner`). As em arquivo novas entram como `SKILL.md.revisar`,
-     o mesmo caminho da ADR-020;
-5. registra o relatório (o que entrou, o que já existia, o que está para revisar, erros).
+   - **skills que chegam esperam aprovação, de qualquer origem.** As aprendidas (`auto_skills`) entram com
+     `status = 'proposed'` mesmo que estejam ativas na origem, e com a coluna nova `origem_instalacao`. As em arquivo
+     novas entram como `SKILL.md.revisar`. O agente só carrega `SKILL.md` (`SkillLoader`) e uma skill aprendida só vira
+     arquivo quando é aprovada (`SkillLearner.exportSkillFile`): nada importado age antes da aprovação;
+   - **o estado da skill local nunca muda numa importação:** `INSERT OR IGNORE` mantém o que já existe, então uma
+     recusada continua recusada e uma pendente continua pendente;
+   - **a limpeza automática do `SkillLearner` deixa as importadas em paz.** Hoje ela apaga propostas cujo padrão já
+     está ativo (`cleanupDuplicateKnownPatternProposals`); passa a ignorar linhas com `origem_instalacao`;
+6. registra o relatório (o que entrou, o que já existia, o que está para revisar, erros) e atualiza o cursor no
+   próprio `manifest.json`.
+
+**A trava `data/sync.lock`:**
+- aquisição atômica: criação exclusiva do arquivo (`wx`), com o pid e a hora dentro;
+- uma segunda importação, automática ou manual, recebe "já há uma sincronização em andamento" e não espera às cegas;
+- liberada num `finally`, também em erro;
+- trava abandonada (processo que morreu): se o pid não existe mais, ela é retomada; se o pid existe, ela fica;
+- usada pelo agente automático, pelo `newclaw import`, pela importação do painel e pelo backup e restauração do
+  conhecimento (ADR-020), para nenhum deles concorrer com outro sobre o banco.
+
+**Falha no meio da importação:** a memória entra numa transação do SQLite (já é assim na ADR-020); um erro desfaz a
+parte do banco. Os arquivos de skills que já tinham sido escritos ficam com o sufixo de revisão, e o pacote de segurança
+do passo 5 permite voltar ao estado anterior por inteiro. O cursor só avança no fim, então a próxima rodada tenta de
+novo.
 
 **Idempotência:** importar o mesmo pacote dez vezes dá o mesmo resultado que uma vez. Memória e arestas já são assim
 (id e nome+conteúdo); as skills também (`INSERT OR IGNORE`; arquivo igual é ignorado). Um pacote que traz de volta o que
@@ -189,8 +225,25 @@ O que a tela mostra sobre as outras máquinas é o que os manifestos delas dizem
 
 | Etapa | Entrega | Teste |
 |---|---|---|
-| 1 | Configuração, UUID e nome; pasta, manifesto com SHA-256; exportar fotografia completa com escrita atômica e "só se mudou"; retenção dos próprios | Arquivo parcial nunca aparece com o nome final; sem mudança, sem pacote novo; manifesto sempre aponta para um zip completo |
-| 2 | Importar: trava única, só o mais novo, SHA conferido, pacote incompleto adiado, segurança só se algo entra | Três instalações simuladas em pastas: ida e volta sem duplicar; importar 10 vezes = 1 vez; máquina "desligada" que volta e importa só o último |
-| 3 | "Só desta máquina" (D1); skills chegam como pendentes (D2) | O marcado não sai; skill importada não age antes de aprovada; a limpeza de propostas do `SkillLearner` não apaga uma pendente diferente da ativa |
+| 1 | Configuração, UUID e nome; pasta e manifesto (SHA-256, cursores); publicação na ordem da seção 4; retenção pelos cursores | Arquivo parcial nunca aparece com o nome final; manifesto nunca aponta para zip inacabado; sem mudança, sem pacote novo; retenção não apaga o último confirmado por cada uma |
+| 2 | Importar: trava, só o mais novo, SHA e origem conferidos, pacote incompleto adiado, segurança só se algo entra, cursor no fim | Ver os testes de aceitação |
+| 3 | "Só desta máquina" (D1); skills pendentes (D2), `origem_instalacao` e a limpeza que as respeita | Ver os testes de aceitação |
 | 4 | Tela "Sincronização de Conhecimento" | — |
-| 5 | Prova real: PC, notebook e VPS com Syncthing | Algo aprendido numa máquina aparece nas outras duas sem duplicar; uma máquina desligada por um tempo recupera tudo; sem rede, nada quebra |
+| 5 | Prova real: PC, notebook e VPS com Syncthing | Ver os testes de aceitação |
+
+**Testes de aceitação** (o Sync Agent só está pronto com todos passando; os de 1 a 3 e o 12 também na prova real):
+
+| # | Caso | Como |
+|---|---|---|
+| 1 | PC publica e o notebook importa | Pastas simuladas + prova real |
+| 2 | Notebook publica e a VPS importa | Pastas simuladas + prova real |
+| 3 | VPS publica e o PC importa | Pastas simuladas + prova real |
+| 4 | Máquina desligada por vários pacotes recupera tudo com o mais novo | Pastas simuladas |
+| 5 | Pacote incompleto (manifesto antes do zip; zip cortado) não é importado e entra na rodada seguinte | Regressão |
+| 6 | Hash errado e origem divergente são rejeitados, com o erro na tela | Regressão |
+| 7 | O mesmo pacote importado 10 vezes = 1 vez | Regressão (contagens iguais) |
+| 8 | Importação automática e manual nunca simultâneas; trava abandonada é retomada | Regressão com dois processos |
+| 9 | Skill importada pendente não age, não é ativada nem apagada pela limpeza | Regressão (`SkillLoader`, `SkillLearner`) |
+| 10 | Falha no meio da importação: banco intacto, cursor não avança, a rodada seguinte completa | Regressão com falha injetada |
+| 11 | O pacote de segurança anterior à importação restaura o estado | Regressão (restaurar e comparar) |
+| 12 | Pasta indisponível (desmontada, sem permissão): as três instalações seguem funcionando, só a tela avisa | Regressão + prova real |
