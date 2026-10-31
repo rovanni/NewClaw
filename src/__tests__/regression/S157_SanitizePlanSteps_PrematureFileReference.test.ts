@@ -163,6 +163,10 @@ async function main() {
 
     console.log('\n=== S157-4 — send_document de arquivo JÁ EXISTENTE em disco é permitido sem write/exec_command anterior ===');
     {
+        // A pasta de trabalho pode não existir (no Linux, o padrão acima vira uma subpasta relativa): sem criá-la, o teste
+        // só passava quando outro, rodado antes na suíte completa, já a tinha criado. Rodando sozinho (CI só com os
+        // afetados, PR #30), dava ENOENT.
+        fs.mkdirSync(workspaceDir, { recursive: true });
         fs.writeFileSync(preExistingResolved, 'conteudo de teste');
         try {
             const result = await sanitizePlanSteps(
