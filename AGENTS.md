@@ -1,5 +1,6 @@
 @docs/DIRETRIZ_ARQUITETURA_2026-07-13.md
 @docs/ARCHITECTURE.md
+@docs/ARCHITECTURE/REUTILIZACAO_ANTES_DA_CRIACAO.md
 
 # Instruções adicionais para o trabalho neste projeto
 
@@ -42,3 +43,15 @@
     - **Mensagens de erro relatam fatos.** Dizem o que foi tentado e o que cada tentativa respondeu; não prescrevem como instalar ou contornar. Se apontarem um caminho, que seja uma ferramenta do próprio NewClaw (ex.: `read_document`), nunca um programa externo que pode não existir na máquina.
 
     Evidência (15/10/2026): o erro da ferramenta `read` para PDF dizia "use exec_command com pdftotext ou pandoc". Num Windows sem `pdftotext`, o agente não leu o calendário — e o juiz de qualidade, ao reprovar a resposta, repetiu a mesma dica errada como se fosse fato.
+
+12. **Reutilizar antes de criar (ARCH-REUSE-001).** Siga a diretriz **Reutilização Antes da Criação** (`docs/ARCHITECTURE/REUTILIZACAO_ANTES_DA_CRIACAO.md`): nenhum agente deve criar um novo componente, serviço, módulo, mecanismo, abstração ou sistema para resolver um problema sem antes investigar as soluções existentes no repositório e avaliar sua adequação. A novidade isolada não constitui justificativa técnica.
+
+    - **Ordem de preferência:**
+      1. Reutilizar uma solução existente e validada.
+      2. Adaptar uma solução existente quando necessário.
+      3. Refatorar ou substituir uma implementação inadequada, mediante justificativa técnica.
+      4. Desenvolver uma solução nova apenas quando as alternativas forem insuficientes ou quando uma alternativa superior for demonstrada por evidências verificáveis (testes, benchmarks ou análise de complexidade).
+    - **Investigação e proteção contra duplicação:** Investigue o código existente, serviços, módulos, histórico de alterações e documentação arquitetural antes de implementar. Não crie componentes ou abstrações apenas para contornar dificuldades locais quando uma solução existente puder resolver com menor complexidade.
+    - **Registro da decisão:** Toda decisão de alteração relevante deve registrar o problema, as soluções existentes investigadas, as alternativas consideradas, a justificativa da escolha e as evidências.
+
+    *Princípio:* Investigue antes de criar. Reutilize antes de duplicar. Adapte antes de substituir. Demonstre antes de declarar superioridade. Documente para que o próximo agente não precise começar do zero.
