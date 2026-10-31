@@ -2,7 +2,8 @@
 
 Data: 28/10/2026. Status: **Etapa 0 concluída** (provas e auditoria, nada no produto). **Decisões aprovadas em
 29/10/2026** (seção "Decisões da operadora"); **Etapa 1 feita** só no núcleo — o contrato público do turno
-(`docs/CONTRATO_DO_TURNO.md`); **Etapas 2 a 4 feitas** no repositório do harness (newclaw-ivox), fora do núcleo. Princípio de fronteira: `ADR-031_EXPERIENCIAS_OPCIONAIS_NAO_IMPOEM_DEPENDENCIAS_AO_NUCLEO.md`.
+(`docs/CONTRATO_DO_TURNO.md`); **Etapas 2 a 4 feitas** no repositório do harness (newclaw-ivox), fora do núcleo; **Etapa 5 quase feita** (ativação pelo
+painel no Windows; falta a prova no Linux). Ciclo de vida do modelo de voz: `ADR-037_CICLO_DE_VIDA_DO_MODELO_DE_VOZ.md`. Princípio de fronteira: `ADR-031_EXPERIENCIAS_OPCIONAIS_NAO_IMPOEM_DEPENDENCIAS_AO_NUCLEO.md`.
 
 ## O pedido e o enquadramento
 
@@ -530,7 +531,7 @@ usuário". Vale para qualquer pessoa, em Windows, Linux e macOS (`AGENTS.md`, re
 | 2 — Motor de voz (**feita em 29/10**, em 6 sprints: `docs/SPRINTS.md` do newclaw-ivox; interrupção pela voz provada com a operadora no microfone) | harness | Pipeline da prova, com frase a frase, interrupção por VAD real, configuração da tabela 4, sem LLM | Testes das funções puras; interrupção por voz real provada; sem configuração, sai com aviso claro |
 | 3 — Servidor do harness (**feita em 29/10**: 20 testes de segurança e prova real contra NewClaw isolado, sem cota; o idioma, quando `VOZ_IDIOMA` está vazio, vem de `GET /api/config`, rota fora do contrato do turno) | harness | Login, repasse com Bearer, sinalização com checagem de origem, TLS opcional, verificação de requisitos e de versão | Testes de segurança: sem login → 401; outra origem → recusada; motor de voz inalcançável pela rede |
 | 4 — Janela de voz (**feita em 30/10**, em 4 sprints: `docs/SPRINTS.md` do newclaw-ivox; aprovada pela operadora no microfone; visual a partir da maquete dela em `docs/referencia-visual/`) | harness | Interface React só com o transporte SmallWebRTC; estados; modo texto; Parar; aprovação por clique; histórico | Testes da máquina de estados (34); build reproduzível (`npm ci && npm run build`, versões fixas); inventário de licenças gerado (29 pacotes, todos permissivos) |
-| 5 — Instalação e documentação (**em andamento desde 30/10**: aceite das licenças no instalador feito; ativação pelo painel em "Etapa 5 — ativação pelo painel") | harness + núcleo (instalador genérico) | Ativação que verifica requisitos; guia; avisos de terceiros | Instalação limpa em Windows e Linux; NewClaw sem harness idêntico |
+| 5 — Instalação e documentação (**quase feita**: aceite das licenças no instalador; ativação pelo painel, PRs #27, #30, #31 e #33, publicada e instalada pelo painel no Windows em 30/10; religar depois de reiniciar, achado de 31/10, no ramo `fix/integracao-volta-apos-reiniciar`; **falta** a instalação pelo painel provada no Linux) | harness + núcleo (instalador genérico) | Ativação que verifica requisitos; guia; avisos de terceiros | Instalação limpa em Windows e Linux; NewClaw sem harness idêntico |
 | 6 — Validação real | ambos | Instância isolada, LLM real só com OK de cota | Os testes de aceitação (T1–T15 das versões anteriores) |
 | 7 — Migrações opcionais | núcleo | Painel e suplemento passam a usar o cliente público | Suíte do chat e do suplemento iguais |
 
@@ -599,7 +600,7 @@ Detalhe e commits em `docs/SPRINTS.md` do newclaw-ivox. Os achados que valem par
 - **Segmentação do VAD.** Com o padrão de 0,2 s de silêncio, cada pedaço ia sozinho para o Whisper e errava ("Dorme de
   ferro"); com 0,8 s, as frases saíram inteiras e certas. O início da fala, que dispara a interrupção, não mudou.
 - **Eco.** Com o cancelamento de eco do navegador pedido explicitamente, nada foi captado durante as falas do motor (caixa
-  em volume baixo e fone). Falta repetir com a caixa alta.
+  em volume baixo e fone), e de novo com a caixa no volume máximo (30/10, de dia).
 
 ## Achados laterais (registrados, não corrigidos)
 
