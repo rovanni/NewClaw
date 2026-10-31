@@ -241,7 +241,7 @@ da ADR-034 os leva. Sem elas, o arquivo regerado a partir do banco perderia o ca
 
 | # | Pergunta |
 |---|---|
-| D1 | Os nomes dos campos (`sistema_origem`, `validada_em`, `plataformas`, `requer`, `instalacao_origem`, `formato_skill`) ficam assim? (Revisão 2: `origem` virou `sistema_origem`, para não ser confundido com a instalação nem com a fonte.) |
+| D1 | **Decidido (31/10/2026): os nomes ficam** `sistema_origem`, `validada_em`, `plataformas`, `requer`, `instalacao_origem`, `formato_skill`. (Na revisão 2, `origem` virou `sistema_origem`, para não ser confundido com a instalação nem com a fonte.) |
 | D2 | **Decidido (31/10/2026): pastas pessoais já entram na V1**, com `{PASTA:nome}` e uma tabela local por instalação, editada no painel (seção 2). |
 | D3 | **Decidido (31/10/2026): skill feita para outro sistema aparece com aviso**, nunca é escondida; o agente decide (seção 3). |
 
