@@ -11,7 +11,9 @@
  * não nascer ativa e carregável pelo SkillLoader, com a origem declarada; o aviso não chegar ao canal da conversa ou não trazer o
  * comando de desfazer; o molde genérico voltar a ser proposto com o aprendizado automático ligado; os dois pontos de conclusão
  * deixarem de registrar o aprendizado; a pasta que o SkillLearner gera deixar de estar no .gitignore, ou alguma
- * skills/aprendida_* ficar rastreada pelo git (ADR-036: skill aprendida é da instância, não do código distribuído).
+ * skills/aprendida_* ficar rastreada pelo git (ADR-036: skill aprendida é da instância, não do código distribuído); a leitura da
+ * resposta do LLM apagar as cercas ``` dos blocos de código dentro do procedimento (skill aprendida em 23/10/2026 chegou com
+ * "powershell" solto no lugar de "```powershell").
  *
  * Execução: npx ts-node src/__tests__/regression/S393_SkillsAprendidas_ComOQueFuncionou.test.ts
  */
@@ -21,7 +23,7 @@ import * as path from 'path';
 import { spawnSync } from 'child_process';
 import Database from 'better-sqlite3';
 import {
-    coletarSegredos, interpretarResposta, mascarar, modoDeAprendizado, montarPedidoDeAprendizado, montarTrajetoria, motivoParaRecusar,
+    coletarSegredos, interpretarResposta, mascarar, modoDeAprendizado, montarCorpoDaSkill, montarPedidoDeAprendizado, montarTrajetoria, motivoParaRecusar,
 } from '../../loop/aprendizadoDeSkills';
 import { SkillLearner } from '../../loop/SkillLearner';
 import { SkillLoader } from '../../skills/SkillLoader';
@@ -103,6 +105,17 @@ assert(nao.tipo === 'nao_aprender' && nao.motivo === 'tarefa trivial', 'aprender
 const ok = interpretarResposta(JSON.stringify(PROPOSTA_OK));
 assert(ok.tipo === 'aprender' && ok.proposta.nome === 'gmail-via-himalaya' && ok.proposta.gatilhos.includes('caixa de entrada'), 'proposta válida, nome normalizado em kebab-case', ok);
 assert(interpretarResposta(JSON.stringify({ ...PROPOSTA_OK, procedimento: 'curto' })).tipo === 'invalida', 'procedimento curto demais → inválida');
+// A cerca que embrulha a resposta sai; as cercas DENTRO do procedimento (blocos de código da skill) têm de ficar.
+const COM_CERCAS = '1. Liste os arquivos:\n```powershell\nGet-ChildItem -Recurse\n```\n2. Rode o script:\n```powershell\nnode <script>\n```';
+const embrulhada = interpretarResposta('```json\n' + JSON.stringify({ ...PROPOSTA_OK, procedimento: COM_CERCAS }) + '\n```');
+assert(embrulhada.tipo === 'aprender' && embrulhada.proposta.procedimento === COM_CERCAS, 'resposta em bloco ```json: as cercas dos blocos de código do procedimento são preservadas', embrulhada);
+const semEmbrulho = interpretarResposta(JSON.stringify({ ...PROPOSTA_OK, procedimento: COM_CERCAS }));
+assert(semEmbrulho.tipo === 'aprender' && semEmbrulho.proposta.procedimento === COM_CERCAS, 'resposta sem embrulho: as cercas do procedimento também são preservadas', semEmbrulho);
+if (embrulhada.tipo === 'aprender') {
+    const corpo = montarCorpoDaSkill(embrulhada.proposta, { pedido: 'rode o script que está na pasta de trabalho', plataforma: 'windows', data: '2026-10-31', segredos: [] });
+    assert(corpo.includes('```powershell\nGet-ChildItem -Recurse\n```'), 'o corpo da skill mantém os blocos de código com cerca e linguagem', corpo);
+    assert(corpo.includes('que está na pasta') && !corpo.includes('�'), 'acentos do pedido citado na origem chegam intactos (sem U+FFFD)');
+}
 if (ok.tipo === 'aprender') {
     assert(motivoParaRecusar(ok.proposta, { nomesExistentes: ['Gmail via Himalaya'], segredos: [] }) !== null, 'nome que já existe → recusada');
     assert(motivoParaRecusar({ ...ok.proposta, procedimento: `${ok.proposta.procedimento}\nsenha: ${SENHA_DE_APP}` }, { nomesExistentes: [], segredos: [SENHA_DE_APP] }) !== null, 'segredo usado na tarefa dentro da skill → recusada');
