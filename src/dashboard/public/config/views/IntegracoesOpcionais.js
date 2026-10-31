@@ -13,7 +13,7 @@ function esc(v) {
 async function json(url, opcoes) {
   const r = await pedir(url, opcoes);
   const d = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+  if (!r.ok) throw Object.assign(new Error(d.error || `HTTP ${r.status}`), { motivo: d.motivo });
   return d;
 }
 
@@ -69,17 +69,20 @@ export function renderOpcionais(alvo) {
   function desenharInstalada(card, i) {
     card.style.borderLeft = '3px solid var(--success)';
     const quando = i.instalada_em ? new Date(i.instalada_em).toLocaleString() : '';
+    const atualizada = i.atualizada_em ? ` · ${t('opc_atualizada_em')} ${esc(new Date(i.atualizada_em).toLocaleString())}` : '';
     card.innerHTML = `${cabecalho(i)}
       <div style="font-size: 0.85rem;">
-        ${i.ligada ? `🟢 ${t('opc_ligada')}` : `⚪ ${t('opc_desligada')}`} · ${t('opc_instalada_em')} ${esc(quando)} · <code>${esc(i.pasta)}</code>
+        ${i.ligada ? `🟢 ${t('opc_ligada')}` : `⚪ ${t('opc_desligada')}`} · ${t('opc_instalada_em')} ${esc(quando)}${atualizada} · <code>${esc(i.pasta)}</code>
       </div>
       <div style="display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap;">
         <a class="btn btn-primary" href="${esc(i.abrir)}" target="_blank" rel="noopener noreferrer"><span class="ni">↗</span> ${t('opc_abrir')}</a>
+        <button class="btn" data-acao="atualizar" title="${esc(t('opc_atualizar_dica'))}"><span class="ni">⟳</span> ${t('opc_atualizar')}</button>
         <button class="btn" data-acao="${i.ligada ? 'desligar' : 'ligar'}">${i.ligada ? t('opc_desligar') : t('opc_ligar')}</button>
         <button class="btn btn-danger" data-acao="desinstalar"><span class="ni">🗑️</span> ${t('opc_desinstalar')}</button>
       </div>`;
     card.querySelectorAll('button[data-acao]').forEach((b) => b.addEventListener('click', async () => {
       const acao = b.dataset.acao;
+      if (acao === 'atualizar') return atualizar(card, i, b);
       if (acao === 'desinstalar' && !confirm(t('opc_desinstalar_confirma').replace('{pasta}', i.pasta))) return;
       b.disabled = true;
       try {
@@ -178,14 +181,37 @@ export function renderOpcionais(alvo) {
     }
   }
 
-  async function comecar(card, i, escolhas, aceito) {
+  function comecar(card, i, escolhas, aceito) {
+    acompanhar(card, i, t('opc_instalando'), t('opc_concluida'),
+      () => post(`${API}/${encodeURIComponent(i.id)}/instalar`, { escolhas, aceito }));
+  }
+
+  /** Mesmas escolhas e mesmo aceite; se as licenças ou as escolhas mudaram, a pessoa revê tudo (a configuração abre). */
+  async function atualizar(card, i, botao) {
+    if (!confirm(t('opc_atualizar_confirma'))) return;
+    botao.disabled = true;
+    try {
+      const { andamento } = await post(`${API}/${encodeURIComponent(i.id)}/atualizar`);
+      acompanhar(card, i, t('opc_atualizando'), t('opc_atualizacao_concluida'), async () => ({ andamento }));
+    } catch (e) {
+      if (e.motivo === 'revisar') {
+        showToast(e.message, 'error');
+        configurar(card, i);
+      } else {
+        showToast(`${t('ui_error_prefix')}: ${e.message}`, 'error');
+        botao.disabled = false;
+      }
+    }
+  }
+
+  async function acompanhar(card, i, textoRodando, textoConcluida, iniciar) {
     card.innerHTML = `${cabecalho(i)}
-      <div class="opc-estado">⏳ ${t('opc_instalando')}</div>
+      <div class="opc-estado">⏳ ${textoRodando}</div>
       <pre class="opc-linhas" style="max-height: 280px; overflow: auto; font-size: 0.78rem; background: var(--bg-soft, rgba(0,0,0,.2)); padding: 10px; border-radius: 6px; white-space: pre-wrap; margin: 0;"></pre>`;
     const estado = card.querySelector('.opc-estado');
     const linhas = card.querySelector('.opc-linhas');
     try {
-      const { andamento } = await post(`${API}/${encodeURIComponent(i.id)}/instalar`, { escolhas, aceito });
+      const { andamento } = await iniciar();
       const consultar = async () => {
         if (parado) return;
         try {
@@ -194,7 +220,7 @@ export function renderOpcionais(alvo) {
           linhas.scrollTop = linhas.scrollHeight;
           if (a.estado === 'rodando') { timers.push(setTimeout(consultar, 1500)); return; }
           if (a.estado === 'concluida') {
-            showToast(t('opc_concluida'), 'success');
+            showToast(textoConcluida, 'success');
             desenhar(card, await json(`${API}/${encodeURIComponent(i.id)}`));
           } else {
             estado.innerHTML = `<span style="color: var(--danger);">❌ ${t('opc_falhou')}${a.erro ? ` ${esc(a.erro)}` : ''}</span>`;

@@ -5,6 +5,7 @@
  * shell, dentro da pasta da integração) e controla o processo dela no PM2. Não sabe qual integração é: tudo vem do
  * manifesto. Rede, processos e PM2 entram por injeção, para os testes rodarem sem nada disso.
  */
+import { createHash } from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -48,9 +49,15 @@ const MARCADOR = '.newclaw-integracao.json';
 const LINHAS_GUARDADAS = 400;
 const CACHE_MS = 5 * 60 * 1000;
 
+/** `revisar`: a atualização precisa que a pessoa veja as escolhas e as licenças de novo (o painel abre a configuração). */
+export type MotivoDoErro = 'revisar';
+
 export class ErroDaIntegracao extends Error {
-    constructor(message: string, readonly status = 400) { super(message); }
+    constructor(message: string, readonly status = 400, readonly motivo?: MotivoDoErro) { super(message); }
 }
+
+/** Resumo da lista de licenças aceita: a atualização só reaproveita o aceite se a lista nova for a mesma. */
+const resumoDasLicencas = (lista: unknown): string => createHash('sha256').update(JSON.stringify(lista)).digest('hex');
 
 export class GerenciadorDeIntegracoes {
     private cache = new Map<string, { manifesto: Manifesto; em: number }>();
@@ -96,7 +103,9 @@ export class GerenciadorDeIntegracoes {
 
     pasta(m: Manifesto): string { return path.join(this.d.home, m.pasta); }
 
-    private lerMarcador(m: Manifesto): { id: string; instalada_em?: string } | null {
+    private lerMarcador(m: Manifesto): {
+        id: string; instalada_em?: string; atualizada_em?: string; escolhas?: Record<string, unknown>; licencas_aceitas?: string;
+    } | null {
         try { return JSON.parse(fs.readFileSync(path.join(this.pasta(m), MARCADOR), 'utf-8')); } catch { return null; }
     }
 
@@ -178,11 +187,49 @@ export class GerenciadorDeIntegracoes {
     /** Começa a instalação em segundo plano. `aceito`: a pessoa marcou "Li e aceito" no painel. */
     async instalar(m: Manifesto, escolhas: Record<string, unknown>, aceito: boolean): Promise<Andamento> {
         if (aceito !== true) throw new ErroDaIntegracao('as licenças de terceiros precisam ser aceitas antes de instalar', 400);
+        this.nenhumaEmAndamento();
+        await this.preparar(m, true);  // pacote atualizado a cada instalação
+        const args = this.conferir(await this.opcoes(m), escolhas);
+        // A lista que a pessoa acabou de ler e aceitar (as mesmas escolhas, o mesmo pacote): guardada em resumo, para a
+        // atualização saber se o aceite ainda vale.
+        const licencas = resumoDasLicencas(await this.rodarJson(m, m.licencas, args));
+        return this.rodarInstalacao(m, args, { escolhas, licencas_aceitas: licencas }, 'instalada_em');
+    }
+
+    /**
+     * Atualiza com o pacote mais novo, repetindo as escolhas e o aceite da instalação. O aceite só é reaproveitado se a lista
+     * de licenças das mesmas escolhas, no pacote novo, for idêntica à aceita; senão (ou sem escolhas guardadas, ou com uma
+     * escolha que deixou de existir) a pessoa revê tudo no painel (`motivo: 'revisar'`). A integração fica desligada só
+     * durante a instalação e é religada no fim, mesmo se falhar.
+     */
+    async atualizar(m: Manifesto): Promise<Andamento> {
+        const marcador = this.lerMarcador(m);
+        if (!marcador?.instalada_em) throw new ErroDaIntegracao(`${m.nome} não está instalada`, 409);
+        this.nenhumaEmAndamento();
+        const revisar = (porque: string) => new ErroDaIntegracao(`${porque}: revise as escolhas e as licenças antes de atualizar`, 409, 'revisar');
+        if (!marcador.escolhas || !marcador.licencas_aceitas) throw revisar('a instalação não guardou as escolhas (é anterior a este botão)');
+        await this.preparar(m, true);  // só os arquivos do pacote; ambiente, modelos e configuração ficam
+        let args: string[];
+        try { args = this.conferir(await this.opcoes(m), marcador.escolhas); } catch (e) {
+            if (e instanceof ErroDaIntegracao && e.status === 400) throw revisar('uma escolha da instalação não existe mais');
+            throw e;
+        }
+        const licencas = resumoDasLicencas(await this.rodarJson(m, m.licencas, args));
+        if (licencas !== marcador.licencas_aceitas) throw revisar('a lista de licenças de terceiros mudou');
+        // No Windows, o pip não troca arquivos de um processo em uso: a integração para durante a instalação.
+        if (this.d.pm2) await this.pm2(['stop', this.nomeNoPm2(m)]);
+        return this.rodarInstalacao(m, args, { escolhas: marcador.escolhas, licencas_aceitas: licencas }, 'atualizada_em');
+    }
+
+    private nenhumaEmAndamento(): void {
         for (const a of this.andamentos.values()) {
             if (a.estado === 'rodando') throw new ErroDaIntegracao('já há uma instalação em andamento', 409);
         }
-        await this.preparar(m, true);  // pacote atualizado a cada instalação
-        const args = this.conferir(await this.opcoes(m), escolhas);
+    }
+
+    private rodarInstalacao(
+        m: Manifesto, args: string[], guardar: Record<string, unknown>, quando: 'instalada_em' | 'atualizada_em',
+    ): Andamento {
         const andamento: Andamento = {
             id: `${m.id}-${this.agora().toString(36)}`, integracao: m.id, estado: 'rodando', linhas: [], inicio: this.agora(),
         };
@@ -199,15 +246,20 @@ export class GerenciadorDeIntegracoes {
             andamento.linhas.push(texto);
             if (andamento.linhas.length > LINHAS_GUARDADAS) andamento.linhas.splice(0, andamento.linhas.length - LINHAS_GUARDADAS);
         };
+        const religarDepoisDeFalhar = async () => {
+            // Atualização que falhou: a instalação anterior continua na pasta; a integração volta a ligar como estava.
+            if (quando !== 'atualizada_em') return;
+            try { await this.ligar(m); aoLer('A atualização falhou; a integração foi religada como estava.'); } catch { /* o erro principal já foi dito */ }
+        };
         void this.d.acompanhar(programa, resto, this.pasta(m), aoLer)
             .then(async (codigo) => {
                 andamento.codigo = codigo;
-                if (codigo !== 0) { andamento.estado = 'falhou'; return; }
-                this.gravarMarcador(m, { instalada_em: new Date(this.agora()).toISOString() });
+                if (codigo !== 0) { andamento.estado = 'falhou'; await religarDepoisDeFalhar(); return; }
+                this.gravarMarcador(m, { ...guardar, [quando]: new Date(this.agora()).toISOString() });
                 await this.ligar(m);
                 andamento.estado = 'concluida';
             })
-            .catch((e: Error) => { andamento.estado = 'falhou'; andamento.erro = e.message; })
+            .catch(async (e: Error) => { andamento.estado = 'falhou'; andamento.erro = e.message; await religarDepoisDeFalhar(); })
             .finally(() => { andamento.fim = this.agora(); });
         return andamento;
     }
@@ -235,7 +287,10 @@ export class GerenciadorDeIntegracoes {
                 ligada = lista.some((p) => p.name === this.nomeNoPm2(m) && p.pm2_env?.status === 'online');
             } catch { ligada = false; }
         }
-        return { instalada, ligada, pasta: this.pasta(m), abrir: m.abrir, instalada_em: marcador?.instalada_em ?? null };
+        return {
+            instalada, ligada, pasta: this.pasta(m), abrir: m.abrir, instalada_em: marcador?.instalada_em ?? null,
+            atualizada_em: marcador?.atualizada_em ?? null,
+        };
     }
 
     async ligar(m: Manifesto): Promise<void> {
