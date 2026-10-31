@@ -1,6 +1,8 @@
 # ADR-034 — NewClaw Sync Agent: o conhecimento entre instalações por uma pasta sincronizada
 
-Data: 31/10/2026. Status: **proposta**. Nada será implementado antes da aprovação da operadora.
+Data: 31/10/2026. Status: **proposta, revisão 2** (ajustes pedidos pela operadora na primeira leitura: pacotes
+imutáveis, SHA-256, uma importação por vez, versionamento na pasta, skills sempre com aprovação, V1/V2/V3 e a tela
+"Sincronização de Conhecimento"). Nada será implementado antes da aprovação.
 
 Relacionadas: ADR-020 (backup e importação mesclando — esta ADR a automatiza), ADR-028 (apagar memória só com
 confirmação), ADR-031 (experiências opcionais não impõem dependências ao núcleo), `REUTILIZACAO_ANTES_DA_CRIACAO.md`,
@@ -41,7 +43,15 @@ com outros assistentes, e o próprio desenho do SQLite confirma.
 - **O NewClaw falando direto com OneDrive ou Google Drive.** Traria SDKs e credenciais de cada nuvem para o núcleo e
   prenderia a funcionalidade a um fornecedor. A pasta é a fronteira: quem transporta é o programa que a pessoa já usa.
 - **Pacote de todos num arquivo só.** Duas máquinas escreveriam o mesmo arquivo e o programa criaria conflitos
-  ("arquivo (cópia de PC).zip"). Por isso cada instalação escreve **só o próprio arquivo**.
+  ("arquivo (cópia de PC).zip"). Por isso cada instalação escreve **só na própria subpasta**.
+- **Sobrescrever o pacote da instalação** (`pc.zip`). Apaga o histórico e mistura a versão nova com a cópia em trânsito
+  da antiga. Daí: **pacotes imutáveis e numerados**; o mais novo é indicado por um `manifest.json` da instalação.
+- **O programa de sincronização apaga também.** O Syncthing replica exclusões: um pacote apagado numa máquina some das
+  outras. Daí: versionamento de arquivos ligado na pasta (o Syncthing tem, por pasta), pelo menos na VPS.
+- **Máquina desligada por dias.** Se os pacotes fossem incrementais, ela precisaria de todos os intermediários. Daí:
+  **cada pacote é uma fotografia completa**; quem volta importa só o mais novo de cada instalação.
+- **Duas importações ao mesmo tempo** (a automática e um `newclaw import` à mão, ou duas rodadas). Daí: uma trava por
+  instalação, valendo para os dois caminhos.
 - **Arquivo pela metade.** O programa pode copiar um pacote enquanto ele é escrito, ou entregar uma cópia parcial.
   Daí: escrever com outro nome e renomear no fim; na importação, conferir o pacote e ignorar o que não fecha.
 - **Importar o próprio pacote, ou importar sempre o mesmo.** Seria trabalho à toa, e cada importação ainda gera um
@@ -53,8 +63,8 @@ com outros assistentes, e o próprio desenho do SQLite confirma.
   com a versão antiga nas outras, e uma apagada continua nas outras. Resolver isso automaticamente é o passo mais
   arriscado, porque pode apagar o que a pessoa quer manter. Fica fora da 1ª versão, como etapa própria (abaixo).
 - **Skill de uma máquina ativa noutra.** Uma skill aprendida na VPS com comandos de Linux, ativa no Windows, ensina o
-  agente a errar. Caminhos de outro sistema já vão para revisão (ADR-020); uma skill nova sem caminho entra ativa. Isso
-  é uma decisão da operadora (D2).
+  agente a errar; uma instrução problemática se espalharia pelas três. Por decisão da operadora (D2), **toda skill que
+  chega de outra instalação espera aprovação**, mesmo vinda do mesmo sistema.
 
 ## Fase 3 — Alternativas
 
@@ -81,54 +91,89 @@ não passa por nuvem. OneDrive e Google Drive (no modo espelhar) servem no Windo
 parte (rclone). O SyncBackFree copia entre pastas locais e de rede, mas não fala com a nuvem sozinho (isso é do
 SyncBackPro).
 
-### 2. Configuração (painel → Backup → "Sincronizar entre instalações"; desligada por padrão)
+### 2. Configuração (tela "Sincronização de Conhecimento"; desligada por padrão)
 
 - **Pasta de sincronização:** caminho local, conferido ao salvar (existe e aceita escrita).
-- **Nome desta instalação:** escolhido pela pessoa ("PC", "Notebook", "VPS"); vai no nome do arquivo. Junto, um id
+- **Nome desta instalação:** escolhido pela pessoa ("PC", "Notebook", "VPS"); vai no nome da subpasta. Junto, um UUID
   gerado uma vez e guardado em `data/`, para dois nomes iguais não se confundirem. Não usa nome de máquina nem de usuário.
 - **Intervalo:** padrão 30 min (exportar e procurar novidades).
 - **O que vai no pacote:** memória, skills aprendidas e skills em arquivo. Conversas e workspace ficam fora por padrão
   (são grandes e pessoais); a pessoa pode ligar.
 
-### 3. Exportar
+### 3. A pasta
 
-- Só quando o conhecimento mudou desde o último pacote: comparação de um resumo das tabelas e de `skills/`.
-- `criarPacote` num arquivo temporário da pasta (`.<nome>.parcial`), depois renomeado para
-  `<nome>-<id8>.newclaw-sync.zip`.
-- O manifesto ganha o id e o nome da instalação, a hora e o resumo (sha256) do conteúdo.
+```
+NewClaw-Sync/                         <- sincronizada pelo programa (versionamento ligado)
+├── pc-3f9a1c2e/
+│   ├── manifest.json                 <- só esta instalação escreve aqui
+│   ├── 000041.zip
+│   └── 000042.zip
+├── notebook-8b21d0aa/
+└── vps-c47e9910/
+```
 
-### 4. Importar
+- **Subpasta:** `<nome>-<id8>`. O nome é escolhido pela pessoa; o id é um UUID gerado uma vez e guardado em `data/`.
+- **`manifest.json` da instalação:** id, nome, sistema, versão do app e do esquema, e a lista dos pacotes com número,
+  hora, tamanho, **SHA-256 do arquivo** e as contagens (memórias compartilhadas, skills). O SHA vai aqui, fora do zip,
+  porque um arquivo não carrega o próprio resumo.
+- **Retenção:** os últimos 5 pacotes de cada instalação. A instalação apaga só os próprios; o versionamento do
+  programa guarda o resto.
 
-Para cada `*.newclaw-sync.zip` da pasta:
-1. ignora o desta instalação;
-2. ignora se a hora do manifesto não for mais nova que a do último importado daquela instalação (guardado em `data/`);
-3. confere o zip e o manifesto (`lerPacote`); um pacote incompleto fica para a próxima rodada, sem erro alto;
-4. `importarPacote`. O pacote de segurança só é gerado se a contagem prévia indicar que algo vai entrar, e fica com
-   retenção (os últimos 10);
-5. registra o relatório (o que entrou, o que já existia, o que foi para revisão).
+### 4. Exportar
 
-Importar um pacote que traz de volta o que esta instalação mandou não duplica nada: o id já existe.
+- Só quando o conhecimento compartilhável mudou desde o último pacote (resumo das tabelas e de `skills/`).
+- `criarPacote` para `.000043.zip.parcial` na própria subpasta, depois renomeado para `000043.zip`; só então o
+  `manifest.json` é reescrito, também por arquivo temporário e renomeação.
+- Cada pacote é uma **fotografia completa**, não um incremento.
+- Memórias marcadas "só desta máquina" (D1) não entram.
 
-### 5. Painel
+### 5. Importar (uma importação por vez por instalação)
 
-Cartão com: ligado ou desligado, a pasta, a última exportação, e cada outra instalação vista (nome, hora do último
-pacote, o que entrou, o que está para revisar). Mais o botão "sincronizar agora".
+Sob a trava `data/sync.lock`, que o `newclaw import` à mão também respeita, para cada subpasta de outra instalação:
+1. lê o `manifest.json`; o número mais novo é o único que interessa (fotografia completa);
+2. se o número não for maior que o último importado daquela instalação (guardado em `data/`), não há nada a fazer;
+3. confere o arquivo: existe, tem o tamanho e o **SHA-256** do manifesto, e `lerPacote` o aceita. Se o programa ainda
+   não terminou de copiar (manifesto chegou antes do zip, ou zip pela metade), fica para a próxima rodada, sem erro alto;
+4. `importarPacote`, com as mudanças desta ADR:
+   - o pacote de segurança só é gerado se algo vai entrar, e fica com retenção (os últimos 10);
+   - **skills que chegam esperam aprovação.** As aprendidas (`auto_skills`) entram com `status = 'proposed'`, o
+     estado que o painel já mostra para revisão (`SkillLearner`). As em arquivo novas entram como `SKILL.md.revisar`,
+     o mesmo caminho da ADR-020;
+5. registra o relatório (o que entrou, o que já existia, o que está para revisar, erros).
 
-### 6. Fora da 1ª versão (etapas próprias, depois de medir)
+**Idempotência:** importar o mesmo pacote dez vezes dá o mesmo resultado que uma vez. Memória e arestas já são assim
+(id e nome+conteúdo); as skills também (`INSERT OR IGNORE`; arquivo igual é ignorado). Um pacote que traz de volta o que
+esta instalação mandou não duplica nada.
 
-- **Edição:** propagar a versão mais nova de uma memória. Exige a origem e a hora de cada mudança, para não trocar uma
-  correção local por uma versão antiga.
-- **Exclusão:** quando uma memória some de uma instalação, as outras recebem uma **sugestão de remoção**, nunca a
-  remoção. A confirmação segue a ADR-028.
-- **Cifra do pacote com senha:** necessária se a pasta passar por nuvem de terceiros.
+### 6. Tela "Sincronização de Conhecimento" (painel; 3 línguas)
 
-## Decisões da operadora antes de implementar
+- Esta instalação: ligada ou desligada, a pasta, o último pacote publicado, as memórias compartilhadas e as marcadas
+  "só desta máquina".
+- Uma linha por instalação vista na pasta (PC, notebook, VPS): último pacote dela, quando foi importado aqui, o que
+  entrou, as memórias que ela compartilha (do manifesto), as **skills pendentes de aprovação** e os **erros** (pacote
+  com SHA errado, versão de esquema mais nova, pasta sem escrita).
+- Botões "sincronizar agora" e "aprovar" / "recusar" para cada skill pendente (reaproveita a revisão de skills que já
+  existe).
 
-| # | Pergunta | Recomendo |
-|---|---|---|
-| D1 | Classificação das memórias: três níveis (Global, Local, Privado) ou dois? | **Dois: "compartilhar" (padrão) e "só desta máquina".** Local e Privado têm o mesmo efeito na sincronização (não saem). O que a importação já trata como local continua automático: identidade, estrutura, caminhos de outro sistema, perfil dos juízes, `.env`. A pessoa marca "só desta máquina" pela conversa ou pelo painel. |
-| D2 | Skill nova de outra instalação: entra ativa ou espera aprovação? | **Ativa se veio do mesmo sistema e não tem caminho de outro sistema; senão, espera aprovação.** É a regra da ADR-020, com a origem do sistema como critério a mais. |
-| D3 | Programa de sincronização | **Syncthing** nas três (a VPS é Linux). OneDrive/Drive se preferir nuvem, com a cifra do pacote como etapa seguinte. |
+O que a tela mostra sobre as outras máquinas é o que os manifestos delas dizem; uma máquina não consulta a outra.
+
+### 7. Fases
+
+| Versão | Entrega |
+|---|---|
+| **V1 (esta ADR)** | Compartilhar memórias novas e skills (com aprovação); tela de sincronização |
+| V2 | Edição: quando a mesma memória foi corrigida em duas máquinas, resolver o conflito. Exige a origem e a hora de cada mudança, para não trocar uma correção local por uma versão antiga |
+| V3 | Exclusão: as outras recebem uma **sugestão de remoção**, nunca a remoção; confirmação pela ADR-028 e histórico de auditoria |
+| Depois | Cifra do pacote com senha, se a pasta passar por nuvem de terceiros |
+
+## Decisões da operadora (31/10/2026)
+
+| # | Decisão |
+|---|---|
+| D1 | **Dois níveis:** "compartilhar" (padrão) e "só desta máquina". O que a importação já trata como local continua automático (identidade, estrutura, caminhos de outro sistema, perfil dos juízes, `.env`). |
+| D2 | **Toda skill vinda de outra instalação espera aprovação**, mesmo do mesmo sistema. |
+| D3 | **Syncthing**, com versionamento de arquivos ligado na pasta, pelo menos na VPS. |
+| — | Sync Agent **interno**, sem dependência externa obrigatória; SQLite continua a fonte de verdade local; transporte por **zips imutáveis**; Zengram e Mem0 não entram agora. |
 
 ## Fase 5 — Validação
 
@@ -144,8 +189,8 @@ pacote, o que entrou, o que está para revisar). Mais o botão "sincronizar agor
 
 | Etapa | Entrega | Teste |
 |---|---|---|
-| 1 | Configuração, id e nome; exportar com escrita atômica e "só se mudou" | Arquivo parcial nunca visível com o nome final; sem mudança, sem pacote novo |
-| 2 | Importar: próprio ignorado, só mais novo, pacote incompleto adiado, segurança só se algo entra, retenção | Três instalações simuladas em pastas, ida e volta sem duplicar |
-| 3 | "Só desta máquina" (D1) e regra das skills (D2) | O marcado não sai; skill de outro sistema espera aprovação |
-| 4 | Cartão no painel (3 línguas) e "sincronizar agora" | — |
-| 5 | Prova real: PC, notebook e VPS com o programa escolhido | Algo aprendido numa máquina aparece nas outras duas, sem duplicar; sem rede, nada quebra |
+| 1 | Configuração, UUID e nome; pasta, manifesto com SHA-256; exportar fotografia completa com escrita atômica e "só se mudou"; retenção dos próprios | Arquivo parcial nunca aparece com o nome final; sem mudança, sem pacote novo; manifesto sempre aponta para um zip completo |
+| 2 | Importar: trava única, só o mais novo, SHA conferido, pacote incompleto adiado, segurança só se algo entra | Três instalações simuladas em pastas: ida e volta sem duplicar; importar 10 vezes = 1 vez; máquina "desligada" que volta e importa só o último |
+| 3 | "Só desta máquina" (D1); skills chegam como pendentes (D2) | O marcado não sai; skill importada não age antes de aprovada; a limpeza de propostas do `SkillLearner` não apaga uma pendente diferente da ativa |
+| 4 | Tela "Sincronização de Conhecimento" | — |
+| 5 | Prova real: PC, notebook e VPS com Syncthing | Algo aprendido numa máquina aparece nas outras duas sem duplicar; uma máquina desligada por um tempo recupera tudo; sem rede, nada quebra |
