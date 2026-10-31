@@ -10,13 +10,15 @@
  * ferramentas ou um segredo usado na tarefa; uma skill com segredo, nome repetido ou forma inválida ser gravada; a skill aprendida
  * não nascer ativa e carregável pelo SkillLoader, com a origem declarada; o aviso não chegar ao canal da conversa ou não trazer o
  * comando de desfazer; o molde genérico voltar a ser proposto com o aprendizado automático ligado; os dois pontos de conclusão
- * deixarem de registrar o aprendizado.
+ * deixarem de registrar o aprendizado; a pasta que o SkillLearner gera deixar de estar no .gitignore, ou alguma
+ * skills/aprendida_* ficar rastreada pelo git (ADR-036: skill aprendida é da instância, não do código distribuído).
  *
  * Execução: npx ts-node src/__tests__/regression/S393_SkillsAprendidas_ComOQueFuncionou.test.ts
  */
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { spawnSync } from 'child_process';
 import Database from 'better-sqlite3';
 import {
     coletarSegredos, interpretarResposta, mascarar, modoDeAprendizado, montarPedidoDeAprendizado, montarTrajetoria, motivoParaRecusar,
@@ -142,6 +144,20 @@ try {
     const sk = loader.getSkill('gmail-via-himalaya');
     assert(!!sk && sk.description.startsWith('Quando o usuário pedir') && sk.content.includes('himalaya envelope list') && sk.content.includes('Aprendida automaticamente'), 'o SkillLoader carrega a skill, com o procedimento e a origem declarada', sk?.content.slice(0, 200));
     assert(!!sk && !sk.content.includes(SENHA_DE_APP), 'o pedido citado na origem vai com o segredo mascarado');
+
+    // ADR-036: o SKILL.md aprendido é cópia derivada do banco da instância; não pode entrar no git do código distribuído.
+    // A pasta checada é a que o SkillLearner acabou de gerar, para o teste acompanhar uma mudança do prefixo.
+    const raizDoRepo = path.resolve(__dirname, '..', '..', '..');
+    const git = (...args: string[]) => spawnSync('git', ['-C', raizDoRepo, ...args], { encoding: 'utf-8' });
+    const arvore = git('rev-parse', '--is-inside-work-tree');
+    if (arvore.status !== 0 || arvore.stdout.trim() !== 'true') {
+        console.log(`  ⚠️ Não verificado: ${raizDoRepo} não é uma árvore de trabalho do git (git rev-parse: status ${arvore.status}${arvore.error ? `, ${arvore.error.message}` : ''}).`);
+    } else {
+        const pastaGerada = path.basename(path.dirname(arquivo));
+        assert(git('check-ignore', '-q', `skills/${pastaGerada}/SKILL.md`).status === 0, `o .gitignore cobre a pasta que o SkillLearner gera (skills/${pastaGerada}/)`);
+        const rastreadas = git('ls-files', '--', 'skills').stdout.split('\n').filter(f => /^skills\/aprendida[_-]/.test(f));
+        assert(rastreadas.length === 0, 'nenhuma skills/aprendida_* está rastreada pelo git', rastreadas);
+    }
     assert(r.aprendida && r.aviso.includes('Aprendi a ler o seu Gmail') && r.aviso.includes('/skill_desativar gmail-via-himalaya'), 'aviso: frase do LLM + comando de desfazer literal', r);
     const repetida = await learner.aprenderComTrajetoria(entrada, llm(JSON.stringify(PROPOSTA_OK)));
     assert(!repetida.aprendida, 'a mesma skill não é criada duas vezes');
