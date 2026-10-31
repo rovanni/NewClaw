@@ -114,7 +114,7 @@ assert(semEmbrulho.tipo === 'aprender' && semEmbrulho.proposta.procedimento === 
 if (embrulhada.tipo === 'aprender') {
     const corpo = montarCorpoDaSkill(embrulhada.proposta, { pedido: 'rode o script que está na pasta de trabalho', plataforma: 'windows', data: '2026-10-31', segredos: [] });
     assert(corpo.includes('```powershell\nGet-ChildItem -Recurse\n```'), 'o corpo da skill mantém os blocos de código com cerca e linguagem', corpo);
-    assert(corpo.includes('que está na pasta') && !corpo.includes('�'), 'acentos do pedido citado na origem chegam intactos (sem U+FFFD)');
+    assert(corpo.includes('que está na pasta') && !corpo.includes('\uFFFD'), 'acentos do pedido citado na origem chegam intactos (sem U+FFFD)');
 }
 if (ok.tipo === 'aprender') {
     assert(motivoParaRecusar(ok.proposta, { nomesExistentes: ['Gmail via Himalaya'], segredos: [] }) !== null, 'nome que já existe → recusada');
