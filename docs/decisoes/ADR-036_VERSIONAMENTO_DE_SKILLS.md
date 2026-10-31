@@ -1,10 +1,10 @@
 # ADR-036 — Versionamento de skills: oficiais, aprendidas e promovidas
 
-Data: 31/10/2026. Status: **proposta, revisão 2** (revisão 2: incorpora o parecer recebido em 31/10/2026 — procedência
-na promoção, original mantido após a promoção, backup para reconstrução, dois testes de integridade, a tabela de
-responsabilidades e o princípio a preservar; as decisões D1–D5 passam a ter uma resolução recomendada, a confirmar pela
-operadora). Permanece **Proposed**. Nada será implementado antes da aprovação da operadora; esta revisão só altera
-documentação.
+Data: 31/10/2026. Status: **aceita em 31/10/2026, revisão 3** (revisão 3: as decisões D1–D5 e o mecanismo A foram
+confirmados pela operadora, que determinou seguir o parecer de 31/10/2026; a implementação segue a sequência da seção
+"Decisões", em commits pequenos e independentes. Revisão 2: incorporou o parecer — procedência na promoção, original
+mantido após a promoção, backup para reconstrução, testes de integridade, tabela de responsabilidades e princípio a
+preservar). Seguem abertos o destino do `skills-lock.json` e a avaliação da alternativa B.
 
 Relacionadas: `docs/ARCHITECTURE/SEPARACAO_DISTRIBUIDO_APRENDIDO.md` (a norma que esta ADR aplica às skills),
 ADR-017 (skills aprendidas com o que funcionou), ADR-020 (backup do conhecimento), ADR-034 (Sync Agent) e
@@ -141,7 +141,7 @@ física. Observação: como `SKILLS_DIR` já existe, uma instância isolada pode
 também as skills oficiais, por isso não substitui a B.
 
 Limitações que permanecem: o prefixo é convenção; a classe "promovida" não tem ainda uma marca no cabeçalho (isso é
-assunto do cabeçalho da ADR-035, que também aguarda aprovação); o `skills-lock.json` é outro assunto (ver "Pendências que o parecer não resolveu").
+assunto do cabeçalho da ADR-035, que também aguarda aprovação); o `skills-lock.json` é outro assunto (ver "Pendências").
 
 ## Fase 5 — Validação
 
@@ -162,10 +162,9 @@ assunto do cabeçalho da ADR-035, que também aguarda aprovação); o `skills-lo
 
 ## Decisões
 
-Resolução recomendada pelo parecer de 31/10/2026, **a confirmar pela operadora**. Enquanto não houver confirmação, a ADR
-continua `Proposed`.
+Resolução do parecer de 31/10/2026, **confirmada pela operadora** em 31/10/2026.
 
-| # | Ponto | Resolução recomendada |
+| # | Ponto | Resolução |
 |---|---|---|
 | D1 | AgentVault | Destino futuro de backup e sincronização, não o armazenamento atual. O NewClaw funciona sem ele (ADR-031). |
 | D2 | Armazenamento | SQLite é a fonte de verdade das skills aprendidas. O backup deve conter também o necessário para reconstruí-las; provado pelo critério 3 da Fase 5. |
@@ -173,10 +172,17 @@ continua `Proposed`.
 | D4 | Depois da promoção | A aprendida não é apagada nem desativada automaticamente; fica até uma decisão explícita de limpeza. |
 | D5 | Integridade | Dois testes obrigatórios: nenhuma `skills/aprendida_*` rastreada pelo git, e o `SkillLoader` carregando skills aprendidas normalmente (mais a reconstrução a partir do pacote). |
 
-### Pendências que o parecer não resolveu
+**Procedência: sem novas colunas agora.** Primeiro se define o contrato de procedência (os quatro campos acima e a regra
+"não registrado"); só depois se avalia como implementá-lo, inclusive se exige colunas em `auto_skills`.
 
-- **Mecanismo de separação.** O parecer concorda com a sequência: `.gitignore` agora (alternativa A), armazenamento
-  separado (B) só depois. Recomendado; a confirmar.
+### Verificação prévia ao `.gitignore` (31/10/2026)
+
+A regra de ignore não remove o que já é versionado, então se conferiu antes: nenhuma `skills/aprendida*` está no índice
+nem aparece em qualquer ramo do histórico (`git log --all`). Não há `git rm` a fazer.
+
+### Pendências
+
+- **Mecanismo de separação.** Confirmado: `.gitignore` agora (alternativa A), armazenamento separado (B) só depois.
 - **`skills-lock.json`.** Registra a skill `security-audit`, que vive em `.claude/skills` (ferramental do Claude Code, não
   skill do NewClaw), pasta que o `.gitignore` já ignora. Recomendação anterior: não versionar e incluí-lo no `.gitignore`.
   Continua aberto.
