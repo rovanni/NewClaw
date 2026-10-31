@@ -15,7 +15,9 @@
  *       outro host e pasta que já existe; sem aceite não instala; instala, liga no PM2 e registra; desinstala só o que
  *       criou;
  *   4 → o ambiente dos comandos da integração não leva os segredos do NewClaw;
- *   5 → regra 1 da ADR-031: nenhum arquivo de src/ além do catálogo cita uma integração do catálogo.
+ *   5 → regra 1 da ADR-031: nenhum arquivo de src/ além do catálogo cita uma integração do catálogo;
+ *   6 → religar ao subir: depois de reiniciar o computador, o PM2 volta só com o NewClaw (31/10/2026); a integração
+ *       que a pessoa deixou ligada volta, sem rede; a desligada ou desinstalada, não.
  */
 import { spawnSync } from 'child_process';
 import * as fs from 'fs';
@@ -90,8 +92,8 @@ assert(JSON.stringify(montado) === JSON.stringify(['python3', 'instalar.py', '--
     'comando montado com os espaços reservados preenchidos', montado);
 
 // ── 3. Gerenciador ──────────────────────────────────────────────────────────
-async function gerenciadorFalso(opcoes: { redirecionar?: string } = {}) {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), 's465-home-'));
+async function gerenciadorFalso(opcoes: { redirecionar?: string; home?: string } = {}) {
+    const home = opcoes.home ?? fs.mkdtempSync(path.join(os.tmpdir(), 's465-home-'));
     // Pacote de verdade (tar.gz com uma pasta raiz, como o do GitHub), para o `tar` de verdade extrair.
     const fonte = fs.mkdtempSync(path.join(os.tmpdir(), 's465-pacote-'));
     fs.mkdirSync(path.join(fonte, 'integracao-main'));
@@ -102,9 +104,10 @@ async function gerenciadorFalso(opcoes: { redirecionar?: string } = {}) {
     if (t.status !== 0) throw new Error(`tar falhou: ${t.stderr}`);
     const executados: { programa: string; args: string[]; pasta?: string }[] = [];
     // O que a integração falsa responde, mudável no meio do teste (licenças de um pacote novo, instalação que falha).
-    const falso = { licencas: [{ id: 'x', licenca: 'MIT' }] as unknown[], codigoDaInstalacao: 0 };
+    const falso = { licencas: [{ id: 'x', licenca: 'MIT' }] as unknown[], codigoDaInstalacao: 0, online: true, semRede: false };
     const d: Dependencias = {
         async baixar(url) {
+            if (falso.semRede) throw new Error('fetch failed (sem rede)');
             if (url.endsWith('newclaw-integracao.json')) return { urlFinal: url, status: 200, corpo: Buffer.from(JSON.stringify(BASE)) };
             return { urlFinal: opcoes.redirecionar ?? url, status: 200, corpo: fs.readFileSync(tgz) };
         },
@@ -116,7 +119,10 @@ async function gerenciadorFalso(opcoes: { redirecionar?: string } = {}) {
             }
             if (a.includes('--opcoes')) return { codigo: 0, saida: JSON.stringify(OFERECIDAS), erro: '' };
             if (a.includes('--licencas')) return { codigo: 0, saida: JSON.stringify({ versao: 1, itens: falso.licencas }), erro: '' };
-            if (a.includes('jlist')) return { codigo: 0, saida: JSON.stringify([{ name: `newclaw-integracao-${ID}`, pm2_env: { status: 'online' } }]), erro: '' };
+            if (a.includes('jlist')) {
+                const lista = falso.online ? [{ name: `newclaw-integracao-${ID}`, pm2_env: { status: 'online' } }] : [];
+                return { codigo: 0, saida: JSON.stringify(lista), erro: '' };
+            }
             return { codigo: 0, saida: '', erro: '' };
         },
         async acompanhar(programa, a, pasta, aoLer) {
@@ -131,6 +137,7 @@ async function gerenciadorFalso(opcoes: { redirecionar?: string } = {}) {
         home,
         plataforma: 'linux',
         newclawUrl: 'http://127.0.0.1:3090',
+        registro: path.join(home, 'newclaw-data', 'integracoes-opcionais.json'),
     };
     return { g: new GerenciadorDeIntegracoes(d), home, executados, falso };
 }
@@ -175,9 +182,12 @@ async function testarGerenciador(): Promise<void> {
     assert(est.instalada && est.ligada && est.abrir === 'http://127.0.0.1:7860', 'estado: instalada e ligada, com o endereço de abrir', est);
 
     await testarAtualizar(g, man, pasta, executados, falso);
+    await testarReligar(g, man, home);
 
     await g.desinstalar(man);
     assert(!fs.existsSync(pasta), 'desinstalar apaga a pasta que o NewClaw criou');
+    const registroFinal = JSON.parse(fs.readFileSync(path.join(home, 'newclaw-data', 'integracoes-opcionais.json'), 'utf-8'));
+    assert(!(ID in registroFinal), 'desinstalar tira a integração do registro: não volta ao reiniciar', registroFinal);
 
     // Pasta que já existe e não foi criada pelo NewClaw: não escreve nem apaga.
     fs.mkdirSync(pasta);
@@ -248,6 +258,42 @@ async function testarAtualizar(
     try { await g.atualizar(man); assert(false, 'sem escolhas'); } catch (e) {
         assert(e instanceof ErroDaIntegracao && e.motivo === 'revisar', 'instalação sem escolhas guardadas: pede revisão', (e as Error).message);
     }
+}
+
+// ── 3c. Religar ao subir ────────────────────────────────────────────────────
+// O computador reinicia: o PM2 volta só com o NewClaw (lista vazia) e pode não haver rede. Um gerenciador novo, com a
+// mesma pasta e o mesmo registro, faz o papel do NewClaw que acabou de subir.
+async function testarReligar(g: GerenciadorDeIntegracoes, man: ReturnType<typeof validarManifesto>, home: string): Promise<void> {
+    console.log('\n3c. Religar ao subir');
+    await g.ligar(man);
+    const depois = await gerenciadorFalso({ home });
+    depois.falso.online = false;
+    depois.falso.semRede = true;
+    const r = await depois.g.restaurar();
+    const start = depois.executados.find((e) => e.args.includes('start'));
+    assert(r.length === 1 && r[0].resultado === 'religada' && !!start && start.args.includes(`newclaw-integracao-${ID}`),
+        'ligada antes de reiniciar: religada, sem rede (manifesto do registro)', r);
+    assert(!depois.executados.some((e) => e.programa === localizarTar()), 'religar não baixa nem extrai nada');
+
+    depois.falso.online = true;
+    const ja = await depois.g.restaurar();
+    assert(ja.length === 1 && ja[0].resultado === 'ja_ligada', 'já rodando (ex.: o PM2 a restaurou): não liga de novo', ja);
+
+    await g.desligar(man);
+    depois.falso.online = false;
+    const antes = depois.executados.length;
+    const nada = await depois.g.restaurar();
+    assert(nada.length === 0 && !depois.executados.slice(antes).some((e) => e.args.includes('start')),
+        'desligada pela pessoa: continua desligada depois de reiniciar', nada);
+
+    // Registro adulterado (outro id no manifesto guardado): não liga nada e diz o motivo.
+    const arquivo = path.join(home, 'newclaw-data', 'integracoes-opcionais.json');
+    const registro = JSON.parse(fs.readFileSync(arquivo, 'utf-8'));
+    registro[ID] = { ligada: true, manifesto: { ...registro[ID].manifesto, id: 'outra' } };
+    fs.writeFileSync(arquivo, JSON.stringify(registro));
+    const adulterado = await depois.g.restaurar();
+    assert(adulterado.length === 1 && adulterado[0].resultado === 'falhou', 'registro com manifesto de outra integração: falha com motivo', adulterado);
+    await g.ligar(man);  // volta ao estado do resto do teste (ligada, registro coerente)
 }
 
 // ── 4. Ambiente ─────────────────────────────────────────────────────────────

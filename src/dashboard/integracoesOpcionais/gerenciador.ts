@@ -31,8 +31,18 @@ export interface Dependencias {
     plataforma: NodeJS.Platform;
     /** Endereço deste NewClaw para a integração usar (sempre o HTTP local). */
     newclawUrl: string;
+    /**
+     * Arquivo onde fica quais integrações a pessoa deixou ligadas, com o manifesto validado de quando ligou: o NewClaw
+     * religa cada uma ao subir, mesmo sem rede. Sem ele, nada é religado.
+     */
+    registro?: string;
     agora?: () => number;
 }
+
+/** Resultado de religar uma integração quando o NewClaw sobe. */
+export interface Restauracao { id: string; resultado: 'religada' | 'ja_ligada' | 'falhou'; erro?: string }
+
+type Registro = Record<string, { manifesto: unknown; ligada: boolean }>;
 
 export interface Andamento {
     id: string;
@@ -302,11 +312,51 @@ export class GerenciadorDeIntegracoes {
         ]);
         if (r.codigo !== 0) throw new ErroDaIntegracao(`o PM2 não ligou a integração: ${(r.erro || r.saida).trim().slice(-300)}`, 500);
         await this.pm2(['save']);
+        this.anotar(m.id, { manifesto: m, ligada: true });
     }
 
     async desligar(m: Manifesto): Promise<void> {
         await this.pm2(['stop', this.nomeNoPm2(m)]);
         await this.pm2(['save']);
+        this.anotar(m.id, { manifesto: m, ligada: false });
+    }
+
+    // ─── religar ao subir ────────────────────────────────────────────────────
+    // O `newclaw start` sobe o PM2 só com o ecosystem do NewClaw e o `pm2 save` nunca é restaurado: depois de reiniciar o
+    // computador, a integração que a pessoa deixou ligada ficava desligada (31/10/2026, Windows). Quem sabe o que a pessoa
+    // ligou é este gerenciador; por isso é ele quem religa, a partir do registro, sem depender da rede.
+
+    private lerRegistro(): Registro {
+        if (!this.d.registro) return {};
+        try { return JSON.parse(fs.readFileSync(this.d.registro, 'utf-8')) as Registro; } catch { return {}; }
+    }
+
+    private anotar(id: string, valor: Registro[string] | null): void {
+        if (!this.d.registro) return;
+        const registro = this.lerRegistro();
+        if (valor) registro[id] = valor; else delete registro[id];
+        fs.mkdirSync(path.dirname(this.d.registro), { recursive: true });
+        fs.writeFileSync(this.d.registro, JSON.stringify(registro, null, 2));
+    }
+
+    /** Religa as integrações do catálogo que a pessoa deixou ligadas e que não estão rodando. Nunca liga outra. */
+    async restaurar(): Promise<Restauracao[]> {
+        const resultados: Restauracao[] = [];
+        for (const [id, item] of Object.entries(this.lerRegistro())) {
+            if (!item.ligada || !CATALOGO.some((c) => c.id === id)) continue;
+            try {
+                const m = validarManifesto(item.manifesto, HOSTS_PERMITIDOS);
+                if (m.id !== id) throw new ErroDaIntegracao(`o registro de '${id}' guarda o manifesto de '${m.id}'`, 500);
+                const estado = await this.estado(m);
+                if (!estado.instalada) throw new ErroDaIntegracao(`não está instalada em ${estado.pasta}`, 409);
+                if (estado.ligada) { resultados.push({ id, resultado: 'ja_ligada' }); continue; }
+                await this.ligar(m);
+                resultados.push({ id, resultado: 'religada' });
+            } catch (e) {
+                resultados.push({ id, resultado: 'falhou', erro: (e as Error).message });
+            }
+        }
+        return resultados;
     }
 
     /** Tira do PM2 e apaga a pasta — só se ela tiver sido criada aqui (marcador desta integração). */
@@ -315,5 +365,6 @@ export class GerenciadorDeIntegracoes {
         if (!marcador || marcador.id !== m.id) throw new ErroDaIntegracao(`${this.pasta(m)} não foi instalada pelo NewClaw; não apago`, 409);
         if (this.d.pm2) { await this.pm2(['delete', this.nomeNoPm2(m)]); await this.pm2(['save']); }
         fs.rmSync(this.pasta(m), { recursive: true, force: true });
+        this.anotar(m.id, null);
     }
 }
