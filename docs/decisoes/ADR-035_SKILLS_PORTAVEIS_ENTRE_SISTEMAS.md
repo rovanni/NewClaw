@@ -58,9 +58,8 @@ adivinhar? E como escrever os caminhos para que o mesmo arquivo sirva nas três 
 - **Nome da máquina, do usuário ou IP** no cabeçalho foi descartado: as skills podem ir parar no GitHub. Para dizer
   de qual instalação veio, basta o id curto que a ADR-034 já criou.
 - **Componente decidindo pelo agente?** (Princípio da Preservação do Raciocínio.) O carregamento só **informa**
-  ("validada no Windows; os comandos podem não valer aqui"), e o agente decide. A única decisão determinística é
-  não oferecer a skill quando `plataformas` exclui este sistema. Ela é aceitável porque quem decidiu foi o autor da
-  skill, de forma explícita, e não uma heurística: é o mesmo caso de uma ferramenta que não existe neste sistema.
+  ("validada no Windows; os comandos podem não valer aqui"), e o agente decide. Nem a skill cujo `plataformas`
+  exclui este sistema é escondida (D3): ela é oferecida com o aviso, e o agente decide se algo dela serve aqui.
 - **`validada_em` crescendo sozinho:** hoje **não existe** registro de "esta skill foi usada num objetivo que deu
   certo" (`auto_skills` não tem contador de uso; o `OperationalKnowledge` conta comandos, não skills). Inventar
   essa ligação agora seria adivinhar. Na V1, `validada_em` começa com a `origem` e cresce por confirmação no painel.
@@ -148,7 +147,7 @@ Regras do formato:
 |---|---|
 | `plataformas` é `todas`, ou inclui este sistema, e `validada_em` inclui este sistema | Carrega normal |
 | `plataformas` inclui este sistema, mas `validada_em` não | Carrega, com uma linha para o agente: "validada em win32; ainda não neste sistema (linux); confira os comandos" |
-| `plataformas` não inclui este sistema | Não é oferecida ao agente. O painel mostra "não se aplica a este sistema". A skill continua no disco e continua viajando para as outras máquinas |
+| `plataformas` não inclui este sistema | Carrega, com uma linha para o agente: "feita só para win32; este sistema é linux; os passos podem não existir aqui" (D3). O painel mostra "feita para outro sistema". A skill continua viajando para as outras máquinas |
 | `requer` lista um programa que não está no PATH | Carrega, com uma linha para o agente: "falta: himalaya". O painel mostra o mesmo |
 | Sem os campos novos | Como hoje |
 
@@ -161,7 +160,7 @@ Antes do detector de caminhos, `importarPacote` lê o cabeçalho:
 - Com `formato_skill`: a decisão usa os campos. Corpo só com marcadores, sem caminho literal de outro sistema → segue
   a regra de ativação da ADR-017, como na ADR-034. Caminho literal de outro sistema no corpo → proposta, como hoje.
 - Sem `formato_skill`: o detector decide, como hoje.
-- `plataformas` que exclui este sistema não é motivo para recusar: a skill entra, só não é oferecida aqui.
+- `plataformas` que exclui este sistema não é motivo para recusar: a skill entra e é oferecida com o aviso.
 
 ### 5. Como `validada_em` cresce
 
@@ -192,7 +191,7 @@ da ADR-034 os leva. Sem elas, o arquivo regerado a partir do banco perderia o ca
 |---|---|
 | D1 | Os nomes dos campos (`origem`, `validada_em`, `plataformas`, `requer`, `instalacao_origem`, `formato_skill`) ficam assim? |
 | D2 | **Decidido (31/10/2026): pastas pessoais já entram na V1**, com `{PASTA:nome}` e uma tabela local por instalação, editada no painel (seção 2). |
-| D3 | `plataformas` excluindo este sistema: a skill some para o agente (proposta) ou aparece com aviso? |
+| D3 | **Decidido (31/10/2026): skill feita para outro sistema aparece com aviso**, nunca é escondida; o agente decide (seção 3). |
 
 ## Fase 5 — Validação
 
@@ -202,7 +201,7 @@ da ADR-034 os leva. Sem elas, o arquivo regerado a partir do banco perderia o ca
 | Problema estrutural ou sintoma? | Estrutural: a skill passa a declarar fatos sobre si, em vez de a importação adivinhar pelo texto |
 | Reduz a complexidade? | Mantém: nenhum arquivo novo; o detector continua como rede para as skills sem cabeçalho |
 | Elimina fontes de verdade? | Uma: a plataforma deixa de existir só como texto livre na descrição |
-| Cognitive Kernel? | Sim: o carregamento entrega fatos ao agente; a única decisão (não oferecer) é declarada pelo autor da skill |
+| Cognitive Kernel? | Sim: o carregamento só entrega fatos ao agente, sem esconder nenhuma skill |
 | Incremental? | Sim (plano abaixo) |
 | Reversível? | Sim: os campos são ignorados por quem não os conhece; os marcadores voltam a ser caminhos com a migração inversa |
 
@@ -215,6 +214,6 @@ da ADR-034 os leva. Sem elas, o arquivo regerado a partir do banco perderia o ca
 | 3 | Carregamento: as três situações da seção 3 e o `requer` | Regressão com skills de exemplo nos três casos |
 | 4 | Importação lê o cabeçalho antes do detector | Skill só com marcadores, vinda de outro sistema, segue a ADR-017; com caminho literal, fica proposta; sem cabeçalho, como hoje |
 | 5 | Migração das 33 skills, primeiro numa cópia, com relatório e pacote de segurança | Relatório revisado pela operadora antes de rodar na instalação real |
-| 6 | Painel: "funcionou aqui", "não se aplica", "falta: X", tabela de pastas e "pasta não configurada" | Prova real: uma skill aprendida no PC carregando na VPS |
+| 6 | Painel: "funcionou aqui", "feita para outro sistema", "falta: X", tabela de pastas e "pasta não configurada" | Prova real: uma skill aprendida no PC carregando na VPS |
 
 A etapa 4 depende da ADR-034. As etapas 1 a 3 servem sozinhas, para backup e importação manual (ADR-020).
