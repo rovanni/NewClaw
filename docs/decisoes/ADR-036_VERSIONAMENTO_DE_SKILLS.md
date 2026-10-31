@@ -157,7 +157,8 @@ assunto do cabeçalho da ADR-035, que também aguarda aprovação); o `skills-lo
   2. **Aprendizado preservado:** o `SkillLoader` continua carregando normalmente uma skill aprendida exportada pelo
      `SkillLearner` em pasta temporária. Não queremos corrigir o versionamento e quebrar o aprendizado.
   3. **Reconstrução:** a partir de um pacote do ADR-020, numa instalação limpa, a skill aprendida volta a ser carregada
-     (banco e arquivos presentes).
+     (banco e arquivos presentes). *Provado em 31/10/2026 (S399-7 e S400-8): arquivo byte a byte, linha de `auto_skills`
+     idêntica em todas as colunas, carregamento pelo `SkillLoader` e arquivo reconstruído só a partir do banco.*
   4. Aprovar uma skill aprendida numa instância rodando a partir da pasta do repositório deixa `git status` limpo.
 
 ## Decisões
@@ -199,12 +200,33 @@ nem aparece em qualquer ramo do histórico (`git log --all`). Não há `git rm` 
     (HTTP, sessão), **não foi determinado**: esse trecho não foi testado. Não encontrei log nem banco que guarde o
     pedido original (a linha da skill não está no `data/newclaw.db` do repositório nem no da produção), e a causa no
     emissor não foi provada. Fica registrado como indeterminado (`NUNCA_ADIVINHAR`).
-  - *Fonte.* Não localizei o banco que gerou a skill; o `SKILL.md` solto é a única cópia conhecida. Não foi alterado nem apagado. Como
-    o `.gitignore` o cobre agora, ele deixou de aparecer no `git status`. Corrigi-lo à mão (restaurar as cercas e o "á")
-    cria divergência entre arquivo e banco; decisão pendente da operadora: manter como está, corrigir à mão ou apagar.
+  - *Fonte e recuperação.* Não localizei o banco que gerou a skill; o `SKILL.md` solto é a única cópia conhecida. Não foi
+    alterado nem apagado, e como o `.gitignore` o cobre, deixou de aparecer no `git status`. Tratado como **artefato de
+    recuperação**, não como skill: o original foi preservado byte a byte (com SHA-256), e uma cópia corrigida teve só as
+    cercas de código reconstruídas pela estrutura (6 linhas; o `U+FFFD` ficou como está, pois não há como confirmá-lo).
+    Material e relatório em `scratch/recuperacao-skill-aprendida/` (ignorada pelo git, fora de `skills/`). Não foi promovida
+    nem reintroduzida: isso exige decidir como criar a linha em `auto_skills`, que não existe. Decisão pendente da operadora.
   - *Como a skill foi parar em `./skills` do repositório:* alguma instância rodou com a pasta de skills do repositório
     (o padrão `./skills`, relativo ao diretório de execução). Não identifiquei qual. Isso reforça a avaliação da alternativa
     B (pasta separada, ou `SKILLS_DIR` próprio nas instâncias de validação).
+
+### Verificação do `SKILLS_DIR` (31/10/2026)
+
+Mapeei, no código de produção, quem lê e quem grava skills. Nada foi alterado.
+
+| Ponto | Diretório usado | Segue `SKILLS_DIR`? |
+|---|---|---|
+| `index.ts:89` | `process.env.SKILLS_DIR \|\| './skills'` (vira `config.skillsDir`) | origem do valor |
+| `AgentController.ts:229-230` | `SkillLoader` e `SkillLearner` recebem `config.skillsDir` | sim |
+| `dashboard/routes/skills.ts:14` | `ctx.config.skillsDir` | sim |
+| `backupDoConhecimento.ts:61` | `path.resolve(raiz, process.env.SKILLS_DIR \|\| './skills')` | sim |
+| `GoalPlanner.ts:778` | `new SkillLoader()`: padrão `./skills`, sem receber a configuração | **não** |
+| `DashboardServer.ts:159` | `new SkillInstaller()`: padrão `./skills` (grava em `skills/public/`) | **não** |
+
+Leitura do código, **não reproduzida em execução**: com `SKILLS_DIR` apontando para outra pasta, o resumo de skills que o
+planejador usa e o destino das skills instaladas pelo painel continuam em `./skills`, enquanto o controlador, o aprendizado
+e o backup usam a pasta configurada. Hoje `SKILLS_DIR` não é fonte única. Isso precisa ser decidido antes da alternativa B
+(pasta separada), porque apontar uma instância para outra pasta não bastaria para isolá-la.
 
 ### Sequência de trabalho
 
@@ -213,6 +235,6 @@ Sem implementar tudo de uma vez, e só depois da confirmação:
 1. Revisar e consolidar esta ADR. *Feito.*
 2. Confirmar D1–D5 e as pendências acima. *Feito (D1–D5); pendências abertas.*
 3. Implementar a regra de ignore (alternativa A). *Feito (`1984bce`).*
-4. Criar os testes de regressão (Fase 5). *Feito os critérios 1, 2 e 4, estendendo o S393 (`e0c8a5b`); o 2 já era coberto. Falta o critério 3 (reconstrução a partir do pacote do ADR-020).*
-5. Investigar a skill aprendida solta. *Feito: cercas corrigidas (`37b4f18`); `U+FFFD` indeterminado; destino do arquivo pendente.*
+4. Criar os testes de regressão (Fase 5). *Feito: critérios 1, 2 e 4 no S393 (`e0c8a5b`; o 2 já era coberto) e critério 3 no S399-7 (restauração) e no S400-8 (importação), cada um com validação negativa. Limite: a restauração agenda o banco para o próximo início; o teste lê o banco agendado (`newclaw.db.restore`), não executa a troca na subida do app.*
+5. Investigar a skill aprendida solta. *Feito: cercas corrigidas no código (`74aacf2`); `U+FFFD` indeterminado; cópia de recuperação criada e original preservado; reintrodução pendente.*
 6. Só então avaliar a evolução para armazenamento separado (B).
