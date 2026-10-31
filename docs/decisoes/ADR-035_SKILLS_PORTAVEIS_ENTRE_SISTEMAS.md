@@ -73,7 +73,7 @@ adivinhar? E como escrever os caminhos para que o mesmo arquivo sirva nas três 
 | A. Manter só o detector de caminhos (hoje) | Nada a fazer | Adivinha pelo texto; não distingue "nasceu no Windows" de "só serve no Windows"; manda para revisão skills que só citam a pasta do NewClaw |
 | B. Uma skill por sistema (`SKILL.win32.md`, `SKILL.linux.md`) | Cada uma exata | Triplica o trabalho; o aprendizado gera uma só; as cópias divergem (`QUANDO_EXTRAIR_DUPLICACAO.md`) |
 | C. Reescrever caminhos ao importar | Skill pronta no destino | Arquivo diferente por máquina; pingue-pongue no Sync Agent; reescrita errada estraga a skill sem aviso |
-| **D. Cabeçalho com fatos + marcadores no corpo, resolvidos ao carregar** | Um arquivo para as três; compatível com as versões antigas; a importação lê fatos em vez de adivinhar | Migração única das skills existentes; pastas pessoais ainda sem marcador (seção 2) |
+| **D. Cabeçalho com fatos + marcadores no corpo, resolvidos ao carregar** | Um arquivo para as três; compatível com as versões antigas; a importação lê fatos em vez de adivinhar | Migração única das skills existentes; cada instalação precisa configurar as pastas pessoais que usa (seção 2) |
 
 **Gate "extensão antes de criação":** nenhum arquivo novo. Tudo é extensão do que existe:
 `SkillLoader.parseFrontmatter` (campos novos e expansão dos marcadores), `SkillLearner.exportSkillFile` e
@@ -129,10 +129,17 @@ Regras do formato:
   sistema. O arquivo em disco não muda.
 - Ao aprender, `montarCorpoDaSkill` troca os caminhos desta instalação pelos marcadores antes de gravar. É uma troca
   exata de prefixo conhecido (a pasta do NewClaw, do workspace, das skills), não um palpite sobre o texto.
-- **Pastas de dados da pessoa** (a pasta de aulas, por exemplo) **não têm marcador na V1.** Cada máquina guarda
-  essas pastas num lugar diferente, ou nem as tem. Essas skills continuam com o caminho, e o detector as segura
-  para revisão noutro sistema. Um marcador com nome (`{PASTA:aulas}`, mapeado por instalação no painel) fica como
-  pergunta para a operadora (D2).
+- **Pastas de dados da pessoa entram com marcador com nome (D2):** `{PASTA:aulas}`.
+  - Cada instalação tem a sua tabela `nome → pasta`, editada no painel (Skills → "Pastas"). A tabela é **local**:
+    não vai no pacote da ADR-034, porque a mesma pasta fica num lugar diferente em cada máquina.
+  - O nome usa só letras minúsculas, números e hífen. É o único pedaço que viaja dentro da skill.
+  - Na expansão, o resto do caminho depois do marcador (`{PASTA:aulas}\2026\prova.docx`) ganha o separador deste
+    sistema, até o primeiro espaço, aspas ou fim de linha.
+  - **Nome sem pasta nesta instalação:** o marcador fica como está, e o agente recebe a linha "a pasta 'aulas'
+    não está configurada nesta instalação". O painel mostra o mesmo, com um botão para configurar. Nada de procurar
+    uma pasta parecida (`NUNCA_ADIVINHAR.md`).
+  - Ao aprender, só os prefixos que estão na tabela viram marcador, e o mais longo ganha. No Windows a comparação
+    ignora maiúsculas e minúsculas. Caminho fora da tabela fica literal, e o detector o segura noutro sistema.
 - Marcador desconhecido fica como está, sem erro.
 
 ### 3. Carregamento (`SkillLoader`)
@@ -167,7 +174,10 @@ Antes do detector de caminhos, `importarPacote` lê o cabeçalho:
 - Aprendidas (`auto_skills`): `origem` sai da linha "Aprendida automaticamente ... (win32)" do corpo, quando existe.
   `validada_em` = `origem`. `plataformas` e `requer` ficam **vazios** (desconhecidos), sem chute.
 - Escritas à mão: só `formato_skill: 1`; o resto fica desconhecido até alguém preencher.
-- Caminhos da pasta do NewClaw, do workspace e das skills nos corpos viram marcadores. Os outros ficam.
+- Caminhos da pasta do NewClaw, do workspace e das skills nos corpos viram marcadores.
+- Pastas pessoais: a migração lista os caminhos literais que sobraram, agrupados por pasta, e **propõe** um nome
+  para cada uma. A operadora confirma ou troca o nome no relatório; só as pastas confirmadas entram na tabela e viram
+  `{PASTA:nome}`. As outras ficam literais.
 - A migração gera um relatório: o que mudou em cada arquivo, antes e depois, e quais skills ainda têm caminho literal.
   Ela roda primeiro numa cópia. Antes de rodar, faz um pacote de segurança (ADR-020).
 
@@ -181,7 +191,7 @@ da ADR-034 os leva. Sem elas, o arquivo regerado a partir do banco perderia o ca
 | # | Pergunta |
 |---|---|
 | D1 | Os nomes dos campos (`origem`, `validada_em`, `plataformas`, `requer`, `instalacao_origem`, `formato_skill`) ficam assim? |
-| D2 | Pastas pessoais (aulas, por exemplo): ficam fora da V1 (com caminho, revisão noutro sistema) ou já entram com `{PASTA:nome}` mapeado no painel? |
+| D2 | **Decidido (31/10/2026): pastas pessoais já entram na V1**, com `{PASTA:nome}` e uma tabela local por instalação, editada no painel (seção 2). |
 | D3 | `plataformas` excluindo este sistema: a skill some para o agente (proposta) ou aparece com aviso? |
 
 ## Fase 5 — Validação
@@ -200,11 +210,11 @@ da ADR-034 os leva. Sem elas, o arquivo regerado a partir do banco perderia o ca
 
 | Etapa | Entrega | Teste |
 |---|---|---|
-| 1 | `SkillLoader`: campos novos e expansão dos marcadores | Versão antiga do leitor com cabeçalho novo = mesmo resultado; marcador vira caminho com o separador certo nos três sistemas; marcador desconhecido fica intacto |
-| 2 | Aprender: `montarCorpoDaSkill` troca prefixos por marcadores; `exportSkillFile` e `auto_skills` com os campos | Skill aprendida tem os campos e nenhum caminho da instalação no corpo; regerar a partir do banco mantém o cabeçalho |
+| 1 | `SkillLoader`: campos novos e expansão dos marcadores, inclusive `{PASTA:nome}` com a tabela local | Versão antiga do leitor com cabeçalho novo = mesmo resultado; marcador vira caminho com o separador certo nos três sistemas, também no resto do caminho; nome sem pasta fica intacto e gera o aviso; marcador desconhecido fica intacto |
+| 2 | Aprender: `montarCorpoDaSkill` troca prefixos (das pastas do NewClaw e da tabela) por marcadores; `exportSkillFile` e `auto_skills` com os campos | Skill aprendida tem os campos e nenhum caminho da tabela no corpo; prefixo mais longo ganha; maiúsculas no Windows; regerar a partir do banco mantém o cabeçalho; a tabela não entra no pacote da ADR-034 |
 | 3 | Carregamento: as três situações da seção 3 e o `requer` | Regressão com skills de exemplo nos três casos |
 | 4 | Importação lê o cabeçalho antes do detector | Skill só com marcadores, vinda de outro sistema, segue a ADR-017; com caminho literal, fica proposta; sem cabeçalho, como hoje |
 | 5 | Migração das 33 skills, primeiro numa cópia, com relatório e pacote de segurança | Relatório revisado pela operadora antes de rodar na instalação real |
-| 6 | Painel: "funcionou aqui", "não se aplica", "falta: X" | Prova real: uma skill aprendida no PC carregando na VPS |
+| 6 | Painel: "funcionou aqui", "não se aplica", "falta: X", tabela de pastas e "pasta não configurada" | Prova real: uma skill aprendida no PC carregando na VPS |
 
 A etapa 4 depende da ADR-034. As etapas 1 a 3 servem sozinhas, para backup e importação manual (ADR-020).
