@@ -1,5 +1,7 @@
 # RFC-008 — Contexto de Aplicativo Hospedeiro (o Planner de goals precisa saber onde a conversa acontece)
 
+> **RETIRADA em 04/11/2026** (decisão da operadora, auditoria de pendências): o suplemento do PowerPoint saiu do núcleo para o repositório `newclaw-powerpoint` e conversa com o NewClaw só pelo contrato público do turno (ADR-031). Saíram do núcleo a ferramenta `powerpoint_control`, o contexto do aplicativo hospedeiro (`hostAppContext`, `HOST_CONTEXT`), a fila de comandos (`powerpointBroker`) e a liberação de origem do suplemento. O texto abaixo fica como registro do que foi decidido e implementado; a validação pendente que ele cita não será feita.
+
 **Status:** APROVADA (01/10/2026); **RC1 em implementação, modo sombra** — commit `77a533b`, teste
 S312. `HOST_CONTEXT=shadow` apenas loga `[HOST-CONTEXT]`; o prompt do Planner **não** muda. O modo
 `on` **não está aprovado**: depende da etapa S-B3 (logs reais acumulados; **em coleta passiva desde 02/10/2026**,

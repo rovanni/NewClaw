@@ -198,7 +198,7 @@ un PR humano manual leyendo la evidencia aprendida y decidiendo incorporarla al 
 | **Memoria** | `memory_search`, `memory_write`, `memory_admin` |
 | **Web** | `web_search`, `web_navigate` (usa `w3m`/`lynx`/`links`/`elinks` cuando está disponible, fallback a HTML), `api_request` |
 | **Sistema/archivos** | `exec_command`, `ssh_exec`, `read`, `write`, `edit`, `read_document`, `list_workspace`, `organize_workspace`, `refresh_workspace`, `analyze_workspace_groups`, `schedule` |
-| **Media/documentos** | `send_document`, `send_audio`, `powerpoint_control` |
+| **Media/documentos** | `send_document`, `send_audio` |
 | **Datos/financiero** | `crypto_analysis`, `weather` |
 
 Las herramientas peligrosas (`exec_command`, `ssh_exec`, `api_request` contra hosts arbitrarios)

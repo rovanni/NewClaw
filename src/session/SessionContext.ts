@@ -20,7 +20,6 @@ import { MemoryManager } from '../memory/MemoryManager';
 import { ContextBudget, ContextBlock, DEFAULT_BUDGET } from '../loop/ContextBudget';
 import { LLMMessage } from '../core/ProviderFactory';
 import { createLogger } from '../shared/AppLogger';
-import { hostContextMode, buildHostAppContextBlock } from '../shared/hostAppContext';
 const log = createLogger('SessionContext');
 
 export interface SessionContextResult {
@@ -105,43 +104,6 @@ export class SessionContext {
         // 4. Build state block (short, essential info)
         const now = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', dateStyle: 'full', timeStyle: 'short' });
         let stateBlock = `[ESTADO]\nData: ${now}`;
-
-        // Injeta contexto do aplicativo hospedeiro quando presente.
-        // Atualmente apenas o suplemento PowerPoint define hostApp='powerpoint'.
-        // Canais como Telegram, Discord, dashboard web NAO possuem hostApp.
-        const HOST_APP_HINTS: Record<string, string> = {
-            powerpoint: 'Suplemento Microsoft PowerPoint — o usuario esta interagindo de dentro do PowerPoint. '
-                + 'Quando o usuario mencionar "tema", "slide", "apresentacao", "design" ou termos similares, '
-                + 'presuma que se refere ao contexto do PowerPoint aberto. '
-                + 'Voce pode gerar e inserir slides .pptx diretamente na apresentacao ativa via send_document.',
-        };
-        const hostApp = channelMetadata?.hostApp as string | undefined;
-        // RFC-008 (HOST_CONTEXT=on): FONTE ÚNICA — o mesmo bloco de fatos, sanitizado e limitado, que o Planner
-        // de goals recebe. Substitui o bloco legado abaixo, que juntava os textos do slide SEM sanitizar
-        // (uma linha hostil do slide podia forjar linhas no contexto). Fora do modo `on` o legado segue como estava.
-        const hostBlockOn = hostContextMode() === 'on' ? buildHostAppContextBlock(channelMetadata) : '';
-        if (hostBlockOn) {
-            stateBlock += `\n\n${hostBlockOn}`;
-        } else if (hostApp && HOST_APP_HINTS[hostApp]) {
-            stateBlock += `\nCanal: ${HOST_APP_HINTS[hostApp]}`;
-            
-            // Injeta as informacoes detalhadas do slideContext se existirem
-            const slideContext = channelMetadata?.slideContext as { presentationTitle?: string, currentSlide?: number, totalSlides?: number, slideTexts?: string[] } | undefined;
-            if (slideContext) {
-                stateBlock += `\n\n[CONTEXTO DO POWERPOINT ABERTO]`;
-                if (slideContext.presentationTitle) {
-                    stateBlock += `\nArquivo: ${slideContext.presentationTitle}`;
-                }
-                if (slideContext.currentSlide && slideContext.totalSlides) {
-                    stateBlock += `\nSlide ativo: ${slideContext.currentSlide} de ${slideContext.totalSlides}`;
-                }
-                if (slideContext.slideTexts && slideContext.slideTexts.length > 0) {
-                    stateBlock += `\nTextos no slide ativo:\n- ${slideContext.slideTexts.join('\n- ')}`;
-                } else {
-                    stateBlock += `\nTextos no slide ativo: (Nenhum texto legivel encontrado)`;
-                }
-            }
-        }
 
         // BUG REAL (auditoria 11/07/2026): TelegramAdapter captura ctx.message.reply_to_message
         // (o usuário respondeu citando uma mensagem específica do bot) em metadata.quotedText,

@@ -25,7 +25,6 @@ import cookieParser from 'cookie-parser';
 import { rateLimit } from 'express-rate-limit';
 import type { AddressInfo } from 'net';
 import type { NormalizedMessage } from '../../channels/ChannelAdapter';
-import { waitForTurnResponse } from '../../../addins/powerpoint-addin/src/taskpane/turnPolling';
 
 const SENHA = 's457-senha-de-teste';
 process.env.DASHBOARD_PASSWORD = SENHA; // antes de carregar auth.ts: é no carregamento que ele liga a autenticação
@@ -347,15 +346,8 @@ async function main(): Promise<void> {
         assert(limitado.kind === 'rejected' && limitado.status === 429 && limitado.retryAfterSec > 0, 'cliente público: 429 vira rejected com retryAfterSec', limitado);
 
         console.log('\n=== S457-11 — consumidores existentes continuam compatíveis ===');
-        // Suplemento do PowerPoint: o cliente dele, sem alteração, contra as rotas reais.
-        const add = await sendRaw({ message: 'eco:do suplemento', sessionId: 'powerpoint-addin-s457' }, 11);
-        const addTurn = ((await add.json()) as any).turnId;
-        const outcome = await waitForTurnResponse({
-            fetchFn: (u, init) => fetch(u, init), serverUrl: base, headers: auth, turnId: addTurn, intervalMs: 20,
-        });
-        assert(outcome.kind === 'response' && outcome.payload.response === 'do suplemento', 'turnPolling.ts (suplemento) recebe a resposta pelas rotas reais', outcome);
-        const addSemLogin = await waitForTurnResponse({ fetchFn: (u, init) => fetch(u, init), serverUrl: base, headers: {}, turnId: addTurn, intervalMs: 5 });
-        assert(addSemLogin.kind === 'rejected', 'turnPolling.ts trata 401 como recusa, como antes', addSemLogin);
+        // O suplemento do PowerPoint saiu do núcleo em 04/11/2026 (repositório newclaw-powerpoint): a conformidade do
+        // cliente dele contra as rotas reais passa a ser do repositório dele, como a da voz.
 
         // Painel: os campos que o script lê existem nas respostas reais.
         const html = fs.readFileSync(path.join(PUBLIC_DIR, 'index.html'), 'utf-8');

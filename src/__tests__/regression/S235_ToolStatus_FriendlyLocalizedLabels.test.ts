@@ -60,7 +60,7 @@ const REGISTERED_TOOLS = [
     'write', 'edit', 'read', 'read_document',
     'list_workspace', 'refresh_workspace', 'organize_workspace', 'analyze_workspace_groups',
     'exec_command', 'ssh_exec', 'api_request',
-    'send_document', 'send_audio', 'powerpoint_control', 'schedule',
+    'send_document', 'send_audio', 'schedule',
 ];
 
 console.log('\n=== S235-1 — cada tool registrada tem status_tool_<nome> nos 3 idiomas ===');

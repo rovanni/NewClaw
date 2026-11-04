@@ -25,7 +25,7 @@ import { SkillInstaller } from '../skills/SkillInstaller';
 import type { SkillLearner } from '../loop/SkillLearner';
 import { createLogger } from '../shared/AppLogger';
 import { authMiddleware, createAuthRouter, dashboardAuth, initAuthPersistence } from './routes/auth';
-import { rateLimitMiddleware, loginRateLimit, csrfOriginCheck, isTrustedOrigin, isAddinRequest } from './security';
+import { rateLimitMiddleware, loginRateLimit, csrfOriginCheck, isTrustedOrigin } from './security';
 import { createConfigRouter } from './routes/config';
 import { createProvidersRouter } from './routes/providers';
 import { createModelsRouter } from './routes/models';
@@ -78,8 +78,9 @@ export class DashboardServer {
         // navegação same-origin simples) o CORS nem se aplicaria de qualquer forma — permitido.
         this.app.use(cors((req, callback) => {
             const origin = req.headers.origin as string | undefined;
-            // Além da mesma origem: o suplemento do PowerPoint (origem exata, só nas 2 rotas que ele chama) — ver isAddinRequest.
-            const allowed = !origin || isTrustedOrigin(origin, req.headers.host as string | undefined) || isAddinRequest(origin, req.path);
+            // Só a mesma origem. O suplemento do PowerPoint, que tinha uma exceção aqui, saiu do núcleo em 04/11/2026: o
+            // servidor dele (repositório newclaw-powerpoint) repassa as chamadas, como o harness da voz.
+            const allowed = !origin || isTrustedOrigin(origin, req.headers.host as string | undefined);
             callback(null, { origin: allowed });
         }));
         this.app.use(express.json());

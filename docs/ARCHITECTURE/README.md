@@ -144,7 +144,7 @@ funcional"). Registrados aqui e no `risks` de cada componente para as próximas 
 ## Fora de escopo desta sprint
 
 `bin/` (launcher CLI), `prompts/*.yaml` (templates de prompt consumidos por `PromptRegistry`),
-`addins/powerpoint-addin/` (sub-projeto separado do add-in do PowerPoint) e `specs/` não foram
+`addins/powerpoint-addin/` (sub-projeto do add-in do PowerPoint; desde 04/11/2026 no repositório newclaw-powerpoint) e `specs/` não foram
 analisados em profundidade — não apareceram na árvore `src/`/`scripts/`/`skills/` que o prompt
 original delimitou como escopo do AKB. Se uma sprint futura precisar deles, tratar como extensão
 desta base, não reconstrução.

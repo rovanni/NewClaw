@@ -51,10 +51,8 @@
 import { ChannelAdapter, ChannelType, NormalizedResponse, ResponseAttachment } from './ChannelAdapter';
 import type { WorkflowCallbackFn } from '../loop/WorkflowTypes';
 import { createLogger } from '../shared/AppLogger';
-import { powerpointBroker } from '../dashboard/routes/powerpointBroker';
 
 const log = createLogger('WebChannelAdapter');
-const POWERPOINT_SESSION_PREFIX = 'powerpoint-addin-';
 // Limite de sessões com entrega órfã acumulada — proteção contra crescimento sem fim caso
 // uma sessão nunca mais mande mensagem. Mesma ordem de grandeza do que uma instalação
 // local/pequena de VPS suportaria sem preocupação de memória.
@@ -104,9 +102,8 @@ export class WebChannelAdapter implements ChannelAdapter {
     // terminar e chamar send()/sendDocument()/sendVoice() depois — ver nota de classe.
     private timedOutRequests: Map<string, TimedOutRequest> = new Map();
     // Entregas (texto + anexos) sem requisição HTTP viva pra receber — guardadas por chatId e
-    // mescladas na PRÓXIMA resposta dessa mesma sessão. Cobre o canal web puro (dashboard),
-    // que — ao contrário do suplemento PowerPoint — não tem mecanismo de polling próprio para
-    // buscar entregas assíncronas.
+    // mescladas na PRÓXIMA resposta dessa mesma sessão. Cobre os clientes do canal web (painel e integrações
+    // opcionais pelo contrato do turno), que não têm um canal próprio para entregas assíncronas.
     private orphanedDeliveries: Map<string, NormalizedResponse[]> = new Map();
     // ADR-027: o ÚLTIMO relato de progresso de cada conversa (sendToChat com `progresso`). Não é entrega: o painel o lê
     // pelo mesmo polling do turno (GET /api/chat/active) e ele some quando a resposta final sai. Antes caía em
@@ -355,19 +352,6 @@ export class WebChannelAdapter implements ChannelAdapter {
             a.attachments.push({ type: 'document', data: buffer, fileName: filename });
             return;
         }
-            // Sessão do suplemento PowerPoint: mesmo sem HTTP vivo, o suplemento faz polling de
-            // comandos (startCommandPolling em powerpoint.ts) — usa esse canal como entrega
-            // assíncrona em vez de descartar. Cobre o caso de uma mensagem enfileirada atrás de
-            // uma conversa ocupada: o round-trip HTTP original já foi resolvido com um ACK antes
-            // do goal terminar, então quando o anexo fica pronto não há mais requisição pendente.
-            // Transporte fundamentalmente diferente do dashboard puro (polling do cliente, não
-            // request/response) — não dá pra unificar com orphanedDeliveries sem inventar
-            // polling onde não existe; mantido como caminho próprio deliberadamente.
-            if (chatId.startsWith(POWERPOINT_SESSION_PREFIX)) {
-                powerpointBroker.pushDocument(chatId, buffer.toString('base64'), filename);
-                log.info('send_document_deferred_to_broker', `chatId=${chatId} filename=${filename} entregue via polling (sem HTTP pendente)`);
-                return;
-            }
             // Canal web puro (dashboard) não tem polling — guarda o anexo pra entregar assim
             // que a mesma sessão mandar a próxima mensagem (ver mergeOrphaned), em vez de
             // descartar.

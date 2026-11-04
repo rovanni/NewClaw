@@ -29,7 +29,6 @@ import { limiteComum } from '../shared/orcamentoDeTexto';
 import type { DecisaoDeConclusao } from '../validation/tipos/demaisTipos';
 import { obterMotor } from '../validation/motorPadrao';
 import { DECISION_PROMPT_MAX_CHARS } from '../core/providerTypes';
-import { buildHostAppContextBlock, hostContextMode, appendHostBlock } from '../shared/hostAppContext';
 import { AgentLoop } from './AgentLoop';
 import { traceManager } from '../core/ExecutionTrace';
 import { GoalStore } from './GoalStore';
@@ -137,9 +136,6 @@ export type ProgressCallback = (update: GoalProgressUpdate) => Promise<void>;
 interface GoalExecutionState {
     cognitiveContext: StepCognitiveContext;
     progressModel: GoalProgressModel | null;
-    /** RFC-008 (HOST_CONTEXT=on): fatos do aplicativo hospedeiro, anexados ao contexto de TODA chamada
-     * ao Planner desta execução (plano inicial, replan, próximo marco). '' = canal comum ou modo != on. */
-    hostBlock?: string;
     /**
      * Campanha 09/10/2026: a saída COMPLETA de cada passo desta execução, por `${planGeneration}:${stepId}`. O
      * registro do goal guarda só um trecho (ATTEMPT_OUTPUT_EVIDENCE_LIMIT) para não crescer sem limite; quem
@@ -415,8 +411,7 @@ export class GoalExecutionLoop {
 
         // ── Q1: Contextualização ──────────────────────────────────────────
         // Enriquece o entendimento do objetivo com memória semântica antes de planejar
-        const hostBlock = hostContextMode() === 'on' ? buildHostAppContextBlock(channelContext.metadata) : '';
-        const q1Context = appendHostBlock(await this.contextualize(goal, 1, undefined), hostBlock);
+        const q1Context = await this.contextualize(goal, 1, undefined);
 
         // ── Capabilities summary — injetar no contexto do planner ──────────
         // Registry usa TTL por categoria; chamadas consecutivas são servidas do cache.
@@ -634,7 +629,7 @@ export class GoalExecutionLoop {
         forceQ2 = false,
     ): Promise<Goal> {
         // Q1: Contextualização — memória + feedback do ciclo anterior
-        const q1Context = appendHostBlock(await this.contextualize(goal, cycleNumber, priorFeedback), state.hostBlock ?? '');
+        const q1Context = await this.contextualize(goal, cycleNumber, priorFeedback);
 
         // Capabilities summary no replan — registry serve do cache (TTL por categoria).
         const capSummary = await this.capRegistry.getCapabilitySummary();
@@ -933,19 +928,6 @@ export class GoalExecutionLoop {
         initialReplans: number,
         initialFeedback?: string,
     ): Promise<GoalResult> {
-        // RFC-008 (RC1, sombra): mede o bloco de fatos do aplicativo hospedeiro que o Planner receberia,
-        // sem enviá-lo ao LLM. Opt-in explícito (HOST_CONTEXT=shadow, lido a cada chamada); o prompt NÃO é alterado.
-        if (process.env.HOST_CONTEXT === 'shadow') {
-            const hostBlock = buildHostAppContextBlock(channelContext.metadata);
-            if (hostBlock) {
-                log.info(
-                    `[HOST-CONTEXT] goal=${goal.id} hostApp=${String(channelContext.metadata?.hostApp)}` +
-                    ` blockChars=${hostBlock.length} lines=${hostBlock.split('\n').length}`
-                );
-                log.debug(`[HOST-CONTEXT] block:\n${hostBlock}`);
-            }
-        }
-
         // Telemetria: registra goal ativo para detectar compressão concorrente
         const { channel: goalChannel, userId: goalUserId } = parseSessionKey(goal.sessionKey);
         const goalSessionKey = { channel: goalChannel || 'unknown', userId: goalUserId || 'unknown' };
@@ -961,7 +943,6 @@ export class GoalExecutionLoop {
         const state: GoalExecutionState = {
             cognitiveContext: createEmptyStepCognitiveContext(),
             progressModel: this.buildInitialProgressModel(goal),
-            hostBlock: hostContextMode() === 'on' ? buildHostAppContextBlock(channelContext.metadata) : '',
             saidasCompletas: new Map(),
         };
 
@@ -1516,7 +1497,7 @@ export class GoalExecutionLoop {
             goal = this.goalStore.getById(goal.id)!;
 
             // Planeja os steps para o próximo marco
-            const q1Context = appendHostBlock(await this.contextualize(goal, totalCycles, undefined), state.hostBlock ?? '');
+            const q1Context = await this.contextualize(goal, totalCycles, undefined);
             const capSummary = await this.capRegistry.getCapabilitySummary();
 
             const planResult = await this.planner.plan(goal, q1Context ?? '', capSummary, nextMilestone);

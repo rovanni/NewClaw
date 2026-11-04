@@ -3,7 +3,7 @@
  *
  * Por que existe: o protocolo de acompanhar um turno do chat (enviar → aceito → em andamento → aprovação → resposta) estava
  * escrito duas vezes, no painel (`index.html`, startTurnPolling/fetchAndRenderOutbox) e no suplemento do PowerPoint
- * (`addins/powerpoint-addin/src/taskpane/turnPolling.ts`), com diferenças entre as cópias. Cada cliente novo seria mais uma
+ * (`src/taskpane/turnPolling.ts`, hoje no repositório newclaw-powerpoint), com diferenças entre as cópias. Cada cliente novo seria mais uma
  * (ADR-030, D15; ADR-031, regra 7). Este módulo é a implementação única do contrato para quem quiser usá-la — painel, suplemento
  * e harnesses migram para ele em etapas próprias, cada uma com a própria regressão.
  *
