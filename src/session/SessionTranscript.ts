@@ -423,7 +423,15 @@ export class SessionTranscript {
         // da janela de mensagens recentes (maxContextMessages) que deve continuar visível aqui.
         // Fallback pra lastCheckpoint.seq só para índices antigos gravados antes deste campo
         // existir (compatibilidade retroativa, não path normal).
-        const replayFrom = lastCheckpoint.compressedUpTo ?? lastCheckpoint.seq;
+        let replayFrom = lastCheckpoint.compressedUpTo ?? lastCheckpoint.seq;
+        // Invariante: o resumo só cobre mensagens gravadas ANTES da entrada de checkpoint (ela é anexada depois delas).
+        // Um limite maior que o seq da própria entrada não existe neste arquivo — é o que a compactação antiga deixava ao
+        // renumerar (S468). Repetir dali devolveria nada, e o modelo ficaria sem conversa para sempre; o fato que resta é
+        // a posição da entrada de checkpoint, de onde a repetição volta a valer.
+        if (lastCheckpoint.compressedUpTo !== undefined && lastCheckpoint.compressedUpTo > lastCheckpoint.seq) {
+            log.warn(`checkpoint_limite_inconsistente sid=${this.sessionId} compressed_up_to=${lastCheckpoint.compressedUpTo} seq_do_checkpoint=${lastCheckpoint.seq} — repete a partir do checkpoint`);
+            replayFrom = lastCheckpoint.seq;
+        }
         return {
             entries: await this.replay(replayFrom + 1),
             lastCheckpointSeq: lastCheckpoint.seq

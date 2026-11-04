@@ -689,19 +689,25 @@ export class SessionManager {
                 return { before, after: before, saved: 0 };
             }
 
-            // Build compact entries: checkpoint summary + recent messages
+            // Build compact entries: checkpoint summary + recent messages, COM A NUMERAÇÃO ORIGINAL.
+            // Antes, as entradas eram renumeradas a partir de 1 e o checkpoint gravava `compressed_up_to` na numeração
+            // ANTIGA: na VPS (02/11/2026 09:43) o limite ficou 1614 num arquivo que ia até 104, getSinceCheckpoint()
+            // passou a devolver nada e todo turno seguinte rodou com 0 mensagens recentes — o agente e o juiz de
+            // suficiência sem a conversa (S468). O limite gravado é o fato observado aqui: tudo antes da primeira
+            // entrada mantida está no resumo.
+            const limite = (entries[0]?.seq ?? transcript.getSeq() + 1) - 1;
             const compactEntries: TranscriptEntry[] = [];
             if (checkpoint) {
                 compactEntries.push({
                     ts: checkpoint.compressedAt,
-                    seq: 1,
+                    seq: limite,
                     role: 'checkpoint',
                     content: checkpoint.summary,
-                    meta: { checkpoint: true, compressed_up_to: checkpoint.seq }
+                    meta: { checkpoint: true, compressed_up_to: limite }
                 });
             }
             for (const entry of entries) {
-                compactEntries.push({ ...entry, seq: compactEntries.length + 1 });
+                compactEntries.push(entry);
             }
 
             // Close current transcript, write compact, reinit

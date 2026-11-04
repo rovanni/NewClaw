@@ -26,6 +26,7 @@ import { createLogger } from '../shared/AppLogger';
 import { errorMessage } from '../shared/errors';
 import { protegerEntrada, mascararSegredos, detectarSegredos, avisoDeSegredoGuardado, avisoDeFalhaNoCofre } from '../shared/segredos';
 import { ConversationQueueManager } from '../core/ConversationQueueManager';
+import { DEFAULT_BUDGET, historicoNoOrcamento } from '../loop/ContextBuilder';
 import type { GoalOrchestrator } from '../loop/GoalOrchestrator';
 
 const log = createLogger('MessageBus');
@@ -563,8 +564,8 @@ export class MessageBus {
 
             // Snapshot das últimas mensagens REAIS da sessão (role user/assistant — nunca
             // tool_call/tool_result/checkpoint, ver SessionManager.buildContext), excluindo a
-            // mensagem atual (que acabou de ser gravada acima — slice(-5,-1) descarta o último
-            // elemento). Usado por dois consumidores hoje: (1) GoalExtractor, pra avaliar se a
+            // mensagem atual (que acabou de ser gravada acima — slice(0,-1) descarta o último
+            // elemento). Usado por três consumidores hoje (o 3º é o juiz de suficiência, ADR-015/029): (1) GoalExtractor, pra avaliar se a
             // mensagem atual é resposta a um menu/lista do assistente (uso original, inalterado);
             // (2) UnifiedIntentRouter.llmClassify via ChannelContext.recentMessages, pra
             // classificar mensagens curtas/elípticas ("continue", "isso", "faça") considerando o
@@ -575,10 +576,16 @@ export class MessageBus {
             let recentSessionMessages: Array<{ role: string; content: string }> = [];
             try {
                 const { messages: transcriptEntries } = await this.sessionManager.buildContext(sessionKey, '');
-                recentSessionMessages = transcriptEntries
-                    .filter(m => m.role === 'user' || m.role === 'assistant')
-                    .slice(-5, -1) // últimas 4 antes da mensagem atual
-                    .map(m => ({ role: m.role as string, content: m.content.slice(0, 400) }));
+                // As mesmas mensagens, pela mesma regra, que o agente recebe (ContextBudget) — antes, as 4 últimas
+                // cortadas em 400 caracteres sem aviso: o pedido de uma ementa de 1.584 caracteres terminava em
+                // "poderia criar a aula 01" e chegava ao juiz de suficiência sem ele (VPS, 03/11/2026, S468).
+                recentSessionMessages = historicoNoOrcamento(
+                    transcriptEntries
+                        .filter(m => m.role === 'user' || m.role === 'assistant')
+                        .slice(0, -1) // sem a mensagem atual
+                        .map(m => ({ role: m.role as string, content: m.content })),
+                    DEFAULT_BUDGET,
+                );
             } catch { /* continua sem contexto */ }
 
             const channelCtx = {
