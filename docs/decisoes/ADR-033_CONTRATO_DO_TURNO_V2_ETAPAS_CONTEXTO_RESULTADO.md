@@ -2,8 +2,9 @@
 
 Data: 31/10/2026. Status: **aceita** (aprovada integralmente pela operadora em 04/11/2026, "Operação Zero Pendências").
 Etapas 1 a 5 (servidor) implementadas em 04/11/2026: `src/shared/contratoDoTurno.ts`, rotas de `src/dashboard/routes/chat.ts`,
-`turn-client.js` e `docs/CONTRATO_DO_TURNO.md` na versão 2; cobertura `S474` (e `S457` para a versão 1). Etapa 6 (clientes:
-interface de voz e painel) em PR próprio.
+`turn-client.js` e `docs/CONTRATO_DO_TURNO.md` na versão 2; cobertura `S474` (e `S457` para a versão 1). Etapa 6 (clientes)
+no mesmo PR, em commit próprio: o painel marca 🎙 pelo `cliente` (`S467`); a interface de voz (repositório `newclaw-ivox`,
+commit `cd304a0`) manda `client`, mostra as etapas e o selo do resultado.
 
 Decisões de implementação que a proposta deixava em aberto:
 - **Modelo da última resposta (§4):** a chamada que é a resposta da conversa se marca em `diag.respostaDaConversa` (o turno
@@ -223,6 +224,12 @@ Cada etapa segue a Validação Progressiva da diretriz, inclusive a execução r
 com o OK da operadora.
 
 ## Riscos e hipóteses não comprovadas
+
+- **Achado na implementação (04/11/2026): a interface de voz exigia a versão EXATA.** A janela recusava um `turn-client.js`
+  com `TURN_CONTRACT_VERSION !== 1`: publicar o NewClaw na versão 2 a teria derrubado, contra a promessa "um cliente da
+  versão 1 continua funcionando". Correção, sem mudança irreversível: a janela passa a exigir a versão 1 **ou maior**
+  (`newclaw-ivox` `cd304a0`, que funciona com os dois servidores) e é publicada **antes** do NewClaw da versão 2. Regra para
+  clientes futuros, registrada no contrato: conferir versão mínima, nunca igualdade.
 
 - **Descrições de etapa** são texto do planejador. Podem sair em outro idioma ou citar um caminho. A regra só garante que
   `toolArgs` não sai; o que o planejador escreve na descrição continua sendo dele. A medir na etapa 1, com objetivos reais.

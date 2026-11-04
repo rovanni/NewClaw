@@ -32,6 +32,8 @@ Fora do contrato: memória, roteamento de modelos, execução. O cliente não de
 - O servidor anuncia a versão em `GET /api/status` → `status.contracts.turn` (número inteiro; hoje `2`) e em
   `GET /api/chat/context` → `contrato` (v2).
 - O cliente público declara a dele em `TURN_CONTRACT_VERSION`.
+- Quem carrega o cliente público confere uma versão **mínima** (`>= 1`), nunca a igualdade: a versão 2 só acrescentou, e
+  exigir a versão exata derrubaria o cliente a cada versão nova (achado ao preparar a versão 2, ADR-033).
 - **Campos novos** numa resposta não mudam a versão: o cliente ignora o que não conhece.
 - **Mudança incompatível** (remover um campo, mudar o significado de um status ou de uma fase) exige versão nova, com o
   teste de conformidade atualizado junto.

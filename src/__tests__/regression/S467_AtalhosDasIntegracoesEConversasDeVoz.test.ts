@@ -95,7 +95,7 @@ async function main(): Promise<void> {
     assert((alvo.innerHTML.match(/<a /g) ?? []).length === 1, 'o atalho guardado na aba continua desenhado');
 
     console.log('\n=== S467-4 — título das conversas que vêm do servidor ===');
-    const titulo = vm.runInNewContext(`(${recortar(index, 'tituloPelasMensagens')})`) as (c: unknown) => string | null;
+    const titulo = vm.runInNewContext(`${recortar(index, 'ehConversaDeVoz')}; (${recortar(index, 'tituloPelasMensagens')})`) as (c: unknown) => string | null;
     const msgs = [
         { role: 'bot', content: 'Oi!', timestamp: 1 },
         { role: 'user', content: 'Segunda frase', timestamp: 30 },
@@ -105,6 +105,11 @@ async function main(): Promise<void> {
     assert(titulo({ id: 'conv_1', messages: msgs }) === 'Olá, tudo bem?', 'conversa escrita: só a frase');
     assert(titulo({ id: 'conv_2', messages: [{ role: 'user', content: 'x'.repeat(80), timestamp: 1 }] }) === 'x'.repeat(50) + '...', 'corta em 50 como o painel');
     assert(titulo({ id: 'voz-1', messages: [] }) === null, 'sem frase da pessoa: fica o título que já havia');
+    // Contrato do turno v2 (ADR-033): quem diz de onde veio é o `cliente` do NewClaw; o prefixo só vale para conversa antiga.
+    assert(titulo({ id: 'abc', cliente: 'newclaw-ivox', messages: msgs }) === '🎙 Olá, tudo bem?', 'v2: cliente newclaw-ivox → 🎙, qualquer que seja o id');
+    assert(titulo({ id: 'voz-2', cliente: 'painel', messages: msgs }) === 'Olá, tudo bem?', 'v2: com cliente conhecido, o prefixo do id não vale');
+    assert(/const cliente = await clienteDaConversa\(localId\)/.test(index) && /\/api\/chat\/context\?sessionId=/.test(index),
+        'a sincronização pergunta ao NewClaw o cliente da conversa nova');
     assert(/c\.title === c\.id \|\| c\.title === c\.serverId\) c\.title = tituloPelasMensagens\(c\)/.test(index),
         'a sincronização troca o id cru pelo título');
 

@@ -663,14 +663,28 @@
           <div class="conv-meta">${c.messages?.length || 0} msgs · ${fmtTime(c.updatedAt)}</div>
         </div>`).join('');
     }
-    // A interface de voz abre suas conversas com o sessionId `voz-…` (convenção dela): ganham 🎙 no título, para se
-    // distinguirem das escritas aqui. Continuam sendo conversas comuns — dá para seguir escrevendo nelas pelo painel.
+    // Conversas da interface de voz ganham 🎙 no título, para se distinguirem das escritas aqui. Continuam sendo conversas
+    // comuns — dá para seguir escrevendo nelas pelo painel. Quem diz de onde a conversa veio é o NewClaw (`cliente` de
+    // GET /api/chat/context, contrato do turno v2 — ADR-033), não uma convenção do id. Conversa anterior à versão 2 não tem
+    // `cliente`: só para ela vale o prefixo `voz-` que a interface de voz usava.
+    function ehConversaDeVoz(c) {
+      return c.cliente ? c.cliente === 'newclaw-ivox' : String(c.id).startsWith('voz-');
+    }
     function tituloPelasMensagens(c) {
       const primeira = (c.messages || []).filter(m => m.role === 'user' && m.content)
         .sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0))[0];
       if (!primeira) return null;
       const texto = primeira.content.slice(0, 50) + (primeira.content.length > 50 ? '...' : '');
-      return (String(c.id).startsWith('voz-') ? '🎙 ' : '') + texto;
+      return (ehConversaDeVoz(c) ? '🎙 ' : '') + texto;
+    }
+    /** O cliente que trouxe a conversa, pelo contrato do turno v2; undefined quando o servidor não sabe ou é da versão 1. */
+    async function clienteDaConversa(sessionId) {
+      try {
+        const r = await newclawFetch('/api/chat/context?sessionId=' + encodeURIComponent(sessionId));
+        if (r.status !== 200) return undefined;
+        const d = await r.json();
+        return d && typeof d.cliente === 'string' ? d.cliente : undefined;
+      } catch { return undefined; }
     }
     function newConversation() {
       const c = { id: 'conv_' + Date.now(), title: 'Nova conversa', messages: [], createdAt: Date.now(), updatedAt: Date.now() };
@@ -708,8 +722,10 @@
           if (!local) {
             const msgRes = await fetch(`/api/conversations/${sc.id}/messages?limit=50`);
             const msgData = await msgRes.json();
+            const cliente = await clienteDaConversa(localId);
             conversations.push({
               id: localId, serverId: sc.id, title: localId,
+              ...(cliente ? { cliente } : {}),
               messages: (msgData.messages || []).map(mapServerMessage),
               createdAt: new Date(sc.created_at).getTime(), updatedAt: serverUpdatedAt
             });
