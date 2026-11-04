@@ -88,12 +88,10 @@ export const loginRateLimit = createRateLimiter({
 });
 
 /**
- * Rotas de polling de alta frequência (legítimo, não é hammering) — o PowerPoint add-in consulta
- * `/api/integrations/powerpoint/commands` em intervalo curto enquanto aguarda um comando. Passar
- * pelo limite geral quebraria esse fluxo; ficam de fora do middleware global.
+ * Rotas de alta frequência legítima (não é hammering), fora do limite geral. O suplemento do PowerPoint tinha a sua
+ * (`/api/integrations/powerpoint/commands`); saiu do núcleo em 04/11/2026 e conversa pelo contrato do turno.
  */
 const RATE_LIMIT_EXEMPT_PATHS = new Set([
-    '/api/integrations/powerpoint/commands',
     '/api/stream',
 ]);
 
@@ -122,35 +120,6 @@ export function isTrustedOrigin(originHeader: string | undefined, requestHost: s
     } catch {
         return false;
     }
-}
-
-/**
- * Origem do suplemento do PowerPoint: o `manifest.xml` do add-in FIXA `https://localhost:3000` (servidor estático do `dist/`), então o
- * add-in é um consumidor cross-origin LEGÍTIMO do Dashboard (ele chama `http://127.0.0.1:3090`, outro host). A restrição de CORS de
- * 26/08/2026 (`96088de`) aceitava só a mesma origem e quebrou o add-in por completo ("Failed to fetch"): o navegador do Office bloqueava
- * a resposta por falta de `Access-Control-Allow-Origin`. Ninguém percebeu porque o add-in não foi usado desde 14/07.
- *
- * Liberação ESTREITA, não uma volta ao `*`: só a origem EXATA do add-in e só nas rotas que ele realmente chama — `POST /api/chat` e
- * `/api/integrations/powerpoint/commands…`. Fora de propósito: `/api/chat/auth-decision` (aprova ação perigosa), `/api/config`,
- * `/api/memory` etc. continuam sem CORS para essa origem.
- */
-export const ADDIN_ORIGIN = 'https://localhost:3000';
-// `/api/chat/outbox`: o POST /api/chat responde 202 {turnId} e a resposta só sai por GET /api/chat/outbox?turnId=… (o add-in a consulta até
-// ficar pronta — turnPolling.ts). `/api/chat/active` NÃO entra: devolve detalhes de aprovações pendentes (pendingAuth).
-const ADDIN_EXACT_PATHS = ['/api/chat', '/api/chat/outbox'];
-const ADDIN_PATH_PREFIXES = ['/api/integrations/powerpoint/commands'];
-
-export function isAddinRequest(originHeader: string | undefined, requestPath: string | undefined): boolean {
-    if (!originHeader || !requestPath) return false;
-    let origin: string;
-    try {
-        origin = new URL(originHeader).origin;
-    } catch {
-        return false;
-    }
-    if (origin !== ADDIN_ORIGIN) return false;
-    return ADDIN_EXACT_PATHS.indexOf(requestPath) !== -1
-        || ADDIN_PATH_PREFIXES.some(p => requestPath === p || requestPath.startsWith(p + '/'));
 }
 
 // ── CSRF: checagem de Origin/Referer em requisições mutantes autenticadas por cookie ──────────

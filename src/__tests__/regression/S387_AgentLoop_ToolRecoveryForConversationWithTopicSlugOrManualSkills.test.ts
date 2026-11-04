@@ -42,12 +42,12 @@ const fakeTools = new Map<string, { name: string; description: string; parameter
     ['weather', { name: 'weather', description: 'clima', parameters: {} }],
 ]);
 
-const build = (intent: Partial<IntentDecision>, hostTools: string[] = []): string[] => {
+const build = (intent: Partial<IntentDecision>): string[] => {
     const fakeLoop = {
         tools: fakeTools,
     };
-    const res = (AgentLoop.prototype as unknown as { buildToolDefs: (i: unknown, h?: string[]) => Array<{ name: string }> })
-        .buildToolDefs.call(fakeLoop, intent, hostTools);
+    const res = (AgentLoop.prototype as unknown as { buildToolDefs: (i: unknown) => Array<{ name: string }> })
+        .buildToolDefs.call(fakeLoop, intent);
     return res.map(t => t.name);
 };
 

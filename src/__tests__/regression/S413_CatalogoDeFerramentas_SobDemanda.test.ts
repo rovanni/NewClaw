@@ -57,7 +57,7 @@ async function main(): Promise<void> {
 
     console.log('\n=== S413-1 — o que a seleção deixa de fora aparece no catálogo (o agente sabe que existe) ===');
     const loop = agente();
-    const lista = quieto(() => loop.buildToolDefs(intencaoDoIncidente, [], new Set())) as Array<{ name: string; description: string; parameters: unknown }>;
+    const lista = quieto(() => loop.buildToolDefs(intencaoDoIncidente, new Set())) as Array<{ name: string; description: string; parameters: unknown }>;
     assert(!nomes(lista).includes('read_document'), 'a seleção de "vision" continua sem read_document (a economia de hoje fica)', nomes(lista));
     const meta = lista.find(d => d.name === AgentLoop.CARREGAR_FERRAMENTA);
     assert(!!meta && /- read_document: Extrai e retorna o conteúdo textual de um documento \(PDF, DOCX, ODT, TXT, etc/.test(meta.description) && /- exec_command: /.test(meta.description),
@@ -84,7 +84,7 @@ async function main(): Promise<void> {
     assert(ctx.ferramentasCarregadas.has('read_document'), 'e fica registrada na memória do goal');
 
     console.log('\n=== S413-3 — carregada fica carregada: o passo seguinte do goal já recebe a ferramenta ===');
-    const proximo = quieto(() => agente().buildToolDefs(intencaoDoIncidente, [], ctx.ferramentasCarregadas)) as Array<{ name: string }>;
+    const proximo = quieto(() => agente().buildToolDefs(intencaoDoIncidente, ctx.ferramentasCarregadas)) as Array<{ name: string }>;
     assert(nomes(proximo).includes('read_document'), 'no passo seguinte, read_document vem completa sem pedir de novo', nomes(proximo));
     const goalLoop = Object.create(GoalExecutionLoop.prototype) as any;
     goalLoop.ferramentasPorGoal = new Map();
@@ -92,7 +92,7 @@ async function main(): Promise<void> {
         'o GoalExecutionLoop entrega o MESMO conjunto a todos os passos de um goal (e outro a cada goal)');
 
     console.log('\n=== S413-4 — sem nada de fora, não há meta-ferramenta ===');
-    const todas = quieto(() => agente().buildToolDefs({ category: 'desconhecida', confidence: 0.3 }, [], new Set())) as Array<{ name: string }>;
+    const todas = quieto(() => agente().buildToolDefs({ category: 'desconhecida', confidence: 0.3 }, new Set())) as Array<{ name: string }>;
     assert(todas.length === REGISTRO.length && !nomes(todas).includes(AgentLoop.CARREGAR_FERRAMENTA), 'todas as ferramentas enviadas → sem catálogo nem meta-ferramenta');
 
     console.log('\n=== S413-5 — o critério da árvore é MEDIDO a cada turno, no log ===');

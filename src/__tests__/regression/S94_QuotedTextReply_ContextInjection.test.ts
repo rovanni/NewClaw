@@ -21,7 +21,7 @@
  * intentRouter.route() antes de buildLLMMessages(), ver S94-3 abaixo), preservando a
  * preocupação original do autor (comentário em TelegramAdapter.ts: não embutir no texto da
  * mensagem para não interferir na detecção de intenção) enquanto entrega o sinal ao LLM na
- * geração da resposta final. Mesmo padrão já usado para hostApp/slideContext (suplemento
+ * geração da resposta final. Mesmo padrão dos outros blocos de estado (antes também hostApp/slideContext do suplemento
  * PowerPoint) no mesmo bloco.
  *
  * Escopo tocado: session/SessionContext.ts (buildLLMMessages, stateBlock). TelegramAdapter.ts
@@ -67,7 +67,7 @@ console.log('\n=== S94-2 — SessionContext.buildLLMMessages() agora lê channel
     const activeFilesIdx = src.indexOf('const activeFiles = this.sessionManager.getActiveFilesBlock');
     assert(quotedIdx > -1 && stateBlockDeclIdx > -1 && quotedIdx > stateBlockDeclIdx, 'injeção acontece DEPOIS que stateBlock já existe (concatena, não substitui)');
     assert(quotedIdx > -1 && activeFilesIdx > -1 && quotedIdx < activeFilesIdx, 'bloco de quotedText fica no mesmo grupo dos outros blocos de estado (hostApp/activeFiles), antes da montagem final de blocks');
-    assert(/stateBlock \+= `\\n\\n\[MENSAGEM RESPONDIDA\]/.test(src), 'conteúdo é concatenado em stateBlock (mesmo canal usado por hostApp/slideContext), não em currentUserMessage');
+    assert(/stateBlock \+= `\\n\\n\[MENSAGEM RESPONDIDA\]/.test(src), 'conteúdo é concatenado em stateBlock (mesmo canal dos outros blocos de estado), não em currentUserMessage');
 }
 
 console.log('\n=== S94-3 — classificação de intenção roda ANTES de buildLLMMessages ser chamado (quotedText não interfere na detecção de intenção) ===');

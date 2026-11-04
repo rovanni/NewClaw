@@ -198,7 +198,7 @@ crossing is a human manually reading the learned evidence and deciding to fold i
 | **Memory** | `memory_search`, `memory_write`, `memory_admin` |
 | **Web** | `web_search`, `web_navigate` (uses `w3m`/`lynx`/`links`/`elinks` when available, HTML fallback otherwise), `api_request` |
 | **System/files** | `exec_command`, `ssh_exec`, `read`, `write`, `edit`, `read_document`, `list_workspace`, `organize_workspace`, `refresh_workspace`, `analyze_workspace_groups`, `schedule` |
-| **Media/documents** | `send_document`, `send_audio`, `powerpoint_control` |
+| **Media/documents** | `send_document`, `send_audio` |
 | **Data/financial** | `crypto_analysis`, `weather` |
 
 Dangerous tools (`exec_command`, `ssh_exec`, `api_request` against arbitrary hosts) require

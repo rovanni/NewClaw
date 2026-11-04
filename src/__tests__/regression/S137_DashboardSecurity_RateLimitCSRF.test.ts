@@ -58,16 +58,16 @@ async function main() {
     console.log('\n=== S137.2 — rota de polling (exempt) não é limitada pelo rate-limit geral ===');
     {
         const app = express();
-        app.get('/api/integrations/powerpoint/commands', rateLimitMiddleware, (_req, res) => res.json({ ok: true }));
+        app.get('/api/stream', rateLimitMiddleware, (_req, res) => res.json({ ok: true }));
 
         await withServer(app, async (base) => {
             const statuses: number[] = [];
             // Bem mais que o limite geral (120/min) pra provar que não é throttled.
             for (let i = 0; i < 130; i++) {
-                const r = await fetch(`${base}/api/integrations/powerpoint/commands`);
+                const r = await fetch(`${base}/api/stream`);
                 statuses.push(r.status);
             }
-            assert(statuses.every(s => s === 200), '130 requisições na rota de polling isenta continuam todas 200 (não quebra o add-in)', statuses.filter(s => s !== 200).length);
+            assert(statuses.every(s => s === 200), '130 requisições na rota isenta (/api/stream) continuam todas 200', statuses.filter(s => s !== 200).length);
         });
     }
 

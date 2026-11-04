@@ -103,3 +103,20 @@ Feito na Etapa 1 da ADR-030 (29/10/2026):
 - A suíte de regressão do núcleo é a mesma com o harness instalado e sem ele.
 - O teste de conformidade do contrato do turno faz parte da suíte do núcleo.
 - O inventário de licenças do harness cobre 100% das dependências diretas e transitivas.
+
+## Aplicações
+
+- **Interface de voz** (newclaw-ivox, ADR-030): nasceu fora do núcleo.
+- **Suplemento do PowerPoint** (04/11/2026, decisão da operadora na auditoria de pendências): saiu do núcleo para o repositório
+  público `newclaw-powerpoint`, com o histórico de `addins/powerpoint-addin/`. O suplemento passou a conversar só pelo contrato
+  do turno (`POST /api/chat`, `GET /api/chat/outbox`), e o `server.js` dele faz o repasse até o NewClaw, como o harness da voz.
+
+  Saíram do núcleo:
+  - a ferramenta `powerpoint_control` e a fila de comandos (`powerpointBroker`);
+  - o contexto do aplicativo hospedeiro (`hostAppContext`, `HOST_CONTEXT`, RFC-008) e a leitura do deck aberto (RFC-009),
+    ambas marcadas como retiradas;
+  - a exceção de origem e de limite de requisições em `security.ts`;
+  - o cartão e as rotas de instalação próprios;
+  - os testes S312 e S314–S319.
+
+  Critério desta ADR conferido: `grep` de `powerpoint_control`, `hostAppContext` e `powerpointBroker` em `src/` retorna zero.

@@ -1,5 +1,7 @@
 # RFC-009 — Capacidade de leitura e edição do deck aberto (item (c) da RFC-008)
 
+> **RETIRADA em 04/11/2026** (decisão da operadora, auditoria de pendências): o suplemento do PowerPoint saiu do núcleo para o repositório `newclaw-powerpoint` e conversa com o NewClaw só pelo contrato público do turno (ADR-031). Saíram do núcleo a ferramenta `powerpoint_control`, o contexto do aplicativo hospedeiro (`hostAppContext`, `HOST_CONTEXT`), a fila de comandos (`powerpointBroker`) e a liberação de origem do suplemento. O texto abaixo fica como registro do que foi decidido e implementado; a validação pendente que ele cita não será feita.
+
 **Status:** **Etapa 1 (somente leitura) APROVADA e IMPLEMENTADA em 02/10/2026; validação manual no PowerPoint real (E6) PENDENTE** — ver "Registro de execução" e o roteiro no fim. A Etapa 2 (edição) **não** está aprovada.
 
 **Autor:** Revisão assistida (Claude Code), 02/10/2026.

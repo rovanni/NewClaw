@@ -62,11 +62,6 @@ import { buildLoopMetric, summarizeMetrics } from './agentMetrics';
 import { extractMissingExecutable } from './planning/extractMissingExecutable';
 import { computeToolInputKey } from './planning/computeToolInputKey';
 import { SOURCE_SCRIPT_EXTENSIONS, DELIVERABLE_EXTENSIONS } from './planning/inferExpectedExtensions';
-import { hostContextMode, hostAppToolNames, hostReadAction, describeDeckRead } from '../shared/hostAppContext';
-
-/** Teto (caracteres) do conteúdo de ferramentas na síntese pós-ação quando o turno LEU o deck aberto. O das demais
- * ferramentas de informação continua 2400. Contextos grandes na síntese já causaram timeouts, então não é ilimitado. */
-export const SYNTHESIS_DECK_READ_BUDGET_CHARS = 12000;
 
 export type { ToolResult, ToolExecutor, LoopMetrics, ChannelContext, AgentLoopConfig, ProcessedResult };
 
@@ -1486,21 +1481,10 @@ export class AgentLoop {
      *   1. Trigger match (original — mantido sem alteração)
      *   2. Capability match (novo — usa tags normalizadas via SkillDiscovery)
      */
-    public getSkillContextForQuery(query: string, hostSkillNames: readonly string[] = []): string {
+    public getSkillContextForQuery(query: string): string {
         const { discoverSkills } = require('../skills/SkillDiscovery') as typeof import('../skills/SkillDiscovery');
         const skills = this.skillLoader.loadAll();
         const discovery = discoverSkills(skills, query);
-
-        // RFC-008 (HOST_CONTEXT=on): skills que pertencem ao aplicativo hospedeiro entram mesmo sem
-        // palavra-gatilho na mensagem — quem escreve dentro do PowerPoint não precisa dizer "pptx".
-        // Só acrescenta; o que já casou por trigger/capability não é removido nem duplicado.
-        for (const name of hostSkillNames) {
-            const hostSkill = skills.find(s => s.name === name);
-            if (hostSkill && !discovery.all.some(s => s.name === hostSkill.name)) {
-                discovery.all.push(hostSkill);
-                log.info(`[SKILL-MATCH] query="${query.slice(0, 60)}" skill=${hostSkill.name} matched_by=host`);
-            }
-        }
 
         // Log para observabilidade
         if (discovery.byTrigger.length > 0) {
@@ -1706,7 +1690,7 @@ export class AgentLoop {
      * fora vão num catálogo de uma linha dentro da meta-ferramenta `carregar_ferramenta`, e o agente carrega o que precisar.
      * `carregadas`: o que o agente já carregou antes neste goal — continua disponível ("carregada fica carregada").
      */
-    private buildToolDefs(intent: IntentDecision, hostToolNames: readonly string[] = [], carregadas: ReadonlySet<string> = new Set()): ToolDefinition[] {
+    private buildToolDefs(intent: IntentDecision, carregadas: ReadonlySet<string> = new Set()): ToolDefinition[] {
         const completa = (t: ToolExecutor): ToolDefinition => ({ name: t.name, description: t.description, parameters: t.parameters });
         const comCatalogo = (escolhidas: ToolExecutor[]): ToolDefinition[] => {
             const defs = escolhidas.map(completa);
@@ -1718,7 +1702,7 @@ export class AgentLoop {
         // the model still has access to domain-relevant tools (e.g. crypto_analysis for data_analysis).
         if (intent.preferredTools && intent.preferredTools.length > 0) {
             const categoryExtras = AgentLoop.CATEGORY_TOOLS[intent.category] ?? [];
-            const allowed = new Set([...AgentLoop.CORE_TOOLS, ...intent.preferredTools, ...categoryExtras, ...hostToolNames, ...carregadas]);
+            const allowed = new Set([...AgentLoop.CORE_TOOLS, ...intent.preferredTools, ...categoryExtras, ...carregadas]);
             const filtered = Array.from(this.tools.values()).filter(t => allowed.has(t.name));
             log.info(`[TOOLS] Skill-preferred filter: ${filtered.map(t => t.name).join(', ')} (${filtered.length}/${this.tools.size})`);
             return comCatalogo(filtered);
@@ -1731,7 +1715,7 @@ export class AgentLoop {
             return Array.from(this.tools.values()).map(completa);
         }
 
-        const allowed = new Set([...AgentLoop.CORE_TOOLS, ...extras, ...hostToolNames, ...carregadas]);
+        const allowed = new Set([...AgentLoop.CORE_TOOLS, ...extras, ...carregadas]);
         const filtered = Array.from(this.tools.values()).filter(t => allowed.has(t.name));
         log.info(`[TOOLS] Category filter '${intent.category}': ${filtered.map(t => t.name).join(', ')} (${filtered.length}/${this.tools.size})`);
         return comCatalogo(filtered);
@@ -2478,12 +2462,7 @@ export class AgentLoop {
                 'web_search', 'web_navigate', 'weather', 'crypto_analysis', 'memory_search', 'api_request',
                 'read', 'read_document', 'list_workspace', 'analyze_workspace_groups',
             ]);
-            // Leitura do deck aberto (powerpoint_control getPresentation/getSlide) também é recuperação de informação:
-            // o resultado É o dado a ser julgado. Antes, só o ÚLTIMO resultado chegava à síntese ("consegui acessar apenas
-            // o slide 21", 03/10/2026). Distingue pela AÇÃO: addTextBox escreve e continua sendo uma operação.
-            const deckReads = cycleHistory.filter(h => hostReadAction(h.tool, h.input) !== undefined);
-            const isInfoRetrieval = cycleHistory.length > 0
-                && cycleHistory.every(h => INFO_TOOLS.has(h.tool) || hostReadAction(h.tool, h.input) !== undefined);
+            const isInfoRetrieval = cycleHistory.length > 0 && cycleHistory.every(h => INFO_TOOLS.has(h.tool));
             const reachedMaxSteps = stepCount >= maxSteps;
             const budgetNotice = reachedMaxSteps
                 ? `\n\nATENÇÃO AO LIMITE DE PASSOS: O orçamento de passos deste turno foi esgotado (${stepCount}/${maxSteps} passos executados). Se a solicitação do usuário envolvia checagens, testes ou execuções que NÃO aparecem na lista de ferramentas executadas acima, declare explicitamente ao usuário que elas NÃO foram executadas (por exemplo: se você apenas leu um script ou arquivo, diga que leu as informações, mas NÃO afirme que executou a checagem ou o script).`
@@ -2516,15 +2495,8 @@ export class AgentLoop {
                     `não contém, mesmo que soe plausível. Apresente o valor puro. Só descreva ` +
                     `tendência se o resultado da ferramenta tiver explicitamente múltiplos pontos ` +
                     `no tempo (ex: variação 24h/7d já vinda pronta da tool).`;
-                // Fatos objetivos da leitura (vêm do histórico do ciclo, nunca do modelo): sem eles a resposta não diz
-                // o que cobriu, e uma avaliação de 6 slides de 29 parece uma avaliação do deck inteiro.
-                const deckNote = deckReads.length === 0 ? '' :
-                    `\n\nLEITURA DO DECK ABERTO — fatos desta rodada: ${deckReads.map(h => describeDeckRead(h.input)).join('; ')}.` +
-                    ` Se a pergunta do usuário pede opinião, avaliação ou análise, responda com ela, fundamentada SOMENTE no conteúdo lido` +
-                    ` (a regra de apresentar dados, e não o que você fez, não impede uma avaliação).` +
-                    ` Diga quais slides você leu e que os demais NÃO foram lidos; não avalie nem descreva slide que não foi lido.`;
-                if (failedTools.length === 0) return base + deckNote + budgetNotice + noFabrication;
-                return base + deckNote + budgetNotice + ` Para as fontes que falharam, explique brevemente o motivo. NÃO peça ao usuário para repetir ou especificar novamente o que já foi solicitado.` + noFabrication;
+                if (failedTools.length === 0) return base + budgetNotice + noFabrication;
+                return base + budgetNotice + ` Para as fontes que falharam, explique brevemente o motivo. NÃO peça ao usuário para repetir ou especificar novamente o que já foi solicitado.` + noFabrication;
             })();
             const synthesisBody = isInfoRetrieval
                 ? infoRetrievalSynthesisBody
@@ -2542,13 +2514,10 @@ export class AgentLoop {
             const synthToolMessages: LLMMessage[] = [];
             if (isInfoRetrieval) {
                 const toolMsgs = loopMessages.filter(m => m.role === 'tool');
-                // Leitura de deck: o conteúdo lido é a própria matéria da resposta e vem de várias chamadas; 2400 cabiam
-                // uma busca na web, não 6 slides. Teto maior, com marcador explícito do corte (nunca silencioso).
-                let budgetLeft = deckReads.length > 0 ? SYNTHESIS_DECK_READ_BUDGET_CHARS : 2400;
+                let budgetLeft = 2400;
                 for (const tm of toolMsgs) {
                     const full = tm.content ?? '';
-                    const cut = full.length > budgetLeft;
-                    const content = full.slice(0, budgetLeft) + (cut && deckReads.length > 0 ? '\n...[truncado]' : '');
+                    const content = full.slice(0, budgetLeft);
                     if (content.trim()) {
                         synthToolMessages.push({ role: 'tool' as const, content, tool_call_id: tm.tool_call_id });
                         budgetLeft -= Math.min(full.length, budgetLeft);
@@ -3857,9 +3826,7 @@ export class AgentLoop {
             intentDecision.preferredTools = Array.from(new Set([...(intentDecision.preferredTools ?? []), ...manualTools]));
         }
 
-        // RFC-008 (HOST_CONTEXT=on): ferramentas do aplicativo hospedeiro entram em TODA categoria — só acrescenta.
-        const hostTools = hostContextMode() === 'on' ? hostAppToolNames(channelContext?.metadata) : [];
-        const toolDefs: ToolDefinition[] = this.buildToolDefs(intentDecision, hostTools, channelContext?.ferramentasCarregadas);
+        const toolDefs: ToolDefinition[] = this.buildToolDefs(intentDecision, channelContext?.ferramentasCarregadas);
         // ADR-021: a lista do turno, para `carregar_ferramenta` poder acrescentar ferramentas no meio do turno.
         this.ferramentasDoTurno.set(conversationId, toolDefs);
 

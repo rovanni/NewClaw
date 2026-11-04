@@ -14,7 +14,7 @@ Um **turno** é uma mensagem enviada ao NewClaw e tudo o que acontece até a res
 - entrega.
 
 Este documento é a definição pública de como um cliente acompanha um turno pela API HTTP do painel. Vale para o próprio
-painel, o suplemento do PowerPoint, harnesses opcionais (ADR-031) e qualquer cliente futuro.
+painel, integrações opcionais em repositório próprio (a voz, o suplemento do PowerPoint — ADR-031) e qualquer cliente futuro.
 
 O contrato **descreve as rotas que já existem**, sem mudar o comportamento delas. A versão 1 só acrescentou ao servidor o
 anúncio da versão em `GET /api/status`. Ele não sabe que cliente está do outro lado: nada aqui é específico de canal, de
@@ -199,12 +199,13 @@ São comportamentos reais da versão 1, cobertos pelo `S457`. Não são erros do
 | Consumidor | Como acompanha hoje | Diferenças para este contrato |
 |---|---|---|
 | Painel (`index.html`: `startTurnPolling`, `fetchAndRenderOutbox`) | `/active` a cada 1,5 s; depois a outbox, com 5 tentativas a cada 500 ms; avisa perda de conexão após 3 falhas seguidas | Na falta da própria conversa em `active`, usa a primeira conversa ativa que houver |
-| Suplemento do PowerPoint (`turnPolling.ts`) | Só a outbox, a cada 3 s, até 45 min | Não lê `active`, então não vê aprovação pendente nem progresso |
+| Suplemento do PowerPoint (`turnPolling.ts`, repositório newclaw-powerpoint desde 04/11/2026) | Só a outbox, a cada 3 s, até 45 min | Não lê `active`, então não vê aprovação pendente nem progresso |
 | Cliente público (`turn-client.js`) | `/active` a cada 1,5 s; depois a outbox, com 3 novas tentativas; até 45 min | Implementa este documento |
 
 O painel e o suplemento continuam como estão. Cada migração para o cliente público é uma etapa própria (ADR-030, etapa 7),
-com a regressão do respectivo consumidor. O `S457` roda o cliente do suplemento contra as rotas reais e confere que os campos
-que o painel lê existem na resposta. Assim, uma mudança no servidor que quebre um deles quebra o teste.
+com a regressão do respectivo consumidor. O `S457` confere que os campos que o painel lê existem na resposta. O suplemento do
+PowerPoint saiu do núcleo em 04/11/2026: a conformidade do cliente dele contra as rotas reais é do repositório dele, como a da
+voz.
 
 ## Cliente público — `turn-client.js`
 
@@ -239,7 +240,7 @@ Resultados de `waitForTurn`:
 
 - **Regressão:** `S457_ContratoDoTurno_Conformidade` sobe as rotas reais (`createChatRouter`, `createStatusRouter`,
   `authMiddleware`, `csrfOriginCheck`, arquivos estáticos) com o `WebChannelAdapter` real e confere cada linha das seções
-  acima, inclusive com o cliente do suplemento e com o cliente público.
+  acima, inclusive com o cliente público (o do suplemento foi conferido aqui até 04/11/2026, quando o suplemento saiu do núcleo).
 - **Instância isolada (29/10/2026):**
   - **Montagem:** NewClaw do branch desta etapa, porta e pasta de dados próprias, senha própria. O provedor era um servidor
     local que aceita a conexão e não responde, então nenhum modelo foi chamado e nenhuma cota foi usada.
