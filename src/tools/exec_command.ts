@@ -18,6 +18,7 @@ import { extractVerifiedArtifacts } from '../loop/planning/artifactContract';
 import { amostradorDaPlataforma, AmostraDeAtividade } from './atividadeDoProcesso';
 import { sinalDoTurno, aguardarComandos } from '../shared/turnCancellation';
 import { registroDeProcessos, ProcessoRegistrado } from './registroDeProcessos';
+import { fatosDoAmbiente, shellsDisponiveis, type ShellDeclaravel } from '../shared/ambienteDeExecucao';
 
 const log = createLogger('ExecCommandTool');
 
@@ -353,9 +354,34 @@ export function decodeClixmlError(output: string): string {
  */
 export function wrapForWindowsPowerShell(command: string): string {
     const translated = translateWcForPowerShell(translateHeadTailForPowerShell(translateLsFlagsForPowerShell(translateDevNullForPowerShell(translateChainOperatorsForPowerShell(command)))));
-    const withoutProgressNoise = `$ProgressPreference = 'SilentlyContinue'; [Console]::OutputEncoding = [System.Text.Encoding]::UTF8; $OutputEncoding = [System.Text.Encoding]::UTF8; $PSDefaultParameterValues['Get-Content:Encoding'] = 'UTF8'; ${translated}`;
+    return comandoNoPowerShell(translated);
+}
+
+/**
+ * O comando, sem nenhuma alteração, rodando no PowerShell indicado — só com o preparo de ambiente descrito acima (sem barra de
+ * progresso, saída e leitura em UTF-8). É o que `wrapForWindowsPowerShell` faz depois das traduções, e o que o shell
+ * declarado (ADR-026) usa sem elas.
+ */
+export function comandoNoPowerShell(command: string, executavel: 'powershell' | 'pwsh' = 'powershell'): string {
+    const withoutProgressNoise = `$ProgressPreference = 'SilentlyContinue'; [Console]::OutputEncoding = [System.Text.Encoding]::UTF8; $OutputEncoding = [System.Text.Encoding]::UTF8; $PSDefaultParameterValues['Get-Content:Encoding'] = 'UTF8'; ${command}`;
     const encoded = Buffer.from(withoutProgressNoise, 'utf16le').toString('base64');
-    return `powershell -NoProfile -NonInteractive -EncodedCommand ${encoded}`;
+    return `${executavel} -NoProfile -NonInteractive -EncodedCommand ${encoded}`;
+}
+
+/**
+ * ADR-026 (etapa 1): como o comando roda no shell DECLARADO por quem o escreveu — exatamente nele, sem tradução. `shellDoSpawn`
+ * vai para o `spawn`: `true` é o shell padrão do sistema (cmd.exe no Windows, /bin/sh no Unix), um nome é o executável que
+ * recebe o comando com `-c` (bash, zsh). PowerShell recebe o comando codificado, como no encaminhamento antigo.
+ */
+export function preparoDoShell(shell: ShellDeclaravel, command: string): { comando: string; shellDoSpawn: true | string } {
+    switch (shell) {
+        case 'powershell':
+        case 'pwsh': return { comando: comandoNoPowerShell(command, shell), shellDoSpawn: true };
+        case 'cmd': return { comando: command, shellDoSpawn: true };
+        case 'sh': return { comando: command, shellDoSpawn: process.platform === 'win32' ? 'sh' : true };
+        case 'bash':
+        case 'zsh': return { comando: command, shellDoSpawn: shell };
+    }
 }
 
 // ── Marp/pandoc — validação e auto-fix de comandos ──────────────────────────
@@ -451,6 +477,8 @@ export function removePandocNoStdin(command: string): string {
 // entre eles determina o resultado (cada um só decide "abortar ou não", independente do outro).
 interface FixupContext {
     isSsh: boolean;
+    /** ADR-026: o shell que quem escreveu o comando declarou; com ele, nada traduz nem encaminha o comando. */
+    shellDeclarado?: ShellDeclaravel;
     /** Corresponde ao antigo `!workdir` — só reescreve prefixo relativo "workspace/" quando o
      *  cwd do processo É o workspaceDir (sem workdir customizado). */
     allowRelativeWorkspacePrefix: boolean;
@@ -496,7 +524,7 @@ const COMMAND_FIXUP_PIPELINE: CommandFixupStep[] = [
         // paths corrigidos) é o que vira Base64, não o texto original ainda com paths errados.
         // Não se aplica a ssh:// — o shell remoto não é necessariamente Windows.
         name: 'wrap_powershell',
-        condition: (command, ctx) => !ctx.isSsh && process.platform === 'win32' && needsPowerShellWrap(command),
+        condition: (command, ctx) => !ctx.isSsh && !ctx.shellDeclarado && process.platform === 'win32' && needsPowerShellWrap(command),
         transform: (command) => wrapForWindowsPowerShell(command),
     },
 ];
@@ -519,13 +547,25 @@ function applyFixup(stepName: string, command: string, ctx: FixupContext): strin
     return next;
 }
 
+/** Os shells medidos, com a versão quando a sonda a respondeu (ex.: "cmd, powershell 5.1.26100"). */
+function descreverShellsMedidos(): string {
+    const f = fatosDoAmbiente();
+    const lista = shellsDisponiveis(f).map(sh => {
+        const versao = f.medidos?.[sh];
+        return versao ? `${sh} ${versao}` : sh;
+    });
+    return lista.join(', ') || 'nenhum';
+}
+
 export class ExecCommandTool implements ToolExecutor {
     name = 'exec_command';
     description = 'Execute shell commands. Workspace como cwd padrão. Suporta ssh://host/command para remoto. O comando roda enquanto trabalha (saída, CPU ou disco/rede); é encerrado se ficar parado, sem nenhum sinal, pela tolerância (padrão 30 s). A entrada do teclado é fechada.';
-    parameters = {
+    // Getter: a lista de shells vem da medição do ambiente, que termina depois de a ferramenta ser registrada (CapabilityRegistry).
+    get parameters() { return {
         type: 'object',
         properties: {
             command: { type: 'string', description: 'Shell command. Use ssh://HOST/cmd para execução remota' },
+            shell: { type: 'string', description: `O shell em que você ESCREVEU o comando: ele roda exatamente nele, sem tradução. Medidos nesta máquina: ${descreverShellsMedidos()}. Sem este campo, o comportamento antigo: no Windows, comando com cmdlet do PowerShell ou utilitário Unix é traduzido e encaminhado ao powershell.exe; o resto roda no shell padrão. Não vale para ssh://.` },
             tolerancia_sem_atividade: { type: 'number', description: `Segundos SEM NENHUM sinal de atividade (saída, CPU, disco/rede) até o comando ser considerado parado e encerrado (padrão: ${TOLERANCIA_PADRAO_S}). Aumente quando souber que haverá espera longa sem atividade.` },
             timeout: { type: 'number', description: 'Teto opcional em ms, mesmo com o comando trabalhando (sem ele: não há teto — só a tolerância sem atividade). Ao passar dele, o comando é encerrado junto com os processos que abriu.' },
             workdir: { type: 'string', description: 'Diretório de trabalho (padrão: workspace)' },
@@ -533,7 +573,7 @@ export class ExecCommandTool implements ToolExecutor {
             acao: { type: 'string', enum: ['consultar', 'aguardar', 'encerrar'], description: 'Com "acompanhar": consultar (estado e saída até agora), aguardar (espera mais um pouco pelo fim) ou encerrar (encerra o comando e o que ele abriu).' }
         },
         required: []
-    };
+    }; }
 
     async execute(args: Record<string, any>): Promise<ToolResult> {
         let command = args.command as string;
@@ -558,6 +598,22 @@ export class ExecCommandTool implements ToolExecutor {
 
         // Handle SSH remote execution: ssh://host/command
         const isSsh = command.startsWith('ssh://');
+
+        // ADR-026 (etapa 1): o shell declarado por quem escreveu o comando. Só um dos MEDIDOS nesta máquina; fora deles, o fato
+        // volta ao agente em vez de o código escolher outro.
+        const shellPedido = typeof args.shell === 'string' && args.shell.trim() ? args.shell.trim().toLowerCase() : undefined;
+        const disponiveis = shellsDisponiveis();
+        let shellDeclarado: ShellDeclaravel | undefined;
+        if (shellPedido) {
+            if (isSsh) {
+                return { success: false, output: '', error: 'O parâmetro shell vale para comandos desta máquina; num ssh:// o shell é o da máquina remota. Tire o shell ou o ssh://.' };
+            }
+            if (!(disponiveis as string[]).includes(shellPedido)) {
+                return { success: false, output: '', error: `O shell "${shellPedido}" não está entre os medidos nesta máquina (${disponiveis.join(', ') || 'nenhum medido'}). O comando não foi executado.` };
+            }
+            shellDeclarado = shellPedido as ShellDeclaravel;
+        }
+        log.info(`[EXEC-SHELL] declarado=${shellDeclarado ?? 'nenhum'} medido=${disponiveis.join(',') || 'nenhum'}${isSsh ? ' remoto=ssh' : ''}`);
         if (isSsh) {
             const match = command.match(/^ssh:\/\/([a-zA-Z0-9_-]+)\/(.*)/);
             if (!match) {
@@ -587,7 +643,7 @@ export class ExecCommandTool implements ToolExecutor {
         // "workspace/" relativo só é reescrito quando NÃO há workdir customizado (cwd já é o
         // workspaceDir nesse caso — com workdir custom, "workspace/foo" deve continuar relativo
         // a ele, não virar um path absoluto pra raiz do workspace).
-        const fixupCtx: FixupContext = { isSsh, allowRelativeWorkspacePrefix: !workdir };
+        const fixupCtx: FixupContext = { isSsh, allowRelativeWorkspacePrefix: !workdir, shellDeclarado };
         command = applyFixup('remap_foreign_workspace_paths', command, fixupCtx);
 
         // marp/pandoc: falha rápido quando não há arquivo de entrada (evita ficar preso
@@ -683,6 +739,13 @@ export class ExecCommandTool implements ToolExecutor {
         // juntos). Um plano de 1 step só com exec_command — o caso mais comum — pulava essa
         // análise inteira e o fix nunca era aplicado.
         command = applyFixup('wrap_powershell', command, fixupCtx);
+        // ADR-026: shell declarado → o comando vai exatamente para ele (o encaminhamento acima não se aplica).
+        let shellDoSpawn: true | string = true;
+        if (shellDeclarado) {
+            const preparo = preparoDoShell(shellDeclarado, command);
+            command = preparo.comando;
+            shellDoSpawn = preparo.shellDoSpawn;
+        }
 
         // O prazo é controlado AQUI, não pelo `timeout` do exec: o do Node mata só o shell (cmd.exe / sh) e deixa os filhos
         // vivos — medido no Windows (16/10/2026: `ping` continuou rodando depois do shell morto; o `npm install` do teste
@@ -699,7 +762,7 @@ export class ExecCommandTool implements ToolExecutor {
                 // Entrada FECHADA (ADR-023): o exec_command não tem como digitar nada, então uma entrada aberta e vazia só servia
                 // para o programa que pergunta algo ficar esperando para sempre. Fechada, ele recebe "fim da entrada" e termina
                 // na hora — medido nos dois sistemas: node, python, `set /p`, `Read-Host` e `read` em 0–2 s, contra travar.
-                const filho = spawn(command, { ...execOptions, shell: true, stdio: ['ignore', 'pipe', 'pipe'], ...(process.platform === 'win32' ? {} : { detached: true }) });
+                const filho = spawn(command, { ...execOptions, shell: shellDoSpawn, stdio: ['ignore', 'pipe', 'pipe'], ...(process.platform === 'win32' ? {} : { detached: true }) });
                 const saidaPadrao: Buffer[] = [];
                 const saidaDeErro: Buffer[] = [];
                 let bytes = 0;

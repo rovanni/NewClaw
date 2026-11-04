@@ -1,6 +1,7 @@
 # ADR-026 — O shell é declarado por quem escreve o comando
 
-Data: 21/10/2026. Status: **proposta** — aguarda a decisão da operadora (nada implementado).
+Data: 21/10/2026. Status: **aceita, alternativa (a)**; etapa 1 aprovada pela operadora em 04/11/2026 ("Operação Zero
+Pendências") e implementada no mesmo dia (`S475`). Etapas 2 e 3 dependem da medição da etapa 1.
 Relaciona-se à regra 9 do AGENTS.md (determinismo valida, LLM interpreta) e à regra 11 (medir; nunca escrever receitas).
 
 ## Fase 1 — Compreensão
@@ -55,6 +56,23 @@ decisão semântica por regex (regra 9) — e corrige o texto com receitas fixas
 - Reduz complexidade ao fim da etapa 3; incremental e reversível (etapa 1 só acrescenta um caminho).
 - Hipótese não comprovada: o modelo declara o shell corretamente na maioria das vezes — a etapa 2 mede.
 
-## Decisão pendente
+## Decisão
 
-A operadora decide se adota (a) e autoriza a etapa 1.
+Adotada (a). Etapa 1 autorizada e implementada em 04/11/2026:
+
+- `exec_command` ganhou o parâmetro opcional `shell`. A lista aceita vem de `shellsDisponiveis()`
+  (`src/shared/ambienteDeExecucao.ts`): o shell padrão do sistema (cmd no Windows, sh no Unix) mais os que as sondas de
+  `sondasDoAmbiente.json` mediram (powershell, pwsh, bash, zsh). Antes da primeira medição, só o padrão.
+- Declarado, o comando roda exatamente nele: cmd e sh pelo shell padrão do `spawn`; bash e zsh pelo executável com `-c`;
+  powershell e pwsh com o comando codificado e só o preparo de ambiente (UTF-8, sem barra de progresso), **sem** as
+  traduções `translate*ForPowerShell` nem `needsPowerShellWrap`.
+- Shell fora da lista medida, ou `shell` junto de `ssh://`: o comando não roda e o fato volta ao agente (nada escolhe
+  outro shell por ele).
+- Sem `shell`, o comportamento antigo continua (transição).
+- Toda execução registra `[EXEC-SHELL] declarado=<shell|nenhum> medido=<lista>`: é a medição da etapa 2.
+- A descrição do parâmetro lista os shells medidos, com a versão; a descrição do ambiente para os juízes diz que o shell
+  declarado roda sem tradução.
+
+Fora da etapa 1, de propósito: nenhuma sonda de `bash` no Windows. O `bash` do PATH do Windows costuma ser o do WSL, que roda
+noutro sistema de arquivos; medi-lo como "bash desta máquina" seria um fato enganoso. Fica para quando houver evidência de
+uso.

@@ -30,7 +30,7 @@ export interface FatosDoAmbiente {
 }
 
 const PRAZO_POR_SONDA_MS = 5000;
-const NAO_DISPONIVEL = 'não disponível';
+export const NAO_DISPONIVEL = 'não disponível';
 
 /** As consultas deste sistema (vazio se não houver lista para ele). */
 export function sondasPara(plataforma: NodeJS.Platform = process.platform): Sonda[] {
@@ -76,6 +76,24 @@ export function fatosDoAmbiente(): FatosDoAmbiente {
     return registrados ?? fatosBasicos();
 }
 
+/**
+ * ADR-026 (etapa 1): os shells que o `exec_command` aceita no parâmetro `shell`. Só o que foi MEDIDO nesta máquina: o shell
+ * padrão do sistema (o do child_process) e os shells que as sondas de sondasDoAmbiente.json encontraram. Antes da primeira
+ * medição, só o padrão — nada é presumido.
+ */
+export type ShellDeclaravel = 'cmd' | 'powershell' | 'pwsh' | 'bash' | 'sh' | 'zsh';
+const SHELLS_DECLARAVEIS: readonly ShellDeclaravel[] = ['cmd', 'powershell', 'pwsh', 'bash', 'sh', 'zsh'];
+
+export function shellsDisponiveis(f: FatosDoAmbiente = fatosDoAmbiente()): ShellDeclaravel[] {
+    const padrao: ShellDeclaravel[] = f.plataforma === 'win32'
+        ? (/(^|[\\/])cmd(\.exe)?$/i.test(f.shell) ? ['cmd'] : [])
+        : ['sh'];
+    const medidos = Object.entries(f.medidos ?? {})
+        .filter(([fato, resposta]) => (SHELLS_DECLARAVEIS as readonly string[]).includes(fato) && !!resposta && resposta !== NAO_DISPONIVEL)
+        .map(([fato]) => fato as ShellDeclaravel);
+    return [...new Set([...padrao, ...medidos])];
+}
+
 const NOME: Partial<Record<NodeJS.Platform, string>> = { win32: 'Windows', linux: 'Linux', darwin: 'macOS' };
 
 /** Os fatos em poucas frases, para o prompt de quem julga. Sem regra sobre o que cada shell/versão aceita — isso o modelo sabe. */
@@ -83,6 +101,7 @@ export function descreverAmbienteDeExecucao(f: FatosDoAmbiente = fatosDoAmbiente
     const partes = [`Sistema operacional: ${NOME[f.plataforma] ?? f.plataforma}${f.versao ? ` (${f.versao})` : ''}, ${f.arquitetura}.`];
     partes.push(`Shell em que o exec_command roda os comandos: ${f.shell}.`);
     if (f.plataforma === 'win32') partes.push('Comandos com cmdlet do PowerShell ou utilitário Unix são encaminhados pelo exec_command ao powershell.exe.');
+    partes.push(`Com o parâmetro shell (${shellsDisponiveis(f).join(', ')}), o exec_command roda o comando exatamente no shell declarado, sem tradução nem encaminhamento.`);
     const medidos = Object.entries(f.medidos ?? {});
     if (medidos.length) partes.push(`Medido no início (comando de consulta → resposta): ${medidos.map(([k, v]) => `${k}: ${v}`).join('; ')}.`);
     if (f.gerenciadorDePacotes) partes.push(`Gerenciador de pacotes detectado: ${f.gerenciadorDePacotes}.`);
