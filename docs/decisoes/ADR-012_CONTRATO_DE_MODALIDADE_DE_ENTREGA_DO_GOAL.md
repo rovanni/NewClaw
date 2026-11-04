@@ -184,3 +184,29 @@ Validação Progressiva completa, executada nesta mesma Sprint:
   `deliveryToolsEverPromised` (que só é atualizado nos 2 pontos que chamam
   `ensureDeliverySuccessCriteria`). Fora de escopo — mudar o fluxo de avanço de marco é uma decisão
   arquitetural própria, não uma extensão pontual.
+
+## 10. Revisão de 04/11/2026 — o que ficou pronto sai, mesmo quando o objetivo falha
+
+Decisão da operadora (Operação Zero Pendências): **"permitir envio de artefatos parciais já validados"**.
+
+**O que mudou na política:**
+- Antes, os envios adiados pelo agente só saíam depois de o objetivo inteiro ser validado.
+- Agora, numa saída por **falha** (passo bloqueado, passo que falhou sem orçamento, validação final reprovada, limite de
+  ciclos), o que já ficou pronto é entregue antes da mensagem de falha. A mensagem passa a dizer "Consegui gerar e enviar:
+  X. Porém não finalizei o restante".
+- Implementação: `GoalExecutionLoop.entregarProntosAntesDaFalha`, que reaproveita `executeStep`, `markStepDone` e
+  `sentArtifacts`, os mesmos do caminho de sucesso.
+
+**Caso que motivou:** goal `qejk6` (04/11/2026). Os 14 módulos e o `.zip` estavam no disco, com dois envios adiados
+registrados, e a resposta foi "Não consegui completar".
+
+**"Já validado" é fato estrutural**, sem interpretação. As quatro condições, todas obrigatórias:
+1. o envio foi **adiado pelo agente** (`originStepId`), não previsto pelo planejador;
+2. a etapa de origem terminou com **sucesso** na geração vigente do plano;
+3. o arquivo **existe**;
+4. o arquivo ainda **não foi entregue**.
+
+**Fica de fora:** o cancelamento pelo usuário ("Parar", `/cancelar`, nova mensagem), porque ele pediu para parar.
+
+**Cobertura:** S473.
+
