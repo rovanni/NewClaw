@@ -35,11 +35,13 @@ const alwaysStub = async () => ({ isStub: true, reason: 'test: stub' });
 const noMissingArgs = () => null;
 
 async function main(): Promise<void> {
-    console.log('\n=== S296.1 — placeholder: o caminho planejado acompanha o step rebaixado ===');
+    // Desde o S471 (04/11/2026), conteúdo de `write` não passa pelo padrão de CAMINHO provisório: quem julga conteúdo
+    // é o check de content-stub. O caso continua o mesmo (conteúdo-molde rebaixa o step); o julgamento é do dono dele.
+    console.log('\n=== S296.1 — conteúdo-molde: o caminho planejado acompanha o step rebaixado ===');
     {
         const r = await sanitizePlanSteps(
             [{ id: 'step_1', description: 'Criar o script extrator', toolName: 'write', toolArgs: { path: 'extrator_s296.py', content: 'import os\nprint({nome_do_arquivo})' } }],
-            ToolRegistry, '[S296]', noMissingArgs, neverStub,
+            ToolRegistry, '[S296]', noMissingArgs, alwaysStub,
         );
         const s = r.steps[0];
         assert(s.toolName === undefined, 'step rebaixado a AgentLoop', s);
