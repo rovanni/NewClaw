@@ -1,7 +1,8 @@
 # ADR-039 — Dicionário da voz, correção pelo balão e "Corrigir e reenviar"
 
-Data: 04/11/2026. Status: **proposta**. A ordem de trabalho e o "Corrigir e reenviar" foram aprovados pela operadora em
-04/11/2026. A medição com a voz dela (Sprint 0) decide qual apoio de vocabulário vale e se o modelo muda. Implementação no
+Data: 04/11/2026. Status: **aceita** (ordem de trabalho, "Corrigir e reenviar" e D2), com a D1 em aberto até a medição.
+A ordem de trabalho e o "Corrigir e reenviar" foram aprovados pela operadora em 04/11/2026; a D2 foi decidida no mesmo dia
+("Operação Zero Pendências": manter o comportamento atual). "Corrigir e reenviar" já está na janela (newclaw-ivox `25fd7d9`). A medição com a voz dela (Sprint 0) decide qual apoio de vocabulário vale e se o modelo muda. Implementação no
 repositório da interface de voz (newclaw-ivox), fora do núcleo, como na ADR-030 e na ADR-037.
 
 Relacionadas:
@@ -95,5 +96,9 @@ de código novo; só o teste `tests/test_medir_stt.py`.
 - **D1.** Baixar o `large-v3` (~2,9 GB, Hugging Face, licença MIT) para entrar na medição, ou medir só o turbo?
 - **D2.** Se o agente ainda estiver respondendo quando a pessoa aperta "Corrigir e reenviar", a resposta em andamento é
   interrompida (como a interrupção pela voz que já existe) ou termina antes?
+  - **Decidida em 04/11/2026: manter o comportamento atual.** Com pedido em andamento, o "Corrigir e reenviar" não age: a
+    resposta segue, e parar é decisão da pessoa (botão Parar). Coberto pelo teste da janela "com pedido em andamento,
+    recusa: parar a resposta é decisão da pessoa" (`janela/src/conversa.test.ts`).
+- **D1 continua em aberto:** depende da medição com as gravações da operadora (Sprint 0), que é ação dela.
 
 O ditado do painel fica fora: ele usa o reconhecimento do próprio navegador, que não aceita vocabulário.
