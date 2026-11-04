@@ -249,6 +249,20 @@ item (um álbum grande não adia o próprio envio); atingir o teto de anexos des
 despacha o que estiver em montagem (mídia recebida não se perde no desligamento); mídia avulsa, sem
 `media_group_id`, não espera nada. Cobertura: `S200`.
 
+### Mensagens em sequência viram um turno — no `MessageBus`, sem janela de tempo
+
+Mensagens de texto que chegam enquanto outra mensagem de texto da mesma conversa ainda **espera a vez na fila** entram
+no mesmo turno que ela, na ordem (`MessageBus.textosEmEspera`). É o modo `collect` do OpenClaw (`messages.queue`). Caso
+real (VPS, 03/11/2026): "Gera em PowerPoint editável" e "E me envia" chegaram juntas enquanto o turno anterior
+terminava e viraram dois pedidos; o segundo, sozinho, não tinha objeto.
+
+Não contradiz a decisão do álbum acima, que recusou coalescer no `MessageBus` **com janela temporal**: aqui não há
+espera nenhuma. Uma mensagem com a fila livre roda na hora, sozinha; só se junta o que já ficaria parado esperando o
+turno anterior. Anexos e comandos seguem sozinhos e encerram o agrupamento (juntar o que vem depois deles inverteria a
+ordem da conversa). Mensagem que chega com um goal em execução continua indo para o goal (`trySupplementActiveGoal`),
+antes deste agrupamento. A mensagem juntada recebe um aviso curto no próprio canal (o canal web precisa de uma resposta
+para cada requisição). Cobertura: `S469`.
+
 ## Gaps conhecidos (não corrigidos nesta rodada — fora do escopo original)
 
 **O Core não tem sistema de tradução — só o Dashboard tem.** O único mecanismo de idioma do Core é
