@@ -239,13 +239,24 @@ export async function sanitizePlanSteps(
         // Item 8: Detectar placeholder paths em toolArgs.
         // Se algum argumento é um placeholder (caminho_do_*, <path>, {file}),
         // remove toolName/toolArgs para forçar AgentLoop a resolver o caminho real.
+        //
+        // O argumento de CONTEÚDO (kind 'content' em TOOL_DEPENDENCY_ARG: write.content,
+        // send_audio.text) fica de fora: quem julga conteúdo é o check de content-stub logo abaixo
+        // (ordem dos steps + classificador). O padrão é de caminho, e código tem `{nome}` (f-string,
+        // .format) e `<a:t>` (XML do PowerPoint) por natureza. Medido em 04/11/2026: 58 de 62
+        // rebaixamentos "placeholder" de `content` no log do Windows eram código ou HTML reais; o
+        // caminho do plano se perdia e o passo seguinte não achava o script (goal qejk6, 6 vezes).
+        // Três remendos anteriores trataram o sintoma (f0089d8, S296, ca12275) — este troca a fonte.
         let toolArgs: Record<string, unknown> | undefined = resolvedTool && s.toolArgs && typeof s.toolArgs === 'object'
             ? s.toolArgs as Record<string, unknown>
             : undefined;
 
         if (resolvedTool && toolArgs) {
+            const argDeConteudo = TOOL_DEPENDENCY_ARG[resolvedTool]?.kind === 'content'
+                ? TOOL_DEPENDENCY_ARG[resolvedTool].arg
+                : undefined;
             const placeholderEntry = Object.entries(toolArgs).find(
-                ([, v]) => typeof v === 'string' && PLACEHOLDER_ARG_PATTERN.test(v)
+                ([k, v]) => k !== argDeConteudo && typeof v === 'string' && PLACEHOLDER_ARG_PATTERN.test(v)
             );
             if (placeholderEntry) {
                 log.warn(`${logPrefix} step ${i + 1} has placeholder arg ${placeholderEntry[0]}="${String(placeholderEntry[1]).slice(0, 80)}" — converting to AgentLoop step`);
