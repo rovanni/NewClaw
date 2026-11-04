@@ -1360,8 +1360,8 @@ export class GoalExecutionLoop {
 
         // Verificar se ainda tem replan budget
         if (goal.replanBudget <= 0) {
-            this.goalStore.setStatus(goal.id, 'failed');
             goal = await this.entregarProntosAntesDaFalha(goal, totalCycles, state);
+            this.goalStore.setStatus(goal.id, 'failed');
             const explanation = this.gracefulDelivery.buildFailureMessage(goal, state.cognitiveContext);
             await onProgress?.({ goalId: goal.id, cycle: totalCycles, event: 'failed', message: explanation });
             return { earlyReturn: true, result: this.buildResult(goal, false, totalCycles, totalReplans, explanation) };
@@ -2378,8 +2378,8 @@ export class GoalExecutionLoop {
             : `Atingi o limite de ${GOAL_LIMITS.MAX_CYCLES} ciclos sem avanço (passos que falharam ou replanejamentos) com ${pendentes.length} passo(s) ainda por fazer` +
               (pendentes.length ? `: ${pendentes.map(s => `"${s.description.slice(0, 120)}"`).join('; ')}.` : '.');
         log.warn(`[GoalLoop] goal=${currentGoal.id} MAX_CYCLES=${GOAL_LIMITS.MAX_CYCLES} ciclos sem avanço esgotados (ciclos no total=${totalCycles}) — replans=${totalReplans} pendentes=${pendentes.map(s => s.id).join(',') || 'nenhum'} → failed`);
-        this.goalStore.setStatus(currentGoal.id, 'failed');
         currentGoal = await this.entregarProntosAntesDaFalha(currentGoal, totalCycles, state);
+        this.goalStore.setStatus(currentGoal.id, 'failed');
         const explanation = this.gracefulDelivery.buildFailureMessage(currentGoal, state.cognitiveContext, motivoDaSaida);
         return this.buildResult(currentGoal, false, totalCycles, totalReplans, explanation);
     }
