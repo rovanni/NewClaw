@@ -7,6 +7,9 @@ import type { ChannelAttachment, NormalizedMessage } from '../../channels/Channe
 import { mimeTypeForFile, serializeAttachment } from '../../channels/ChannelAdapter';
 import { MessageBus } from '../../channels/MessageBus';
 import { ToolRegistry } from '../../core/ToolRegistry';
+import { VERSAO_DO_CONTRATO, projetarTrabalho, revisaoDoTrabalho, clienteValido, modeloQueRespondeu } from '../../shared/contratoDoTurno';
+import { composeSessionKey, parseSessionKey } from '../../session/SessionKeyFactory';
+import type { Goal } from '../../loop/GoalTypes';
 
 // Reexportados para não quebrar call sites externos (ex: S14 test) — implementação real mora em
 // channels/ChannelAdapter.ts desde a issue 040/041 (ver comentário lá: Core também precisa desta
@@ -19,7 +22,7 @@ export { mimeTypeForFile, serializeAttachment };
  * significado) exige subir este número junto com o documento e o teste de conformidade S457; campo novo não exige. O cliente
  * público (`public/turn-client.js`) declara a mesma versão, e o S457 confere que as duas coincidem.
  */
-export const TURN_CONTRACT_VERSION = 1;
+export const TURN_CONTRACT_VERSION = VERSAO_DO_CONTRATO;
 
 const chatRateLimit = new Map<string, number[]>();
 const RATE_LIMIT_WINDOW_MS = 60_000;
@@ -183,10 +186,35 @@ export function createChatRouter(ctx: DashboardContext): Router {
 
         // ADR-027: o último relato de progresso desta conversa (objetivo longo), lido no mesmo polling que já mostra o
         // status — o canal web não tem push. Some quando a resposta final sai (WebChannelAdapter.mergeOrphaned).
-        const webAdapter = (ctx.controller as { getWebAdapter?: () => { progressoAtual?: (id: string) => { texto: string; em: number } | undefined } } | undefined)?.getWebAdapter?.();
+        const webAdapter = (ctx.controller as { getWebAdapter?: () => {
+            progressoAtual?: (id: string) => { texto: string; em: number } | undefined;
+            relatosDaConversa?: (id: string) => { relatos: Array<{ texto: string; em: number }>; omitidos: number } | undefined;
+        } } | undefined)?.getWebAdapter?.();
         const progresso = conversationId ? webAdapter?.progressoAtual?.(conversationId) : undefined;
 
-        res.json({ success: true, active, pendingAuth, pending, ...(progresso ? { progresso } : {}) });
+        // ADR-033 §2–§3 (contrato v2, aditivo): as etapas reais do objetivo desta conversa e os últimos relatos. Só projeção
+        // do que o núcleo já tem: descrição de etapa e estados, nunca toolArgs, resultados ou vereditos. Com `desdeRevisao`
+        // igual à revisão atual, etapas e relatos ficam de fora e a consulta frequente fica leve.
+        const goalDaConversa = conversationId
+            ? (controller?.goalOrchestrator as { getActiveGoalForConversation?: (id: string) => Goal | undefined } | undefined)?.getActiveGoalForConversation?.(conversationId)
+            : undefined;
+        const relatosDaConversa = conversationId ? webAdapter?.relatosDaConversa?.(conversationId) : undefined;
+        const desdeRevisao = typeof _req.query.desdeRevisao === 'string' ? Number(_req.query.desdeRevisao) : undefined;
+        let v2: Record<string, unknown> = {};
+        if (goalDaConversa) {
+            const publico = projetarTrabalho(goalDaConversa);
+            const revisao = revisaoDoTrabalho(goalDaConversa.id, { publico, relatos: relatosDaConversa });
+            const semMudanca = desdeRevisao === revisao;
+            const { etapas, ...semEtapas } = publico;
+            v2 = {
+                trabalho: semMudanca ? { ...semEtapas, revisao } : { ...semEtapas, revisao, etapas },
+                ...(!semMudanca && relatosDaConversa ? { relatos: relatosDaConversa.relatos, relatosOmitidos: relatosDaConversa.omitidos } : {}),
+            };
+        } else if (relatosDaConversa) {
+            v2 = { relatos: relatosDaConversa.relatos, relatosOmitidos: relatosDaConversa.omitidos };
+        }
+
+        res.json({ success: true, active, pendingAuth, pending, ...(progresso ? { progresso } : {}), ...v2 });
     });
 
     /**
@@ -281,6 +309,9 @@ export function createChatRouter(ctx: DashboardContext): Router {
             const requestId = crypto.randomUUID();
 
             const metadata: Record<string, unknown> = {};
+            // ADR-033 §4: `client` (opcional, até 64 de [a-z0-9._-]) só identifica quem mandou; nenhuma decisão depende dele.
+            const cliente = clienteValido(req.body?.client);
+            if (cliente) metadata.cliente = cliente;
 
             const normalizedMsg: NormalizedMessage = {
                 messageId: requestId,
@@ -340,7 +371,39 @@ export function createChatRouter(ctx: DashboardContext): Router {
             response: response.text,
             options: response.options,
             attachments: outAttachments.length > 0 ? outAttachments : undefined,
+            // ADR-033 §5: o resultado que o núcleo decidiu (só quando a entrega vem de um objetivo) e o aviso de fila.
+            ...(response.resultado ? { resultado: response.resultado } : {}),
+            ...(response.provisoria ? { provisoria: true } : {}),
         });
+    });
+
+    /**
+     * ADR-033 §4: GET /api/chat/context?sessionId= — o que o núcleo sabe da conversa: versão do contrato, a conversa, o canal
+     * (da chave de sessão), o cliente que a trouxe e o modelo da última resposta. Campo que não se sabe fica ausente.
+     */
+    router.get('/context', async (req: Request, res: Response) => {
+        const sessionId = typeof req.query.sessionId === 'string' ? req.query.sessionId.trim() : '';
+        if (!sessionId) return res.status(404).json({ success: false, error: 'conversa_nao_encontrada' });
+        if (!ctx.controller || !ctx.memoryManager) {
+            return res.status(503).json({ success: false, error: 'Agente não inicializado' });
+        }
+        try {
+            const chave = { channel: 'web', userId: sessionId };
+            const conversa = ctx.memoryManager.getDashboardRepository().infoDaConversa(composeSessionKey(chave));
+            if (!conversa) return res.status(404).json({ success: false, error: 'conversa_nao_encontrada' });
+            const cliente = await ctx.controller.getSessionManager().clienteDaConversa(chave);
+            const modelo = modeloQueRespondeu(conversa.id);
+            res.json({
+                success: true,
+                contrato: VERSAO_DO_CONTRATO,
+                conversa: { sessionId, ...conversa },
+                canal: parseSessionKey(conversa.id).channel,
+                ...(cliente ? { cliente } : {}),
+                ...(modelo ? { modelo } : {}),
+            });
+        } catch (err) {
+            res.status(500).json({ success: false, error: errorMessage(err) });
+        }
     });
 
     return router;

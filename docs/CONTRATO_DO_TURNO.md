@@ -1,7 +1,12 @@
-# Contrato do turno — versão 1
+# Contrato do turno — versão 2
 
-Data: 29/10/2026. Origem: ADR-030 (decisão D15, aprovada em 29/10/2026) e ADR-031 (regra 7: "contrato antes do cliente").
-Conformidade: teste de regressão `S457`. Cliente público: `src/dashboard/public/turn-client.js`, servido em `/turn-client.js`.
+Data: 29/10/2026 (versão 1); 04/11/2026 (versão 2, ADR-033). Origem: ADR-030 (decisão D15, aprovada em 29/10/2026) e
+ADR-031 (regra 7: "contrato antes do cliente"); a versão 2 é a ADR-033 (aprovada em 04/11/2026).
+Conformidade: testes de regressão `S457` (versão 1) e `S474` (versão 2). Cliente público:
+`src/dashboard/public/turn-client.js`, servido em `/turn-client.js`.
+
+A versão 2 é **aditiva**: um cliente da versão 1 continua funcionando sem mudança. O que ela acrescenta está marcado
+"(v2)" nas operações e resumido em "O que a versão 2 acrescenta", no fim das operações.
 
 ## Para que serve
 
@@ -24,7 +29,8 @@ Fora do contrato: memória, roteamento de modelos, execução. O cliente não de
 
 ## Versão e compatibilidade
 
-- O servidor anuncia a versão em `GET /api/status` → `status.contracts.turn` (número inteiro; hoje `1`).
+- O servidor anuncia a versão em `GET /api/status` → `status.contracts.turn` (número inteiro; hoje `2`) e em
+  `GET /api/chat/context` → `contrato` (v2).
 - O cliente público declara a dele em `TURN_CONTRACT_VERSION`.
 - **Campos novos** numa resposta não mudam a versão: o cliente ignora o que não conhece.
 - **Mudança incompatível** (remover um campo, mudar o significado de um status ou de uma fase) exige versão nova, com o
@@ -81,6 +87,9 @@ Corpo em JSON `{ message, sessionId }`, ou `multipart/form-data` com `message`, 
 | `500 { error }` | Agente não inicializado ou falha inesperada. |
 
 - `sessionId` é o id da conversa do ponto de vista do cliente. Omitido, vale `web-session`.
+- (v2) `client` (opcional): o nome do cliente, até 64 caracteres de `[a-z0-9._-]` (ex.: `newclaw-ivox`). Fica gravado na
+  mensagem e aparece em `GET /api/chat/context`. **Só informativo:** nenhuma decisão do núcleo depende dele. Fora do
+  formato, é ignorado.
 - O mesmo `sessionId` é o `conversationId` de `/active` e o `sessionId` de `pendingAuth` e de `auth-decision`.
 - O histórico **não** usa o `sessionId` como chave; ver a operação 7.
 
@@ -109,6 +118,22 @@ Leitura em memória, feita para consulta periódica.
   aparecer em `active` (classificação, fila). É `false` sem `turnId`.
 - **`progresso`:** o último relato de progresso desta conversa (ADR-027). Cada relato substitui o anterior, e ele some quando
   a resposta final sai. O campo fica ausente quando não há relato.
+- (v2) **`trabalho`:** só quando esta conversa tem um objetivo em andamento (conversa simples não tem etapas inventadas).
+
+  ```json
+  "trabalho": { "tipo": "objetivo", "estado": "executando", "revisao": 17, "plano": 2,
+                "etapas": [{ "id": "s1", "descricao": "Coletar os logs de hoje", "estado": "concluida" }] }
+  ```
+
+  - `estado`: `executando` | `aguardando_aprovacao` | `replanejando` | `concluido` | `falhou` | `cancelado`.
+  - `etapas[].estado`: `pendente` | `executando` | `concluida` | `pulada` | `falhou`. `descricao` é o texto que o
+    planejador escreveu para a etapa, inteiro.
+  - `plano`: quando muda, o plano foi substituído e o cliente descarta as etapas que tinha.
+  - `revisao`: cresce a cada mudança de etapa, estado, plano ou relato. Com `&desdeRevisao=<revisao>` igual à atual, o
+    servidor omite `etapas` e `relatos`. A revisão vive na memória do servidor: depois de reiniciar, recomeça, e o cliente
+    trata um número menor como plano novo.
+- (v2) **`relatos`** e **`relatosOmitidos`:** os últimos 20 relatos desta conversa, `{ texto, em }`, do mais antigo ao mais
+  novo; `relatosOmitidos` conta os mais antigos que saíram. Somem junto com `progresso`, quando a resposta final sai.
 
 ### 3. Fases do turno (derivadas de `/active`)
 
@@ -133,13 +158,19 @@ A fase **nunca** é decidida pelo texto da resposta.
 
 | Resposta | Significado |
 |---|---|
-| `200 { success: true, response, options?, attachments? }` | A entrega deste turno. `attachments[]` segue `serializeAttachment` (nome, tipo, dados em base64). |
+| `200 { success: true, response, options?, attachments?, resultado?, provisoria? }` | A entrega deste turno. `attachments[]` segue `serializeAttachment` (nome, tipo, dados em base64). |
 | `404 { success: false, error: "not_ready_or_not_found" }` | Ainda não pronta, **já retirada** ou `turnId` desconhecido. Os três casos não se distinguem. |
 | `400` | Sem `turnId`. |
 | `503` | Agente não inicializado. |
 
 **A leitura consome:** a segunda leitura do mesmo `turnId` dá `404`. Se duas abas acompanham o mesmo turno, só uma recebe a
 entrega. A outra deve ler o histórico.
+
+- (v2) **`resultado`:** quando a entrega vem de um objetivo,
+  `{ "estado": "concluido" | "falhou" | "cancelado" | "parcial", "etapas": { "total": 4, "concluidas": 3 } }`. É o que o
+  núcleo já decidiu (`parcial`: concluído com alguma etapa de confiança baixa). O cliente mostra; não decide.
+- (v2) **`provisoria: true`:** a entrega é o aviso de fila ("Comportamentos", item 1). A resposta final ainda vem, com o mesmo
+  `turnId`.
 
 ### 5. Cancelar — `POST /api/chat` com `message: "/cancelar"`
 
@@ -159,6 +190,37 @@ entrega. A outra deve ler o histórico.
   - `503`: agente não inicializado.
   - `500`: falha.
 - Não existe outro caminho para aprovar. Por voz ou por texto livre, não aprova.
+
+### 6a. (v2) Contexto da conversa — `GET /api/chat/context?sessionId=<conversa>`
+
+```json
+{ "success": true, "contrato": 2,
+  "conversa": { "sessionId": "…", "id": "web:…", "criadaEm": "2026-11-04T12:00:00.000Z", "mensagens": 55 },
+  "canal": "web", "cliente": "newclaw-ivox",
+  "modelo": { "nome": "…", "provedor": "ollama", "em": "2026-11-04T12:05:00.000Z" } }
+```
+
+- **`canal`:** lido da chave da conversa no servidor; o cliente não deduz.
+- **`cliente`:** o `client` da primeira mensagem que o trouxe. Ausente quando nenhuma mensagem trouxe, ou quando a
+  compactação da conversa já tirou essas mensagens da transcrição.
+- **`modelo`:** o modelo e o provedor da última chamada que **respondeu** num turno desta conversa (a resposta, não os juízes
+  nem o planejador), com a hora. Ausente quando não se sabe: conversa nova ou servidor reiniciado. Nunca o modelo
+  configurado.
+- `404 { success: false, error: "conversa_nao_encontrada" }`: sem `sessionId`, ou conversa ainda sem mensagem gravada.
+
+### O que a versão 2 acrescenta
+
+| Onde | Campo |
+|---|---|
+| `POST /api/chat` | `client` |
+| `GET /api/chat/active` | `trabalho` (etapas, `plano`, `revisao`), `relatos`, `relatosOmitidos`; parâmetro `desdeRevisao` |
+| `GET /api/chat/outbox` | `resultado`, `provisoria` |
+| `GET /api/chat/context` | rota nova |
+
+**Limites de exposição (ADR-033 §6, cobrados pelo `S474`):** pelo contrato saem textos escritos para a pessoa (descrição de
+etapa, relato, resposta), estados, contagens, horários, nome do modelo e do provedor. Nunca saem parâmetros de ferramenta,
+saídas de comando, conteúdo de arquivo lido, vereditos ou raciocínio de juízes, prompts, endereço de provedor, chaves,
+nome da máquina nem dados de outra conversa (exceto o `active` da versão 1, mantido como está).
 
 ### 7. Histórico (fonte de verdade da conversa)
 
@@ -183,14 +245,15 @@ São comportamentos reais da versão 1, cobertos pelo `S457`. Não são erros do
    que entrou na fila.
    - A resposta final dela sai depois, **com o mesmo `turnId`**, e também fica no histórico.
    - Se ninguém tiver retirado o aviso, a resposta final o substitui na outbox.
-   - A versão 1 não tem campo que diga "esta entrega é provisória". Quem precisar da resposta final deve conferir o histórico
-     depois de a conversa sair de `active`.
+   - A versão 1 não tinha campo que dissesse "esta entrega é provisória". Na versão 2, o aviso vem com `provisoria: true`, e
+     o `waitForTurn` do cliente público continua esperando a resposta final (o aviso vai para `onProvisional`).
 2. **Complemento de objetivo:**
    - Texto enviado enquanto um objetivo da conversa executa é incorporado a ele.
    - A entrega deste `turnId` é a nota "Anotado"; o resultado vem na entrega do turno que criou o objetivo.
 3. **Entregas atrasadas:** a resposta de uma tarefa anterior que perdeu o turno dela vem mesclada no início da próxima
    entrega da mesma conversa, com anexos e opções.
 4. **Falha do turno:** não há campo de erro na entrega. Falhas chegam como texto da resposta, escrito pelo próprio NewClaw.
+   Na versão 2, a entrega de um objetivo traz `resultado.estado` (`falhou`, `cancelado`…).
 5. **Outbox sem expiração:** entrega nunca retirada fica na memória do servidor até ele reiniciar. Reiniciar descarta a
    outbox, mas não o histórico.
 

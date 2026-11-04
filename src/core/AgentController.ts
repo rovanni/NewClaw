@@ -126,6 +126,7 @@ export class AgentController {
     public getMemoryGovernor(): MemoryGovernor { return this.memoryGovernor; }
     public getSessionLearner(): SessionLearner { return this.sessionLearner; }
     public getMessageBus(): MessageBus { return this.messageBus; }
+    public getSessionManager(): SessionManager { return this.sessionManager; }
     public getWebAdapter(): WebChannelAdapter { return this.webAdapter; }
     public getWorkflowEngine(): WorkflowEngine { return this.workflowEngine; }
     public getEventBus() { return this._eventBus; }

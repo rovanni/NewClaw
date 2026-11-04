@@ -201,7 +201,7 @@ async function main(): Promise<void> {
         console.log('\n=== S457-2 — versão (seção "Versão e compatibilidade") ===');
         const status = await (await fetch(`${base}/api/status`, { headers: auth })).json() as any;
         assert(status?.status?.contracts?.turn === TURN_CONTRACT_VERSION, 'GET /api/status anuncia status.contracts.turn', status?.status?.contracts);
-        assert(TURN_CONTRACT_VERSION === 1 && CLIENT_VERSION === TURN_CONTRACT_VERSION, 'servidor e cliente público declaram a mesma versão (1)', { servidor: TURN_CONTRACT_VERSION, cliente: CLIENT_VERSION });
+        assert(TURN_CONTRACT_VERSION === 2 && CLIENT_VERSION === TURN_CONTRACT_VERSION, 'servidor e cliente público declaram a mesma versão (2, ADR-033)', { servidor: TURN_CONTRACT_VERSION, cliente: CLIENT_VERSION });
         assert(typeof status?.status?.version === 'string', 'status.version (versão do NewClaw) continua presente');
         const doc = fs.readFileSync(path.join(__dirname, '../../../docs/CONTRATO_DO_TURNO.md'), 'utf-8');
         assert(new RegExp(`^# Contrato do turno — versão ${TURN_CONTRACT_VERSION}$`, 'm').test(doc), 'o documento do contrato está na mesma versão do servidor');

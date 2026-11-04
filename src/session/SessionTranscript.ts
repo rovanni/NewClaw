@@ -37,6 +37,8 @@ export type SessionEventType = 'user' | 'assistant' | 'system' | 'tool_call' | '
 
 export interface TranscriptMeta {
     model?: string;
+    /** ADR-033: o cliente do contrato do turno que mandou a mensagem (ex.: newclaw-ivox). Só informativo. */
+    cliente?: string;
     tokens?: number;
     tools_used?: string[];
     duration_ms?: number;

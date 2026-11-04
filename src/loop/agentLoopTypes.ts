@@ -228,6 +228,8 @@ export interface AgentLoopConfig {
 export interface ProcessedResult {
     text: string;
     options?: ResponseOption[];
+    /** ADR-033: resultado de um objetivo que terminou (estado e etapas), para o contrato público do turno. */
+    resultado?: import('../shared/contratoDoTurno').ResultadoDaTarefa;
     /**
      * true quando este resultado NÃO é uma resposta real — é o guard de `activeTurns` recusando
      * um turno concorrente para a mesma conversa (S224). Sinal estruturado, não para o chamador

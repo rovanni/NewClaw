@@ -4405,7 +4405,7 @@ Se a intenção original pedia uma explicação condicional (ex: "se não conseg
                 30_000,
                 undefined,
                 undefined,
-                { diag: { component: 'GoalExecutionLoop', phase: 'delivery-summary', goalId: goal.id } },
+                { diag: { component: 'GoalExecutionLoop', phase: 'delivery-summary', goalId: goal.id, respostaDaConversa: true } },
             );
             if (llmResult.status !== 'success' || !llmResult.content?.trim()) return undefined;
             return llmResult.content.trim();

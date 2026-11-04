@@ -50,6 +50,13 @@ function appendFact(msg: NormalizedMessage, fact: string): void {
     msg.text = msg.text ? `${msg.text}\n${fact}` : fact;
 }
 
+/** O `metadata` da mensagem sem o `cliente` do contrato do turno (ADR-033: nenhuma decisão do núcleo depende dele). */
+function semCliente(metadata: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
+    if (!metadata || !('cliente' in metadata)) return metadata;
+    const { cliente: _cliente, ...resto } = metadata;
+    return Object.keys(resto).length > 0 ? resto : undefined;
+}
+
 export class MessageBus {
     /**
      * Teto de anexos pré-processados por mensagem. O excedente não é descartado em silêncio —
@@ -493,7 +500,8 @@ export class MessageBus {
             await adapter.send(
                 {
                     text: '🧠 Estou concluindo a tarefa anterior.\nSua mensagem já foi adicionada à sequência de processamento. Por favor, aguarde um momento.',
-                    format: 'plain'
+                    format: 'plain',
+                    provisoria: true,
                 },
                 msg.rawContext
             ).catch(() => {});
@@ -597,7 +605,9 @@ export class MessageBus {
             }
 
             // 3. Text processing through AgentLoop
-            await this.sessionManager.recordUserMessage(sessionKey, msg.text);
+            // ADR-033: `cliente` (informativo, nenhuma decisão depende dele) fica registrado na mensagem da conversa.
+            const clienteDaMensagem = typeof msg.metadata?.cliente === 'string' ? msg.metadata.cliente : undefined;
+            await this.sessionManager.recordUserMessage(sessionKey, msg.text, clienteDaMensagem ? { cliente: clienteDaMensagem } : undefined);
             const startTime = Date.now();
             log.info('processing_start', `User: ${msg.text.slice(0, 80)}`, { channel: msg.channel, userId: msg.userId, correlationId });
 
@@ -631,7 +641,8 @@ export class MessageBus {
                 channel: msg.channel,
                 chatId: msg.chatId || msg.userId,
                 userId: msg.userId,
-                metadata: msg.metadata,
+                // ADR-033 §4: `cliente` é só informativo; fica gravado na conversa e não chega a quem decide.
+                metadata: semCliente(msg.metadata),
                 correlationId,
                 recentMessages: recentSessionMessages,
             };
@@ -653,6 +664,7 @@ export class MessageBus {
 
             const responseText = typeof response === 'string' ? response : response.text;
             const responseOptions = typeof response === 'string' ? undefined : response.options;
+            const responseResultado = typeof response === 'string' ? undefined : response.resultado;
 
             log.info('processing_done', `Duration: ${duration}ms`, {
                 responseLength: responseText?.length || 0,
@@ -674,7 +686,8 @@ export class MessageBus {
                 const normalizedResponse: NormalizedResponse = {
                     text: responseText || 'Desculpe, não consegui gerar uma resposta.',
                     format: 'markdown',
-                    options: responseOptions
+                    options: responseOptions,
+                    ...(responseResultado ? { resultado: responseResultado } : {}),
                 };
                 const delivered = await adapter.send(normalizedResponse, msg.rawContext);
                 deliveredAttachments = delivered?.attachments;
