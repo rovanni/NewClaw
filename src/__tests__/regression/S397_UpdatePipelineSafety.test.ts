@@ -84,6 +84,19 @@ async function main(): Promise<void> {
         }, () => undefined, async () => undefined, false, 'linux', () => false, () => { throw new Error('o teste nunca para o NewClaw real'); }));
         assert(rejected, `falha de instalação/build/prune em ${failedCommand} propaga erro`);
     }
+    // Auditoria de 04/11/2026: o prune regravava o package-lock.json com o formato do npm da máquina (a VPS apagava os
+    // campos "libc"). Depois do prune o lockfile volta ao do git; fora de um clone git, a falha disso não derruba nada.
+    {
+        const feitos: string[] = [];
+        await installBuildRestart(false, command => { feitos.push(command); }, () => undefined, async () => undefined, false,
+            'linux', () => false, () => { throw new Error('o teste nunca para o NewClaw real'); });
+        const iPrune = feitos.indexOf('npm prune --omit=dev');
+        assert(iPrune >= 0 && feitos[iPrune + 1] === 'git checkout -- package-lock.json', 'o lockfile volta ao do git logo depois do prune', feitos);
+        const semGit = await rejects(() => installBuildRestart(false, command => {
+            if (command.startsWith('git checkout')) throw new Error('fatal: not a git repository');
+        }, () => undefined, async () => undefined, false, 'linux', () => false, () => { throw new Error('o teste nunca para o NewClaw real'); }));
+        assert(!semGit, 'fora de um clone git, restaurar o lockfile não derruba a atualização');
+    }
     let healthCalled = false;
     assert(await rejects(() => installBuildRestart(true, () => undefined,
         () => { throw new Error('mock restart failure'); }, async () => { healthCalled = true; }, false, 'linux', () => false, () => { throw new Error('o teste nunca para o NewClaw real'); }))
