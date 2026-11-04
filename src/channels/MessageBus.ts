@@ -104,6 +104,15 @@ export class MessageBus {
     private cleanupTimer: NodeJS.Timeout | null = null;
     /** Fila serial por conversa — garante processamento em ordem */
     private readonly conversationQueues = new ConversationQueueManager();
+    /**
+     * Mensagens em sequência viram um turno só (padrão `collect` do OpenClaw, `messages.queue`). Por conversa: a lista de
+     * textos que chegaram DEPOIS da última mensagem de texto que ainda espera a vez na fila. Quando a vez dela chega, sai
+     * daqui e o turno roda com todos os textos juntos, na ordem. Sem janela de tempo: só junta o que já estava esperando
+     * — nada é atrasado. Caso real (VPS, 03/11/2026): "Gera em PowerPoint editável" e "E me envia" chegaram juntas
+     * enquanto o turno anterior terminava e viraram dois pedidos, o segundo sem objeto ("O que você gostaria que eu
+     * enviasse?").
+     */
+    private readonly textosEmEspera = new Map<string, string[]>();
 
     constructor(agentLoop: AgentLoop, sessionManager: SessionManager) {
         this.agentLoop = agentLoop;
@@ -384,6 +393,7 @@ export class MessageBus {
             const priorityHandler = this.priorityCommandHandlers.get(commandName);
             if (priorityHandler) {
                 const cleared = this.conversationQueues.clearQueue(queueId);
+                this.textosEmEspera.delete(queueId); // o que esperava a vez foi descartado junto
                 const response = await priorityHandler(msg).catch(() => null);
                 if (response && adapter) {
                     await adapter.send({ text: response, format: 'plain' }, msg.rawContext).catch(() => {});
@@ -417,10 +427,36 @@ export class MessageBus {
             }
         }
 
+        // Mensagens em sequência viram um turno só (ver `textosEmEspera`): texto comum chegando enquanto outra mensagem de
+        // texto ainda espera a vez na fila entra junto com ela, em vez de virar um pedido separado. Anexos e comandos
+        // seguem sozinhos e encerram o agrupamento — juntar o que vem depois deles inverteria a ordem da conversa.
+        const juntavel = msg.type === 'text' && !msg.text.startsWith('/') && !!msg.text.trim() && !(msg.attachments && msg.attachments.length > 0);
+        const emEspera = juntavel ? this.textosEmEspera.get(queueId) : undefined;
+        if (emEspera) {
+            emEspera.push(msg.text);
+            if (adapter) {
+                await adapter.send(
+                    { text: '📎 Anotado — vai junto com a mensagem anterior, que ainda está na fila.', format: 'plain' },
+                    msg.rawContext
+                ).catch(() => {});
+            }
+            log.info('message_collected', `juntas=${emEspera.length + 1}`, { queueId, correlationId });
+            markDone();
+            return;
+        }
+        if (!juntavel) this.textosEmEspera.delete(queueId);
+        const juntadas: string[] = [];
+
         const result = this.conversationQueues.enqueue(
             queueId,
             async () => {
                 try {
+                    // A vez chegou: o que se juntou a esta mensagem enquanto ela esperava entra no mesmo turno.
+                    if (this.textosEmEspera.get(queueId) === juntadas) this.textosEmEspera.delete(queueId);
+                    if (juntadas.length > 0) {
+                        msg = { ...msg, text: [msg.text, ...juntadas].join('\n') };
+                        log.info('message_collected_turn', `mensagens=${juntadas.length + 1}`, { queueId, correlationId });
+                    }
                     await this.processMessageCore(msg, correlationId);
                     markDone();
                     await this.reprocessOrphanedSupplements(msg, queueId, correlationId);
@@ -462,6 +498,9 @@ export class MessageBus {
                 msg.rawContext
             ).catch(() => {});
         }
+
+        // Esperando a vez: as próximas mensagens de texto desta conversa se juntam a esta.
+        if (juntavel && result.queued) this.textosEmEspera.set(queueId, juntadas);
 
         log.debug('message_queued', `queued=${result.queued} position=${result.position}`, { queueId, correlationId });
     }
