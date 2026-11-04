@@ -87,6 +87,47 @@ export function truncateToChars(text: string, maxChars: number): string {
 }
 
 /**
+ * Uma mensagem da conversa no limite de caracteres, com o corte DECLARADO no próprio texto (Informação Completa para
+ * Decidir, proibição 2). Mantém o começo e o fim e omite o meio: numa mensagem longa colada pelo usuário, o pedido
+ * costuma vir no fim — caso real (VPS, 03/11/2026): 1.584 caracteres de ementa terminando em "poderia criar a aula 01
+ * de 4 horas", e o corte do começo apagava justamente o pedido. Fonte única do recorte por mensagem: o histórico do
+ * agente (ContextBudget) e o das decisões antes dele (MessageBus → classificador, roteador, juiz de suficiência).
+ */
+export function mensagemNoLimite(text: string, maxChars: number): string {
+    if (!text || text.length <= maxChars) return text || '';
+    const aviso = (mostrados: number) => `\n[corte do sistema: trecho do meio omitido — ${mostrados} de ${text.length} caracteres mostrados]\n`;
+    const util = Math.max(0, maxChars - aviso(maxChars).length);
+    const inicio = Math.ceil(util / 2);
+    const fim = util - inicio;
+    return text.slice(0, inicio) + aviso(inicio + fim) + (fim > 0 ? text.slice(text.length - fim) : '');
+}
+
+/**
+ * As mensagens recentes da conversa que cabem no orçamento, das MAIS NOVAS para trás, devolvidas em ordem cronológica.
+ * Antes o laço ia da mais antiga para a mais nova e parava quando o orçamento acabava — quem ficava de fora eram as
+ * mensagens mais recentes, justamente as que dão sentido a "isso", "gera em PowerPoint", "e me envia" (S468).
+ */
+export function historicoNoOrcamento(
+    mensagens: Array<{ role: string; content: string }>,
+    config: Pick<ContextBudgetConfig, 'maxHistoryMessages' | 'maxMessageChars' | 'historyMaxTokens'>,
+): Array<{ role: string; content: string }> {
+    const escolhidas: Array<{ role: string; content: string }> = [];
+    let restante = config.historyMaxTokens;
+    for (const m of mensagens.slice(-config.maxHistoryMessages).reverse()) {
+        if (restante <= 0) break;
+        let content = mensagemNoLimite(m.content, config.maxMessageChars);
+        let tokens = estimateTokens(content);
+        if (tokens > restante) {
+            content = mensagemNoLimite(content, Math.floor(restante * 3.5));
+            tokens = estimateTokens(content);
+        }
+        escolhidas.push({ ...m, content });
+        restante -= tokens;
+    }
+    return escolhidas.reverse();
+}
+
+/**
  * ContextBudget — Controla budget de tokens por bloco para evitar overflow de contexto.
  * Distribuição: system (1500), state (500), memory (1000), history (2000), skills (500).
  */
@@ -141,24 +182,9 @@ export class ContextBudget {
             totalTokens += estimateTokens(checkpoint);
         }
 
-        const recentLimited = params.recentMessages
-            .slice(-this.config.maxHistoryMessages)
-            .map(m => ({ ...m, content: truncateToChars(m.content, this.config.maxMessageChars) }));
-
-        let historyTokenBudget = this.config.historyMaxTokens;
-        for (const msg of recentLimited) {
-            const msgTokens = estimateTokens(msg.content);
-            if (msgTokens > historyTokenBudget) {
-                const remaining = truncateToTokens(msg.content, historyTokenBudget);
-                blocks.push({ role: msg.role as ContextBlock['role'], content: remaining, priority: 3 });
-                totalTokens += estimateTokens(remaining);
-                historyTokenBudget -= estimateTokens(remaining);
-            } else {
-                blocks.push({ role: msg.role as ContextBlock['role'], content: msg.content, priority: 3 });
-                totalTokens += msgTokens;
-                historyTokenBudget -= msgTokens;
-            }
-            if (historyTokenBudget <= 0) break;
+        for (const msg of historicoNoOrcamento(params.recentMessages, this.config)) {
+            blocks.push({ role: msg.role as ContextBlock['role'], content: msg.content, priority: 3 });
+            totalTokens += estimateTokens(msg.content);
         }
 
         blocks.push({ role: 'user', content: params.currentUserMessage, priority: 9 });
