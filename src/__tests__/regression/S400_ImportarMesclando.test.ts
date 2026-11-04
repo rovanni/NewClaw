@@ -19,6 +19,9 @@ import * as path from 'path';
 import JSZip from 'jszip';
 import Database from 'better-sqlite3';
 import * as bk from '../../core/backupDoConhecimento';
+import { SkillLearner } from '../../loop/SkillLearner';
+import { SkillLoader } from '../../skills/SkillLoader';
+import { montarTrajetoria } from '../../loop/aprendizadoDeSkills';
 
 let passed = 0;
 let failed = 0;
@@ -136,6 +139,58 @@ async function main(): Promise<void> {
         const achou = db.prepare(`SELECT rowid FROM memory_nodes_fts WHERE memory_nodes_fts MATCH 'criptomoeda'`).all();
         assert(achou.length === 1, 'o índice FTS foi reconstruído (ele não tem gatilhos) e acha a memória importada', achou);
         db.close();
+
+        console.log('\n=== S400-8 — skill APRENDIDA importada: chega inteira e carrega no destino (ADR-036) ===');
+        {
+            // Origem: a skill nasce pelo caminho real (SkillLearner), com cercas de código e acento no corpo.
+            const A = inst(path.join(base, 'aprendiz'));
+            const dbA = new Database(path.join(A.dados, 'newclaw.db'));
+            dbA.exec('CREATE TABLE memory_nodes (id TEXT PRIMARY KEY, type TEXT, name TEXT, content TEXT, lifecycle_state TEXT, confidence REAL)');
+            const procedimento = '1. Liste os arquivos:\n```powershell\nGet-ChildItem -Recurse\n```\n2. Rode o script:\n```powershell\nnode <script>\n```';
+            const resposta = JSON.stringify({
+                aprender: true, motivo: 'procedimento reutilizável', nome: 'Executar script Node', titulo: 'Executar script Node no workspace',
+                descricao: 'Quando o usuário pedir para rodar um script Node que está no workspace.', gatilhos: ['node', 'script'],
+                ferramentas: ['exec_command'], procedimento, cuidados: 'Confira o caminho antes de rodar.', aviso: 'Aprendi a rodar scripts Node.',
+            });
+            const trajetoria = montarTrajetoria([
+                { toolName: 'exec_command', args: { command: 'Get-ChildItem -Recurse' }, result: 'success' },
+                { toolName: 'exec_command', args: { command: 'node script.js' }, result: 'success' },
+            ], () => undefined);
+            const aprendida = await new SkillLearner(dbA, A.skills).aprenderComTrajetoria(
+                { goalId: 'g-s400', pedido: 'rode o script que está na pasta de trabalho', objetivo: 'rodar script', plataforma: process.platform, trajetoria, segredos: [] },
+                async () => resposta);
+            assert(aprendida.aprendida, 'a skill foi aprendida pelo caminho real', aprendida);
+            const linhaA = dbA.prepare('SELECT * FROM auto_skills').get() as Record<string, unknown>;
+            const pasta = fs.readdirSync(A.skills)[0] ?? '';
+            const bytesA = fs.readFileSync(path.join(A.skills, pasta, 'SKILL.md'));
+            const pacoteA = (await bk.criarPacote(path.join(base, 'pacotes-aprendiz'), {}, A)).arquivo;
+            dbA.close();
+            fs.rmSync(A.raiz, { recursive: true, force: true });
+
+            // Destino: instalação com o esquema completo e uma skill sua; a aprendida não existe lá.
+            const D = inst(path.join(base, 'destino-aprendida'));
+            const dbD = new Database(path.join(D.dados, 'newclaw.db'));
+            dbD.exec(`CREATE TABLE memory_nodes (id TEXT PRIMARY KEY, type TEXT, name TEXT, content TEXT, lifecycle_state TEXT, confidence REAL);
+                      CREATE TABLE memory_edges (from_node TEXT NOT NULL, to_node TEXT NOT NULL, relation TEXT NOT NULL, weight REAL DEFAULT 1.0, PRIMARY KEY (from_node, to_node, relation));
+                      CREATE VIRTUAL TABLE memory_nodes_fts USING fts5(name, content, type, content='memory_nodes');`);
+            new SkillLearner(dbD, D.skills);
+            dbD.close();
+            skill(D, 'resumo-local', '---\nname: resumo-local\ndescription: Skill que já era do destino.\n---\nResuma em 3 tópicos.');
+            const relD = await bk.importarPacote(pacoteA, D, undefined, path.join(base, 'seguranca-aprendida'));
+
+            const dbD2 = new Database(path.join(D.dados, 'newclaw.db'), { readonly: true });
+            const linhaD = dbD2.prepare('SELECT * FROM auto_skills WHERE id = ?').get(String(linhaA.id)) as Record<string, unknown> | undefined;
+            dbD2.close();
+            assert(relD.skillsAprendidas === 1 && !!linhaD && JSON.stringify(linhaD) === JSON.stringify(linhaA),
+                'a linha de auto_skills chega idêntica em todas as colunas (id, corpo, status, datas, origem, file_exported)', { relD: relD.skillsAprendidas, linhaA, linhaD });
+            const arquivoD = path.join(D.skills, pasta, 'SKILL.md');
+            assert(relD.skills.novas >= 1 && fs.existsSync(arquivoD) && fs.readFileSync(arquivoD).equals(bytesA), 'o SKILL.md aprendido chega, byte a byte, e entra ativo', relD.skills);
+            const carregador = new SkillLoader(D.skills); carregador.loadAll();
+            const skD = carregador.getSkill(String(linhaA.name));
+            assert(!!skD && skD.content.includes('```powershell\nGet-ChildItem -Recurse\n```') && skD.content.includes('que está na pasta'),
+                'o SkillLoader do destino carrega a aprendida, com as cercas de código e os acentos intactos', skD?.content.slice(0, 160));
+            assert(!!carregador.getSkill('resumo-local'), 'a skill que já era do destino continua carregando', carregador.loadAll().map(s => s.name));
+        }
 
         console.log('\n=== S400-7 — painel e linha de comando ligados ===');
         const ler = (...p: string[]) => fs.readFileSync(path.join(process.cwd(), ...p), 'utf-8');

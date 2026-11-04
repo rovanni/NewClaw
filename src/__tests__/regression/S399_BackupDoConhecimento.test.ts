@@ -21,6 +21,9 @@ import JSZip from 'jszip';
 import Database from 'better-sqlite3';
 import * as bk from '../../core/backupDoConhecimento';
 import { VERSAO_DO_ESQUEMA } from '../../memory/memorySchema';
+import { SkillLearner } from '../../loop/SkillLearner';
+import { SkillLoader } from '../../skills/SkillLoader';
+import { montarTrajetoria } from '../../loop/aprendizadoDeSkills';
 
 let passed = 0;
 let failed = 0;
@@ -137,6 +140,66 @@ async function main(): Promise<void> {
         }
         assert(bk.temCaminhoDeOutroSistema('use C:\\Tools\\x.exe', 'win32', 'linux') && bk.temCaminhoDeOutroSistema('em /home/fulano/x', 'linux', 'win32') && bk.temCaminhoDeOutroSistema('em /Users/fulano/x', 'darwin', 'linux'), 'caminhos típicos de cada sistema são reconhecidos');
         assert(!bk.temCaminhoDeOutroSistema('use C:\\Tools\\x.exe', 'win32', 'win32') && !bk.temCaminhoDeOutroSistema('Resuma em 3 tópicos', 'win32', 'linux'), 'mesmo sistema, ou texto sem caminho: nada a revisar');
+        console.log('\n=== S399-7 — skill APRENDIDA: backup → restaurar numa instalação limpa, sem a pasta de origem (ADR-036) ===');
+        {
+            // A skill nasce pelo caminho real (SkillLearner), com cercas de código e acento no corpo.
+            const A = instalacao(path.join(base, 'aprendiz'), false);
+            const dbA = new Database(path.join(A.dados, 'newclaw.db'));
+            dbA.exec('CREATE TABLE memory_nodes (id TEXT PRIMARY KEY, name TEXT, content TEXT)');
+            dbA.pragma(`user_version = ${VERSAO_DO_ESQUEMA}`);
+            const procedimento = '1. Liste os arquivos:\n```powershell\nGet-ChildItem -Recurse\n```\n2. Rode o script:\n```powershell\nnode <script>\n```';
+            const resposta = JSON.stringify({
+                aprender: true, motivo: 'procedimento reutilizável', nome: 'Executar script Node', titulo: 'Executar script Node no workspace',
+                descricao: 'Quando o usuário pedir para rodar um script Node que está no workspace.', gatilhos: ['node', 'script'],
+                ferramentas: ['exec_command'], procedimento, cuidados: 'Confira o caminho antes de rodar.', aviso: 'Aprendi a rodar scripts Node.',
+            });
+            const trajetoria = montarTrajetoria([
+                { toolName: 'exec_command', args: { command: 'Get-ChildItem -Recurse' }, result: 'success' },
+                { toolName: 'exec_command', args: { command: 'node script.js' }, result: 'success' },
+            ], () => undefined);
+            const aprendizA = new SkillLearner(dbA, A.skills);
+            const aprendida = await aprendizA.aprenderComTrajetoria(
+                { goalId: 'g-s399', pedido: 'rode o script que está na pasta de trabalho', objetivo: 'rodar script', plataforma: process.platform, trajetoria, segredos: [] },
+                async () => resposta);
+            assert(aprendida.aprendida, 'a skill foi aprendida pelo caminho real', aprendida);
+            const linhaA = dbA.prepare('SELECT * FROM auto_skills').get() as Record<string, unknown>;
+            const pastas = fs.readdirSync(A.skills);
+            const pasta = pastas[0] ?? '';
+            const bytesA = fs.readFileSync(path.join(A.skills, pasta, 'SKILL.md'));
+            assert(pastas.length === 1 && /^aprendida_/.test(pasta) && linhaA.file_exported === 1, 'nasce numa pasta aprendida_<nome>, com a linha marcada como exportada', { pastas, file_exported: linhaA.file_exported });
+            const pacoteA = (await bk.criarPacote(saida, {}, A)).arquivo;
+            dbA.close();
+            fs.rmSync(A.raiz, { recursive: true, force: true });
+            assert(!fs.existsSync(A.skills) && !fs.existsSync(A.dados), 'a pasta de origem deixou de existir: a restauração só tem o pacote');
+
+            const B = instalacao(path.join(base, 'restaurada'), false);
+            const relB = await bk.restaurarPacote(pacoteA, {}, B, path.join(base, 'seg-aprendida'));
+            const arquivoB = path.join(B.skills, pasta, 'SKILL.md');
+            assert(relB.skills === 1 && fs.existsSync(arquivoB) && fs.readFileSync(arquivoB).equals(bytesA), 'o SKILL.md aprendido volta, byte a byte', relB);
+
+            const carregador = new SkillLoader(B.skills); carregador.loadAll();
+            const skB = carregador.getSkill(String(linhaA.name));
+            assert(!!skB && skB.content.includes('```powershell\nGet-ChildItem -Recurse\n```') && skB.content.includes('que está na pasta'),
+                'o SkillLoader da instalação restaurada carrega a skill, com as cercas de código e os acentos', skB?.content.slice(0, 160));
+
+            const restaurado = path.join(B.dados, 'newclaw.db.restore');
+            const dbB = new Database(restaurado, { readonly: true });
+            const linhaB = dbB.prepare('SELECT * FROM auto_skills WHERE id = ?').get(String(linhaA.id)) as Record<string, unknown> | undefined;
+            dbB.close();
+            assert(!!linhaB && JSON.stringify(linhaB) === JSON.stringify(linhaA), 'a linha de auto_skills volta idêntica em todas as colunas (id, corpo, status, datas, origem, file_exported)', { linhaA, linhaB });
+
+            // Fonte de verdade é o banco: sem o arquivo, ele se reconstrói do banco, byte a byte.
+            const copiaDoBanco = path.join(base, 'copia-do-banco-restaurado.db');
+            fs.copyFileSync(restaurado, copiaDoBanco);
+            const dbC = new Database(copiaDoBanco);
+            const pastaReconstruida = path.join(base, 'skills-reconstruidas');
+            const aprendizC = new SkillLearner(dbC, pastaReconstruida);
+            const reativou = aprendizC.deactivateSkill(String(linhaA.id)) && aprendizC.activateSkill(String(linhaA.id));
+            dbC.close();
+            const arquivoC = path.join(pastaReconstruida, pasta, 'SKILL.md');
+            assert(reativou && fs.existsSync(arquivoC) && fs.readFileSync(arquivoC).equals(bytesA), 'sem o arquivo, ele é reconstruído só a partir do banco, idêntico ao original');
+        }
+
         console.log('\n=== S399-6 — painel, linha de comando e textos usam o MESMO módulo ===');
         const ler = (...p: string[]) => fs.readFileSync(path.join(process.cwd(), ...p), 'utf-8');
         const rota = ler('src', 'dashboard', 'routes', 'maintenance.ts');

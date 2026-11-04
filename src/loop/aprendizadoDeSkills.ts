@@ -202,7 +202,9 @@ export type RespostaInterpretada =
     | { tipo: 'invalida'; erro: string };
 
 function primeiroObjeto(texto: string): Record<string, unknown> | null {
-    const limpo = texto.replace(/```(?:json)?/gi, '').trim();
+    // Um JSON embrulhado em bloco de código cai no recorte do primeiro "{" ao último "}" abaixo. Apagar toda ocorrência de ```
+    // aqui também tirava as cercas dos blocos de código DENTRO do texto da skill ("```powershell" virava "powershell").
+    const limpo = texto.trim();
     const tentar = (s: string) => { try { const o = JSON.parse(s); return o && typeof o === 'object' && !Array.isArray(o) ? o : null; } catch { return null; } };
     const direto = tentar(limpo);
     if (direto) return direto;

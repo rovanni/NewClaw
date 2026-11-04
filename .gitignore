@@ -76,6 +76,11 @@ Thumbs.db
 # lista de includes, equivalente público do `CLAUDE.md`, e serve a quem usa outro agente.
 .agents/
 
+# Skills aprendidas pelo próprio NewClaw (ADR-017): conhecimento da instância, não código distribuído
+# (ADR-036 e SEPARACAO_DISTRIBUIDO_APRENDIDO). A fonte de verdade é a tabela `auto_skills`; o SKILL.md
+# em `skills/` é cópia derivada, exportada pelo SkillLearner. Skill oficial não leva o prefixo `aprendida_`.
+skills/aprendida_*/
+
 # Relatórios de auditoria na raiz (legado)
 ARCHITECTURE_REVIEW.md
 AUDIT_PART*.md
