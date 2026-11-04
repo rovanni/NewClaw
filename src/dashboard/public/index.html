@@ -566,13 +566,35 @@
     // Modo ditado: grava até o usuário clicar de novo no microfone; pausas não encerram
     // nem enviam. O texto vai para o campo de mensagem e o envio fica com o usuário.
     let dictationText = '';          // texto já no campo + trechos finais reconhecidos
+    let dictationLastFinal = '';     // último trecho final escrito (guarda contra trecho reapresentado)
     let dictationStopRequested = false;
     const DICTATION_FATAL_ERRORS = ['not-allowed', 'service-not-allowed', 'audio-capture', 'network', 'language-not-supported'];
+    // <ditado-puro> — sem DOM: o teste S470 executa este bloco isolado.
     function joinDictation(a, b) {
       b = b.trim();
       if (!b) return a;
       return a && !/\s$/.test(a) ? a + ' ' + b : a + b;
     }
+    /**
+     * Aplica um evento `onresult` do reconhecimento ao texto do ditado. O navegador pode reapresentar o último trecho
+     * final (ao retomar a sessão depois de um silêncio): um trecho final idêntico ao anterior, chegando sem fala nova
+     * no meio, não é escrito de novo. Fala repetida de verdade passa por resultados parciais antes, e é mantida.
+     */
+    function applyDictationResults(state, results, fromIndex) {
+      let text = state.text, lastFinal = state.lastFinal, interim = '';
+      for (let i = fromIndex; i < results.length; i++) {
+        const r = results[i];
+        if (r.isFinal) {
+          const chunk = r[0].transcript.trim();
+          if (!(chunk && chunk === lastFinal)) { text = joinDictation(text, r[0].transcript); lastFinal = chunk; }
+        } else {
+          interim += r[0].transcript;
+          lastFinal = '';
+        }
+      }
+      return { text, lastFinal, interim };
+    }
+    // </ditado-puro>
     function setComposerText(text) {
       const input = document.getElementById('messageInput');
       input.value = text;
@@ -590,6 +612,7 @@
       if (isListening) { stopVoiceInput(); return; }
       dictationStopRequested = false;
       dictationText = document.getElementById('messageInput').value;
+      dictationLastFinal = '';
       recognition = new SR();
       recognition.lang = newclawGetLang(); recognition.interimResults = true; recognition.continuous = true;
       recognition.onstart = () => {
@@ -598,13 +621,10 @@
         document.getElementById('micBtn').classList.add('active');
       };
       recognition.onresult = (e) => {
-        let interim = '';
-        for (let i = e.resultIndex; i < e.results.length; i++) {
-          const r = e.results[i];
-          if (r.isFinal) dictationText = joinDictation(dictationText, r[0].transcript);
-          else interim += r[0].transcript;
-        }
-        setComposerText(joinDictation(dictationText, interim));
+        const r = applyDictationResults({ text: dictationText, lastFinal: dictationLastFinal }, e.results, e.resultIndex);
+        dictationText = r.text;
+        dictationLastFinal = r.lastFinal;
+        setComposerText(joinDictation(dictationText, r.interim));
       };
       recognition.onerror = (e) => {
         if (DICTATION_FATAL_ERRORS.includes(e.error)) { dictationStopRequested = true; alert('Erro: ' + e.error); }
