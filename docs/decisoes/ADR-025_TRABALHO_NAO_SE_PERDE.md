@@ -1,5 +1,7 @@
 # ADR-025 — O trabalho não se perde: comando em segundo plano e raciocínio que continua
 
+> **Estado conferido em 05/11/2026 (Operação Zero Pendências):** **implementada em modo experimental**, desligada por padrão (`EXEC_EM_SEGUNDO_PLANO=1`; `exec_command` com `acompanhar`). Conferido em 05/11/2026: desligada nas duas produções. Ligar por padrão é decisão da operadora, depois de medição (relatório da Operação Zero Pendências). O status original fica abaixo, como histórico.
+
 Data: 16/10/2026. Status: **proposta** (direção aprovada pela operadora; fases de medição e implementação a seguir).
 Complementa a ADR-023 (o comando continua enquanto trabalha) e a ADR-024 (trabalho do modelo em tokens).
 

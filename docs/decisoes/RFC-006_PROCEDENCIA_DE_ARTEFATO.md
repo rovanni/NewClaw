@@ -1,5 +1,7 @@
 # RFC-006 — Procedência de Artefato de Workspace
 
+> **Estado conferido em 05/11/2026 (Operação Zero Pendências):** **continua aberta, com decisão pedida à operadora.** A recomendação de arquivá-la (auditoria de 04/11/2026) partia de uma premissa errada: a "Sprint de Provenance" do código trata das gerações do plano, não da origem do conteúdo gravado em arquivo. O defeito descrito aqui (valor inventado que vira arquivo e, depois, evidência) não tem tratamento hoje. O status original fica abaixo, como histórico.
+
 **Status:** proposta
 **Data:** 2026-08-08
 **Origem:** incidente "River" — validação em execução real, Windows (`newclaw-audit.log`,

@@ -1,5 +1,7 @@
 # ADR-021 — Catálogo de ferramentas com carregamento sob demanda
 
+> **Estado conferido em 05/11/2026 (Operação Zero Pendências):** **concluída na Fase 1** (`S413`, em uso nas duas produções). A Fase 2 só volta com necessidade medida; não é pendência. O status original fica abaixo, como histórico.
+
 Status: **aceita** (16/10/2026, "Sim. Pode fazer tudo. Divida em sprints!"). Fase 1 implementada (ver "Implementação").
 
 ## Contexto em uma frase

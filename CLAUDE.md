@@ -1,5 +1,6 @@
 @docs/DIRETRIZ_ARQUITETURA_2026-07-13.md
 @docs/ARCHITECTURE.md
+@docs/ARCHITECTURE/REUTILIZACAO_ANTES_DA_CRIACAO.md
 
 ## gstack
 
@@ -8,6 +9,8 @@ desenvolvimento para Claude Code, `~/.claude/skills/gstack`). Regras de uso:
 
 - Para qualquer navegação web (abrir páginas, testar URLs, screenshot, QA visual), usar a skill
   `/browse` do gstack. Nunca usar as ferramentas `mcp__claude-in-chrome__*`.
+- Rodar `/code-review` antes de cada push.
+- Usar `/investigate` quando um teste real falhar.
 
 Skills disponíveis: `/office-hours`, `/plan-ceo-review`, `/plan-eng-review`,
 `/plan-design-review`, `/design-consultation`, `/design-shotgun`, `/design-html`, `/review`,

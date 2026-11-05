@@ -1,5 +1,7 @@
 # ADR-024 — O trabalho do modelo se mede em tokens, não em segundos
 
+> **Estado conferido em 05/11/2026 (Operação Zero Pendências):** **realizada em parte e encerrada.** O prazo de cada chamada sai do trabalho medido em tokens (`S440`, `orcamentoPeloTrabalho`), e o limite do objetivo saiu com a ADR-027. A medição em tokens (sombra) continua; o que sobrar da ideia volta como proposta nova, com dado medido. O status original fica abaixo, como histórico.
+
 Data: 16/10/2026. Status: **proposta**. A ideia é da operadora ("trocar o cálculo de tempo por cálculo de tokens; aí não
 importa se é online ou local lento"). A fase de medição está concluída.
 
