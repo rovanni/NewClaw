@@ -37,6 +37,7 @@ import { PLACEHOLDER_ARG_PATTERN } from '../../shared/placeholderPatterns';
 import { resolveToolAlias } from './toolAliasResolver';
 import { ContentStubClassifier } from '../../shared/contentStubClassifier';
 import { resolvePath } from '../../utils/crossPlatform';
+import { SOURCE_SCRIPT_EXTENSIONS } from './inferExpectedExtensions';
 
 const log = createLogger('SanitizePlanSteps');
 
@@ -288,8 +289,15 @@ export async function sanitizePlanSteps(
         const contentDepSpec = resolvedTool ? TOOL_DEPENDENCY_ARG[resolvedTool] : undefined;
         if (resolvedTool && contentDepSpec?.kind === 'content' && toolArgs?.[contentDepSpec.arg]) {
             const contentStr = String(toolArgs[contentDepSpec.arg]);
+            // Um SCRIPT (extensão de código-fonte, SOURCE_SCRIPT_EXTENSIONS) não carrega o dado do passo anterior: ele o
+            // busca quando roda. A ordem dos steps não diz nada sobre o conteúdo dele — o content-stub abaixo continua
+            // julgando. Caso real (goal qejk6, 04/11/2026): write(dividir_deck.py) depois de um exec_command de inventário
+            // era rebaixado aqui, e o caminho do plano se perdia como no S471.
+            const caminhoDoWrite = typeof toolArgs.path === 'string' ? toolArgs.path : '';
+            const ponto = caminhoDoWrite.lastIndexOf('.');
+            const ehScript = ponto !== -1 && SOURCE_SCRIPT_EXTENSIONS.has(caminhoDoWrite.slice(ponto).toLowerCase());
 
-            if (sawDataProducingTool) {
+            if (sawDataProducingTool && !ehScript) {
                 // ESTRUTURAL: um step anterior no plano ainda vai buscar dado dinâmico (weather,
                 // web_search, exec_command...) que ainda não rodou — então este conteúdo, não
                 // importa o que diga, não pode ser o dado real. Não precisa (e não tenta) casar

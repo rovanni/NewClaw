@@ -393,6 +393,14 @@ async function installBuildRestart(restart, execute = execSync, restartProcess =
     console.error('❌ npm prune falhou:', pruneErr.message);
     throw pruneErr;
   }
+  // O prune só deveria mexer em node_modules, mas regrava o package-lock.json com o formato do npm DESTA máquina: na VPS
+  // (npm 10.9) ele apagava os campos "libc" que o npm mais novo grava, e o lockfile ficava modificado depois de toda
+  // atualização (auditoria de 04/11/2026). O lockfile do repositório é a fonte de verdade: volta ao que está no git.
+  try {
+    execute('git checkout -- package-lock.json', { cwd: DIR, stdio: 'ignore' });
+  } catch {
+    // fora de um clone git (instalação por pacote): não há o que restaurar
+  }
 
   restoreLocalKernelAdapter(execute);
 
