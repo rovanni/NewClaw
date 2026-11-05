@@ -146,7 +146,9 @@ export function adaptarConclusaoDoObjetivo(v: VereditoPadrao): DecisaoDeConclusa
         return { achieved: false, reason: 'Validação técnica indisponível (a validação não chegou a um veredito) — objetivo não pôde ser confirmado como concluído.' };
     }
     const sugestoes = (v.extras?.sugestoes ?? '').split('|').map(x => x.trim()).filter(Boolean);
-    if (v.estado === 'aprovado') return { achieved: true, summary: v.extras?.resumo ?? v.motivo };
+    // ADR-032 (A): o texto aprovado é a resposta ESCRITA PARA o usuário (`resposta_ao_usuario`), não um parecer sobre o
+    // sistema. `resumo` fica como leitura de compatibilidade (modelo que ainda devolva o campo antigo).
+    if (v.estado === 'aprovado') return { achieved: true, summary: v.extras?.resposta_ao_usuario || v.extras?.resumo || v.motivo };
     return { achieved: false, reason: v.motivo, suggestions: sugestoes.length ? sugestoes : undefined };
 }
 
@@ -160,6 +162,7 @@ export const descritorConclusaoDoObjetivo: DescritorDeValidacao<DecisaoDeConclus
         { nome: 'resultados', rotulo: 'Passos executados e resultados das ferramentas', papel: 'fonte_de_verdade', obrigatoria: false },
         { nome: 'artefatos', rotulo: 'Artefatos produzidos e já entregues (conteúdo real)', papel: 'fonte_de_verdade', obrigatoria: false },
         { nome: 'contratos', rotulo: 'Progresso e contratos declarados pelo plano', papel: 'contexto_da_execucao', obrigatoria: false },
+        { nome: 'idioma', rotulo: 'Idioma da resposta ao usuário (diretiva da instalação)', papel: 'contexto_da_execucao', obrigatoria: false },
     ],
     checklist: [
         'O que foi pedido foi feito — não só dados coletados ou efeitos colaterais, mas a resposta/entrega que o usuário espera? Se for um marco de desenvolvimento, os arquivos/funcionalidades desse marco foram realmente criados e testados?',
@@ -170,7 +173,10 @@ export const descritorConclusaoDoObjetivo: DescritorDeValidacao<DecisaoDeConclus
     ],
     agregacao: 'modelo',
     camposExtras: [
-        { nome: 'resumo', instrucao: 'Se aprovado: resumo do que foi feito e entregue neste marco/objetivo. Vazio se reprovado.' },
+        // ADR-032 (A, 04/11/2026): este texto pode ser a mensagem final que o usuário lê (quando não há passo de texto). Era
+        // `resumo`, escrito PARA o sistema ("Objetivo concluído… a resposta foi entregue ao usuário"): quarta ocorrência da
+        // classe S175 nos testes reais de 17–19/10. Agora é escrito para a pessoa, no idioma da instalação.
+        { nome: 'resposta_ao_usuario', instrucao: 'Se aprovado: a resposta ao pedido, escrita PARA o usuário (fale com ele, na segunda pessoa, no idioma indicado em "Idioma"): o que foi feito e o que ele recebeu, citando os arquivos entregues pelo nome. Nunca descreva o sistema, a validação ou "o usuário" em terceira pessoa. Vazio se reprovado.' },
         { nome: 'sugestoes', instrucao: 'Se reprovado: ações para concluir o que falta, separadas por " | " (e o que falta em "motivo"). Vazio se aprovado.' },
     ],
     raciocinio: 'livre',   // respeita o provedor e o modelo: com think:false o glm-5.3 escrevia ~25 mil chars de análise no CONTEÚDO (produção 10/10)

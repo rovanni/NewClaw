@@ -1,7 +1,11 @@
 # ADR-032 — A resposta final do objetivo é escrita para o usuário, não descrita para o sistema
 
-Data: 29/10/2026. Status: **proposta** — aguarda a decisão da operadora. O incremento 0 (áudio, S462) já está implementado
-porque não depende desta decisão (ver "Incremento 0").
+Data: 29/10/2026. Status: **aceita (alternativa A) e implementada** — decisão da operadora em 04/11/2026 (Operação Zero
+Pendências). Incremento 0 (áudio): S462. Incremento 1: o campo `resumo` do avaliador de conclusão virou
+`resposta_ao_usuario`, escrito para a pessoa e com a diretiva de idioma da instalação (`idioma`); `resumo` continua lido
+por compatibilidade. Incremento 2: já existia — os artefatos de todas as gerações chegam ao avaliador por
+`producedArtifactPaths` (sem filtro de geração), e a regra de procedência de `pickBestAvailableContent` não mudou.
+Cobertura: S473. Validação real (os três pedidos reais) fica na etapa 4 da campanha.
 
 Origem: issue 066, achado **D** (testes reais de 17–19/10/2026) — quarta ocorrência da classe registrada em `S175`.
 
