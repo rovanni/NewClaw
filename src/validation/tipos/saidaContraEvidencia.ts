@@ -31,6 +31,8 @@ export interface AfirmacaoJulgada {
     verdict: VereditoDaAfirmacao;
     /** O texto LITERAL da fonte que o juiz citou (conferido pelo motor) — para quem corrige saber o valor que a fonte mostra. */
     trecho?: string;
+    /** O juiz marcou a afirmação como contraditada (`nao`), com ou sem citação conferida. A1-r: nunca liberada por aviso. */
+    contradicaoApontada?: true;
 }
 
 export interface DecisaoDeGrounding {
@@ -47,6 +49,7 @@ export function adaptarGrounding(v: VereditoPadrao): DecisaoDeGrounding {
         evidence: (i.evidencia ?? '').split(/[\s,;]+/).map(x => x.trim()).filter(x => /^[A-Z]\d+$/.test(x)),
         verdict: VEREDITO_POR_CONFERE[i.confere] ?? 'NOT_EVALUABLE',
         ...(i.trecho ? { trecho: i.trecho } : {}),
+        ...(i.confere === 'nao' || i.confereDoModelo === 'nao' ? { contradicaoApontada: true as const } : {}),
     }));
     return { state: estadoDeGrounding(v), claims };
 }

@@ -10,8 +10,12 @@
  * não foi conferida — sem a segunda espera e sem replanejar. Quando o juiz CONCLUI e acha problema (REJECTED/NOT_EVALUABLE), continua
  * bloqueando, com a correção dirigida (S394). O nome do arquivo foi mantido para preservar o histórico.
  *
+ * A1-r (05/11/2026, decisão da mantenedora): NOT_EVALUABLE SEM nenhuma contradição apontada pelo modelo (nem `nao` conferido, nem `nao`
+ * rebaixado pela conferência da citação) passa a sair com um aviso que lista os pontos não confirmados — depois de tentar a resposta
+ * parcial. Coberto pelo S479. NOT_EVALUABLE com qualquer `nao` continua bloqueando.
+ *
  * REGRESSÃO SE: UNVALIDATED voltar a bloquear ou a pagar uma segunda chamada do juiz; o aviso sumir ou sair fora do idioma configurado;
- * ou REJECTED/NOT_EVALUABLE passarem a ser entregues.
+ * ou REJECTED (ou NOT_EVALUABLE com contradição apontada) passar a ser entregue.
  *
  * Execução: npx ts-node src/__tests__/regression/S389_AgentLoop_UnvalidatedRevalidation.test.ts
  */

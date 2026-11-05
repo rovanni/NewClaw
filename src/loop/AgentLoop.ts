@@ -995,6 +995,37 @@ export class AgentLoop {
     }
 
     /**
+     * A1-r (decisão da operadora, 05/11/2026): a mesma política de entrega com aviso, para o juiz que CONCLUIU sem achar contradição
+     * mas não confirmou parte das afirmações (`NOT_EVALUABLE`). O aviso diz QUAIS afirmações não foram confirmadas — "não avaliável"
+     * não é "validado". Nunca vale quando o juiz apontou contradição (ver `liberavelComAviso`).
+     */
+    static readonly AVISO_NAO_CONFIRMADO: Record<string, { titulo: string; mais: (n: number) => string }> = {
+        'pt-BR': { titulo: '⚠️ Não encontrei, nos dados obtidos, confirmação para estes pontos — confira antes de usar:', mais: n => `…e mais ${n}` },
+        'en-US': { titulo: '⚠️ I could not find confirmation in the retrieved data for these points — check them before relying on them:', mais: n => `…and ${n} more` },
+        'es-ES': { titulo: '⚠️ No encontré confirmación en los datos obtenidos para estos puntos — verifícalos antes de usarlos:', mais: n => `…y ${n} más` },
+    };
+
+    static comAvisoNaoConfirmado(resposta: string, naoConfirmadas: readonly string[], idioma: string = process.env.APP_LANG || 'pt-BR'): string {
+        const t = AgentLoop.AVISO_NAO_CONFIRMADO[idioma] ?? AgentLoop.AVISO_NAO_CONFIRMADO['pt-BR'];
+        const MOSTRAR = 8;
+        // Mesmo formato da lista de `groundingBlockedMessage` (texto simples, um ponto por linha).
+        const linhas = naoConfirmadas.slice(0, MOSTRAR).map(c => `• ${c.slice(0, 160)}`);
+        if (naoConfirmadas.length > MOSTRAR) linhas.push(`• ${t.mais(naoConfirmadas.length - MOSTRAR)}`);
+        return `${resposta.trimEnd()}\n\n${t.titulo}\n${linhas.join('\n')}`;
+    }
+
+    /**
+     * A1-r: o veredito pode ser entregue com aviso? Só `NOT_EVALUABLE` em que NENHUMA afirmação foi apontada como contradição pelo
+     * juiz — contando o que o modelo disse ANTES do rebaixamento pela conferência literal da citação (`contradicaoApontada`). Regra
+     * sobre campos estruturados do veredito (enum + flag), sem interpretar texto. `REJECTED` nunca passa por aqui.
+     */
+    static liberavelComAviso(g: { state: GroundingState; claims: ReadonlyArray<Pick<GroundedClaim, 'verdict' | 'contradicaoApontada'>> }): boolean {
+        return g.state === 'NOT_EVALUABLE'
+            && g.claims.some(c => c.verdict === 'NOT_EVALUABLE')
+            && !g.claims.some(c => c.verdict === 'NOT_SUPPORTED' || c.contradicaoApontada === true);
+    }
+
+    /**
      * ADR-028: a resposta com a lista do que as ferramentas mudaram neste turno. Pedido da operadora (23/10/2026): o juiz
      * bloqueou a resposta de um turno que tinha mesclado, atualizado e apagado nós da memória, e ela nunca soube das
      * mudanças. Texto fixo do núcleo em pt-BR (mesmo débito de idioma do relato de progresso, ADR-027).
@@ -1318,10 +1349,23 @@ export class AgentLoop {
                         // que a resposta está errada — entrega-se a resposta com um aviso explícito de que não foi conferida, em vez
                         // de bloquear e replanejar (produção 12/10: 34 min até abandonar um pedido cuja resposta saiu em 1 min 44 s).
                         // Sem a revalidação de antes: era mais uma chamada inteira do juiz (~200 s) na frente do usuário.
-                        // REJECTED/NOT_EVALUABLE (o juiz concluiu e achou problema) continuam bloqueando, com correção dirigida.
+                        // REJECTED (o juiz concluiu e achou contradição) continua bloqueando, com correção dirigida; NOT_EVALUABLE sem
+                        // contradição apontada é entregue com aviso dos pontos não confirmados (A1-r, logo abaixo).
                         efeitoDoJuiz('resposta_entregue_sem_veredito', { estado: g.state, motivo: (g.reason ?? '').slice(0, 120) });
                         log.warn(`[${this.ts()}] [GROUNDING] juiz não concluiu — entregando COM AVISO (${g.reason})`);
                         return AgentLoop.comAvisoSemVeredito(response);
+                    }
+
+                    if (AgentLoop.liberavelComAviso(g)) {
+                        // A1-r (05/11/2026): o juiz concluiu, não achou contradição, mas não confirmou parte das afirmações. A resposta
+                        // parcial já foi tentada acima (só com as sustentadas); sem parcial válida, entrega-se a resposta com o aviso de
+                        // QUAIS pontos não foram confirmados, em vez de deixar a pessoa sem resposta. Produção (22/10–04/11): 19 dos 21
+                        // bloqueios por NOT_EVALUABLE não tinham contradição. Contradição apontada — mesmo com citação que não conferiu —
+                        // continua no bloqueio abaixo.
+                        const naoConfirmadas = g.claims.filter(c => c.verdict === 'NOT_EVALUABLE').map(c => c.claim);
+                        efeitoDoJuiz('resposta_entregue_com_aviso_nao_confirmada', { estado: g.state, sustentadas: supportedClaims.length, total: g.claims.length, naoConfirmadas: naoConfirmadas.length, tentouParcial: supportedClaims.length > 0 });
+                        log.warn(`[${this.ts()}] [GROUNDING] NOT_EVALUABLE sem contradição apontada — entregando COM AVISO (${naoConfirmadas.length} ponto(s) não confirmado(s))`);
+                        return AgentLoop.comAvisoNaoConfirmado(response, naoConfirmadas);
                     }
 
                     log.info(`[GROUNDING-TRACE] ${JSON.stringify({ v: 1, phase: 'decision', traceId: trace.id, conversationId, ...channelContext?.goalTrace, state: g.state, claimsTotal: g.claims.length, supported: supportedClaims.length, path: supportedClaims.length > 0 ? 'blocked_partial_rejected' : 'blocked_no_supported_claims', evidenceSources: { turn: evidences.length - (channelContext?.priorStepEvidence?.length ?? 0), priorSteps: channelContext?.priorStepEvidence?.length ?? 0 } })}`);

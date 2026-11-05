@@ -334,7 +334,8 @@ export class ValidationEngine {
             for (const it of lido.itens) {
                 if (it.confere === 'sim' || it.confere === 'nao') {
                     it.citacaoConfere = citacaoExiste(it.trecho ?? '', fontes);
-                    if (!it.citacaoConfere) it.confere = 'sem_evidencia';   // citação que não está na fonte não decide nada
+                    // Citação que não está na fonte não decide nada — mas o que o modelo disse fica registrado no item (A1-r).
+                    if (!it.citacaoConfere) { it.confereDoModelo = it.confere; it.confere = 'sem_evidencia'; }
                 }
             }
         }
