@@ -1,5 +1,6 @@
 import { skillsStore, toolsStore } from '../state.js';
-import { reviewSkill, activateSkill, deactivateSkill, deleteAutoSkill, getSkills, getPatterns, aggregateToolStats } from '../api.js';
+import { reviewSkill, activateSkill, deactivateSkill, deleteAutoSkill, getSkills, getPatterns, aggregateToolStats,
+  getSkillPortability, markSkillWorkedHere, saveSkillFolders } from '../api.js';
 import { showToast } from '../components/Toast.js';
 import { guideBox } from '../app.js';
 
@@ -38,7 +39,66 @@ export function render(container) {
           <div id="sk-patternsList"><div class="empty">${t('loading')}</div></div>
         </div>
       </div>
+
+      <div class="sec-title" style="margin-top:18px">🌐 ${t('skport_title')}</div>
+      <div class="form-hint" style="margin-bottom:8px">${t('skport_desc')}</div>
+      <div id="sk-portList"><div class="empty">${t('loading')}</div></div>
+      <div class="sec-title" style="margin-top:14px">📁 ${t('skport_folders_title')}</div>
+      <div class="form-hint" style="margin-bottom:8px">${t('skport_folders_desc')}</div>
+      <div id="sk-folders"></div>
+      <div style="display:flex;gap:8px;margin-top:6px">
+        <button class="btn btn-secondary" id="sk-folderAdd">${t('skport_folder_add')}</button>
+        <button class="btn btn-primary" id="sk-folderSave">${t('skport_folder_save')}</button>
+      </div>
     </div>`;
+
+  // ── ADR-035: portabilidade (fatos medidos; a decisão de usar a skill continua do agente) ──
+  const escP = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  let pastasAtuais = {};
+  function renderFolders(extra) {
+    const linhas = Object.entries(pastasAtuais);
+    if (extra) linhas.push(['', '']);
+    document.getElementById('sk-folders').innerHTML = linhas.length
+      ? linhas.map(([n, c]) => `<div class="sk-folder-row" style="display:flex;gap:6px;margin:4px 0">
+          <input class="form-input sk-folder-nome" style="max-width:160px" placeholder="aulas" value="${escP(n)}">
+          <input class="form-input sk-folder-caminho" placeholder="${escP(t('skport_folder_path_ph'))}" value="${escP(c)}"></div>`).join('')
+      : `<div class="empty">${t('skport_folders_none')}</div>`;
+  }
+  async function loadPortability() {
+    const box = document.getElementById('sk-portList');
+    try {
+      const d = await getSkillPortability();
+      pastasAtuais = d.pastas || {};
+      renderFolders(false);
+      const lista = d.skills || [];
+      box.innerHTML = lista.length ? lista.map(s => `
+        <div class="pattern-card" style="align-items:flex-start">
+          <div style="flex:1">
+            <div><b>${escP(s.nome)}</b>${s.sistemaOrigem ? ` <span style="color:var(--text-soft)">· ${t('skport_origin')}: ${escP(s.sistemaOrigem)}</span>` : ''}</div>
+            <div style="font-size:.78rem;color:var(--text-soft)">${s.validadaEm.length ? `${t('skport_validated')}: ${s.validadaEm.map(v => escP(v.sistema + '@' + v.resumo)).join(', ')}` : t('skport_unknown')}</div>
+            ${s.avisos.length ? `<div style="font-size:.78rem;color:var(--warning,#f59e0b)">⚠️ ${s.avisos.map(escP).join(' · ')}</div>` : ''}
+          </div>
+          ${s.pasta ? (s.validadaAqui
+            ? `<span style="font-size:.78rem;color:var(--success)">✓ ${t('skport_validated_here')}</span>`
+            : `<button class="s-btn approve" data-funcionou="${escP(s.pasta)}">${t('skport_worked_here')}</button>`) : ''}
+        </div>`).join('') : `<div class="empty">${t('skport_none')}</div>`;
+      box.querySelectorAll('[data-funcionou]').forEach(b => b.addEventListener('click', async () => {
+        b.disabled = true;
+        try { await markSkillWorkedHere(b.dataset.funcionou); showToast(t('skport_worked_toast'), 'success'); loadPortability(); }
+        catch (e) { showToast('❌ ' + e.message, 'error'); b.disabled = false; }
+      }));
+    } catch (e) { box.innerHTML = `<div class="empty">❌ ${escP(e.message)}</div>`; }
+  }
+  document.getElementById('sk-folderAdd').addEventListener('click', () => {
+    pastasAtuais = Object.fromEntries([...document.querySelectorAll('.sk-folder-row')].map(r => [r.querySelector('.sk-folder-nome').value.trim(), r.querySelector('.sk-folder-caminho').value.trim()]).filter(([n]) => n));
+    renderFolders(true);
+  });
+  document.getElementById('sk-folderSave').addEventListener('click', async () => {
+    const tabela = Object.fromEntries([...document.querySelectorAll('.sk-folder-row')].map(r => [r.querySelector('.sk-folder-nome').value.trim(), r.querySelector('.sk-folder-caminho').value.trim()]).filter(([n, c]) => n && c));
+    try { await saveSkillFolders(tabela); showToast(t('skport_folders_saved'), 'success'); loadPortability(); }
+    catch (e) { showToast('❌ ' + e.message, 'error'); }
+  });
+  loadPortability();
 
   function update(s) {
     const el = id => document.getElementById(id);

@@ -256,6 +256,23 @@ export async function getSkills() {
   } catch { return []; }
 }
 
+// ADR-035: portabilidade das skills em arquivo.
+export async function getSkillPortability() {
+  return json(f('/api/skills/portabilidade'));
+}
+
+export async function markSkillWorkedHere(pasta) {
+  return json(f(`/api/skills/portabilidade/${encodeURIComponent(pasta)}/funcionou`, { method: 'POST' }));
+}
+
+export async function saveSkillFolders(pastas) {
+  return json(f('/api/skills/pastas', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ pastas }),
+  }));
+}
+
 export async function getPatterns() {
   try {
     const d = await json(f('/api/skills/patterns'));

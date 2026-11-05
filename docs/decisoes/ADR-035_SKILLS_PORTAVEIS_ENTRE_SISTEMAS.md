@@ -7,6 +7,35 @@ conteúdo, `requer` com "não verificado", avisos no catálogo e no conteúdo, `
 Relacionadas: ADR-017 (aprendizado de skills automático), ADR-020 (backup e importação mesclando; detector de
 caminhos de outro sistema), ADR-034 (Sync Agent; skills chegando de outras instalações).
 
+## Implementação (04–05/11/2026)
+
+Etapas 1 a 4 e 6 implementadas; a 5 tem a ferramenta pronta e o plano real feito numa cópia, à espera da revisão da operadora.
+
+- **Leitor (1, 3):** `src/skills/SkillLoader.ts` lê os campos, troca os marcadores pelas pastas desta instalação (o arquivo em
+  disco não muda) e calcula uma vez os avisos (`avisos.curtos` no catálogo, `avisos.linhas` no começo do conteúdo).
+  O roteador e o planejador usam a mesma linha do catálogo (`linhaDoCatalogo`). `requer` usa o `probeCommand` que já existia,
+  com três estados. Nenhuma skill some do catálogo.
+- **Aprender (2):** o corpo grava marcadores (`marcarCaminhos`: prefixo exato, o mais longo primeiro, sem diferença de
+  maiúsculas no Windows); `auto_skills` ganhou `sistema_origem`, `validada_em`, `plataformas`, `requer`, `instalacao_origem`,
+  e o `SKILL.md` regerado do banco mantém o cabeçalho. `plataformas` e `requer` não são pedidos ao modelo nesta etapa:
+  ficam ausentes (desconhecidos) até haver necessidade medida.
+- **Importação (4):** com marcadores, o corpo não tem caminho literal e a skill segue a regra da ADR-017; com caminho literal
+  de outro sistema, fica proposta; sem cabeçalho, como antes.
+- **Migração (5):** `src/skills/migracaoDePortabilidade.ts` e `newclaw skills-migrar` (planeja; aplica só com `--aplicar`,
+  depois de um pacote de segurança; numa cópia, `--raiz <cópia> --prefixos-de <raiz original>`).
+- **Painel (6):** Skills → "Portabilidade das skills" (avisos, "Funcionou aqui") e "Pastas das skills" (a tabela local).
+- Cobertura: `S477`.
+
+**Plano real numa cópia da produção Windows (04/11/2026), sem escrever na produção:** 36 skills lidas, 15 aprendidas com o
+sistema de origem reconhecido, 2 com caminhos do NewClaw trocados por marcador, 7 com caminho literal que sobra e 6 pastas
+pessoais propostas. O plano corrigiu três defeitos da primeira versão, que agora o `S477` cobre:
+- o corpo das aprendidas grava `(windows)`, não `(win32)`;
+- `https://` era lido como `s:/`;
+- pastas aninhadas viravam uma proposta cada.
+
+O relatório (com caminhos pessoais, fora do repositório) está com a operadora. A migração na instalação real espera a revisão
+dele e a confirmação dos nomes das pastas.
+
 ## Contexto
 
 O NewClaw roda em Windows, Linux e Mac, e com a ADR-034 uma skill aprendida numa instalação chega às outras. Uma
