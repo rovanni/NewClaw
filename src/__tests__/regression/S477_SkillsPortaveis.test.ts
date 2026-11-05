@@ -139,7 +139,10 @@ async function main(): Promise<void> {
         const inst = mk(path.join(base, 'inst'));
         const db = new Database(path.join(inst.dados, 'newclaw.db'));
         db.exec(`CREATE TABLE auto_skills (id TEXT PRIMARY KEY, name TEXT, trigger TEXT, description TEXT, prompt TEXT, status TEXT, source_pattern TEXT, sistema_origem TEXT, validada_em TEXT, plataformas TEXT, requer TEXT)`);
-        const corpoAprendida = `# Relatório\n\n> Aprendida automaticamente pelo NewClaw em 2026-10-20, ao concluir: "gera o relatório" (${AQUI}).\n\nRode ${inst.workspace}${path.sep}r.py e salve em ${path.join(base, 'Docs', 'Relatorios', 'a.pdf')}`;
+        // Pasta pessoal literal que o detector reconhece no sistema: no Windows, a pasta temporária (C:\Users\…); no Unix, /home/…
+        // (/tmp não é pasta pessoal para o detector da ADR-020 — o CI Ubuntu pegou em 05/11/2026).
+        const PASTA_PESSOAL = AQUI === 'win32' ? path.join(base, 'Docs', 'Relatorios') : '/home/alguem/Docs/Relatorios';
+        const corpoAprendida = `# Relatório\n\n> Aprendida automaticamente pelo NewClaw em 2026-10-20, ao concluir: "gera o relatório" (${AQUI}).\n\nRode ${inst.workspace}${path.sep}r.py e salve em ${PASTA_PESSOAL}${path.sep}a.pdf`;
         db.prepare(`INSERT INTO auto_skills (id, name, trigger, description, prompt, status, source_pattern) VALUES ('a1', 'relatorio', 'r', 'd', ?, 'active', 'aprendida_relatorio')`).run(corpoAprendida);
         db.close();
         const escreverEm = (c: bk.Caminhos, pasta: string, t: string) => { fs.mkdirSync(path.join(c.skills, pasta), { recursive: true }); fs.writeFileSync(path.join(c.skills, pasta, 'SKILL.md'), t); };
@@ -172,17 +175,17 @@ async function main(): Promise<void> {
         assert(!!proposta && proposta.nomeProposto === 'relatorios' && it('aprendida_relatorio').caminhosLiterais.length === 1, 'pasta pessoal: listada com um nome PROPOSTO, e o caminho continua literal', plano.pastasPropostas);
         const md = mig.relatorioEmMarkdown(plano);
         assert(/só planejada, nada foi escrito/.test(md) && md.includes('{PASTA:relatorios}') && md.includes('aprendida_relatorio'), 'relatório em Markdown para revisar');
-        const aplicada = await mig.aplicarMigracao(inst, { relatorios: path.join(base, 'Docs', 'Relatorios') });
+        const aplicada = await mig.aplicarMigracao(inst, { relatorios: PASTA_PESSOAL });
         const depois = fs.readFileSync(path.join(inst.skills, 'aprendida_relatorio', 'SKILL.md'), 'utf8');
         assert(aplicada.aplicado && !!aplicada.pacoteDeSeguranca && fs.existsSync(aplicada.pacoteDeSeguranca), 'aplicar: pacote de segurança antes');
-        assert(depois.includes('{PASTA:relatorios}') && depois.includes(`sistema_origem: ${AQUI}`) && JSON.stringify(sl.lerTabelaDePastas(inst.dados)) === JSON.stringify({ relatorios: path.join(base, 'Docs', 'Relatorios') }),
+        assert(depois.includes('{PASTA:relatorios}') && depois.includes(`sistema_origem: ${AQUI}`) && JSON.stringify(sl.lerTabelaDePastas(inst.dados)) === JSON.stringify({ relatorios: PASTA_PESSOAL }),
             'pasta confirmada vira {PASTA:nome} e entra na tabela local', depois);
         const linha = new Database(path.join(inst.dados, 'newclaw.db'), { readonly: true });
         const row = linha.prepare(`SELECT prompt, sistema_origem, validada_em FROM auto_skills WHERE id = 'a1'`).get() as { prompt: string; sistema_origem: string; validada_em: string };
         linha.close();
         assert(row.sistema_origem === AQUI && row.prompt.includes('{PASTA:relatorios}') && /@[0-9a-f]{8}$/.test(row.validada_em), 'a linha de auto_skills recebe o corpo migrado e os campos (regerar mantém o cabeçalho)', row);
         const carregadaM = new sl.SkillLoader(inst.skills, () => ({ newclaw: inst.raiz, workspace: inst.workspace, skills: inst.skills, pastas: sl.lerTabelaDePastas(inst.dados) })).loadAll().find(x => x.name === 'relatorio');
-        assert(!!carregadaM && !carregadaM.avisos?.curtos.length && carregadaM.content.includes(path.join(base, 'Docs', 'Relatorios')), 'depois da migração, a skill carrega validada aqui, com o caminho real da pasta', carregadaM?.avisos);
+        assert(!!carregadaM && !carregadaM.avisos?.curtos.length && carregadaM.content.includes(PASTA_PESSOAL), 'depois da migração, a skill carrega validada aqui, com o caminho real da pasta', carregadaM?.avisos);
 
         console.log('\n=== S477-6b — decisão 17: skills soltas viram aprendidas ===');
         escreverEm(inst, 'gmail-himalaya', skillMd('triggers: email\n', 'Use o himalaya.').replace('name: x', 'name: gmail-himalaya'));
