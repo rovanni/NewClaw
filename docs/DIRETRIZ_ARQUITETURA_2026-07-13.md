@@ -272,6 +272,12 @@ está em `docs/ARCHITECTURE/README.md`:
   sistema (retry de anexo — RFC-004; catálogos de dependências — auditoria 26/07; entrega de goal
   cru — goal 14/08; regex de comando destrutivo; prefixo `$` duplicado em crypto — goal 14/08) —
   ver Seção 5 do documento para citações e arquivos exatos.
+- **Reutilização Antes da Criação (ARCH-REUSE-001)**
+  (`docs/ARCHITECTURE/REUTILIZACAO_ANTES_DA_CRIACAO.md`) — nenhum agente deve criar novo
+  componente, serviço, módulo, mecanismo ou abstração sem antes investigar as soluções existentes
+  no repositório e avaliar sua adequação. Ordem de preferência: (1) reutilizar; (2) adaptar;
+  (3) refatorar com justificativa técnica; (4) desenvolver novo apenas quando as alternativas forem
+  insuficientes ou houver superioridade demonstrada por evidências. Incorporado à Regra 12 de `AGENTS.md`.
 
 ## Filosofia do projeto
 

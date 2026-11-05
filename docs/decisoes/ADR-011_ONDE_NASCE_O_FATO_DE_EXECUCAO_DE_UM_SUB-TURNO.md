@@ -1,5 +1,7 @@
 # ADR-011 — Onde nasce o fato de execução de um sub-turno
 
+> **Estado conferido em 05/11/2026 (Operação Zero Pendências):** **aceita e implementada.** As decisões do §7 foram tomadas em 09/08/2026 (o cabeçalho antigo ainda as dizia abertas): `subToolFailures` nasce de `ToolResult.error` no dispatch do `AgentLoop` e é consumido pelo `GoalExecutionLoop` na avaliação do passo (`stepSuccessConfident`). O status original fica abaixo, como histórico.
+
 **Status:** aceita, com duas decisões declaradas em aberto (§7)
 **Data:** 2026-08-09
 **Contexto:** Sprint 043 / investigação da fronteira `AgentLoop → GoalExecutionLoop`

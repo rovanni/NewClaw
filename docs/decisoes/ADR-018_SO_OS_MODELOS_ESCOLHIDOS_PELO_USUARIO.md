@@ -1,5 +1,7 @@
 # ADR-018 — Só os modelos escolhidos pelo usuário (nenhum modelo no código, nenhuma reserva)
 
+> **Estado conferido em 05/11/2026 (Operação Zero Pendências):** **validada em uso real.** Nas 536 chamadas ao modelo registradas na produção Windows em 04/11/2026, todas usaram o modelo configurado pela operadora; nos dias anteriores, os modelos do log acompanham as trocas de configuração dela. O status original fica abaixo, como histórico.
+
 Status: aceita (14/10/2026) — implementada na Sprint 2 da campanha de 14/10; validação em ambiente real pendente (etapa 4).
 Origem: diretiva da mantenedora, 14/10/2026 — *"O sistema é para utilizar somente os modelos escolhidos pelo usuário via
 dashboard ou na configuração inicial, não deve ter nenhum modelo em código nem de fallback"* — depois de a investigação do

@@ -1,5 +1,7 @@
 # ADR-019 — Cofre de segredos: o valor de uma senha nunca circula em claro
 
+> **Estado conferido em 05/11/2026 (Operação Zero Pendências):** **validada em uso real.** O cofre está em uso na produção Windows, e a varredura de 04/11/2026 mascarou com o cofre os valores antigos nas duas produções (conversas, logs e banco, com cópia de segurança). O status original fica abaixo, como histórico.
+
 Status: aceita (14/10/2026) — implementada na Sprint 3 da campanha de 14/10; validação em ambiente real pendente (etapa 4).
 Origem: pergunta da mantenedora — *"Teria como o NewClaw ser mais seguro em relação às senhas?"* — depois de uma senha de
 app do Gmail, digitada no chat em 11/10/2026 para configurar o himalaya, aparecer espalhada pela instalação.

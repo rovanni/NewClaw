@@ -1,5 +1,7 @@
 # ADR-017 — Skills aprendidas com o que funcionou (aprendizado no estilo Hermes)
 
+> **Estado conferido em 05/11/2026 (Operação Zero Pendências):** **validada em uso real.** A produção Windows tem 15 skills aprendidas automaticamente entre 26/10 e 04/11/2026 (`skills/aprendida_*`), com o aviso e o `/skill_desativar`. O status original fica abaixo, como histórico.
+
 Status: aceita (14/10/2026) — incremento 1 implementado; validação em ambiente real pendente (etapa 4).
 Origem: pedido da mantenedora ("adicionar automaticamente as Skills, somente avisar o usuário que aprendeu algo novo,
 como o Hermes Agent faz") e a investigação dos logs de 11–13/10/2026 (Windows × Linux).

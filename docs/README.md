@@ -66,6 +66,7 @@ conhecimento ou decisão:
 - [ARCHITECTURE/SEPARACAO_DISTRIBUIDO_APRENDIDO.md](./ARCHITECTURE/SEPARACAO_DISTRIBUIDO_APRENDIDO.md) — conhecimento versionado em código vs. aprendido em runtime são categorias físicas distintas
 - [ARCHITECTURE/NUNCA_ADIVINHAR.md](./ARCHITECTURE/NUNCA_ADIVINHAR.md) — diante de um dado não observado, reportar ausência, nunca inferir
 - [ARCHITECTURE/PIPELINE_CURADORIA_DEPENDENCIAS.md](./ARCHITECTURE/PIPELINE_CURADORIA_DEPENDENCIAS.md) — processo pelo qual conhecimento de instalação entra em `KNOWN_DEPS`
+- [ARCHITECTURE/REUTILIZACAO_ANTES_DA_CRIACAO.md](./ARCHITECTURE/REUTILIZACAO_ANTES_DA_CRIACAO.md) — ARCH-REUSE-001: diretriz de reutilização antes da criação; investigar soluções existentes antes de propor novos componentes, serviços ou abstrações
 - [ARCHITECTURE/README.md](./ARCHITECTURE/README.md) + `architecture.json`/`dependency-graph.json`/`metrics.json`/`index.html` — snapshot gerado da arquitetura do repositório (Architecture Knowledge Base)
 
 ## Decisões formais — `decisoes/`

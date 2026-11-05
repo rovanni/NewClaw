@@ -1,5 +1,7 @@
 # ADR-023 — O comando continua enquanto trabalha (sem prazo fixo)
 
+> **Estado conferido em 05/11/2026 (Operação Zero Pendências):** **concluída.** Partes 1 e 2 implementadas (`S419`: entrada fechada; `S420`: o comando continua enquanto trabalha). A parte 3, o teto pelo prazo do objetivo, foi substituída pela ADR-027, que eliminou o prazo do objetivo. O status original fica abaixo, como histórico.
+
 Data: 16/10/2026. Status: **aceita** pela operadora (T = 30 s; ao chegar em T, encerrar e dizer o fato — opção (i)). Implementação
 em 3 partes: entrada fechada (S419), progresso pelos três sinais (S420), teto pelo prazo do objetivo e "Parar" (parte 3).
 

@@ -1,5 +1,7 @@
 # ADR-010 — Validação semântica de afirmações contra evidência
 
+> **Estado conferido em 05/11/2026 (Operação Zero Pendências):** **realizada pela ADR-014.** O juiz de afirmações contra evidência existe como o tipo `saida_contra_evidencia` do motor único de validação (`src/validation/tipos/saidaContraEvidencia.ts`), que substituiu os avaliadores separados. O status original fica abaixo, como histórico.
+
 > **Status:** decisão arquitetural **aceita**. Implementação **não realizada**.
 > **Data:** 2026-08-09
 > **Origem:** Gate MECANISMO (investigação de 08-09/08/2026), a partir dos incidentes "River"
