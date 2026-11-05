@@ -46,6 +46,12 @@ export interface ItemJulgado {
     trecho?: string;
     /** Preenchido pela pré-verificação `citacao_existe_na_fonte`. */
     citacaoConfere?: boolean;
+    /**
+     * O que o MODELO disse do item, quando a pré-verificação de citação o rebaixou para `sem_evidencia`. É fato do veredito, não
+     * reinterpretação: "o juiz apontou contradição, mas a citação não conferiu" não é o mesmo que "a evidência não determina"
+     * (A1-r, decisão da operadora em 05/11/2026 — 2 contradições reais perdidas assim em produção, 30/10 e 04/11).
+     */
+    confereDoModelo?: 'sim' | 'nao';
 }
 
 export type EstadoDoVeredito = 'aprovado' | 'reprovado' | 'nao_avaliavel';

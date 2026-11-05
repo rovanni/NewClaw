@@ -69,6 +69,8 @@ export interface GroundedClaim {
     verdict: ClaimVerdict;
     /** Texto LITERAL da evidência citado pelo juiz (conferido pelo motor): o valor que a fonte mostra — usado na correção dirigida. */
     trecho?: string;
+    /** O juiz marcou a afirmação como contraditada, mesmo que a citação não tenha conferido (A1-r: nunca liberada por aviso). */
+    contradicaoApontada?: true;
 }
 
 /** Uma evidência candidata do turno, derivada de ExecutionTrace (ADR-010 §4). */
