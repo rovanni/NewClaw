@@ -60,12 +60,14 @@ async function main(): Promise<void> {
 
     console.log('\n=== S359-3 — o pedido conta no teto do prompt ===');
     // Motor único: nada é cortado. Evidência que cabe SEM o pedido e passa do teto COM ele não é julgada (UNVALIDATED).
-    const evMedia = [{ id: 'E1', tool: 'arquivo_gerado', output: 'x'.repeat(55_000) }];
+    // 50 mil, e não 55 mil: com 55 mil a folga sob o teto (60 mil) era de ~150 caracteres, e qualquer frase nova no prompt
+    // do juiz (ex.: a do shell declarado, ADR-026) quebrava o teste sem mudar o comportamento que ele confere.
+    const evMedia = [{ id: 'E1', tool: 'arquivo_gerado', output: 'x'.repeat(50_000) }];
     const pSem: string[] = [];
     await quiet(() => juiz(pSem).validateGrounding('resposta', evMedia));
     const pCom: string[] = [];
     const comPedido = await quiet(() => juiz(pCom).validateGrounding('resposta', evMedia, undefined, { phase: 'initial', userRequest: 'p'.repeat(10_000) }));
-    assert(pSem.length === 1 && pCom.length === 0 && comPedido.state === 'UNVALIDATED', `pedido de 10 mil chars + evidência de 55 mil passam do teto: não é julgado, nada é cortado (${pSem.length} chamada sem pedido, ${pCom.length} com)`, comPedido.state);
+    assert(pSem.length === 1 && pCom.length === 0 && comPedido.state === 'UNVALIDATED', `pedido de 10 mil chars + evidência de 50 mil passam do teto: não é julgado, nada é cortado (${pSem.length} chamada sem pedido, ${pCom.length} com)`, comPedido.state);
 
     console.log('\n=== S359-4 — a revalidação da resposta parcial também recebe o pedido ===');
     const src = fs.readFileSync(path.join(process.cwd(), 'src', 'loop', 'AgentLoop.ts'), 'utf-8');
