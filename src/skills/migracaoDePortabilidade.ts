@@ -184,6 +184,69 @@ export async function aplicarMigracao(c: Caminhos, pastasConfirmadas: Record<str
     return plano;
 }
 
+// ── Decisão 17 (04/11/2026, alternativa b): skills soltas viram aprendidas; as que generalizam a operadora promove por PR ──
+
+/** Uma skill gravada direto em `skills/` (antes da ADR-036): nem oficial (no git), nem aprendida (prefixo ou `auto_skills`). */
+export interface SkillSolta { pasta: string; nome: string; novaPasta: string }
+
+/**
+ * As skills soltas desta instalação. `oficiais`: as pastas que o repositório versiona (`git ls-files skills`). Sem essa lista
+ * não há como saber o que é oficial, e nada é adotado (NUNCA_ADIVINHAR): quem chama passa `undefined`.
+ */
+export function planejarAdocao(c: Caminhos, oficiais: Set<string> | undefined): SkillSolta[] {
+    if (!oficiais || !fs.existsSync(c.skills)) return [];
+    const doBanco = new Set<string>();
+    const arqDb = path.join(c.dados, 'newclaw.db');
+    if (fs.existsSync(arqDb)) {
+        const db = new Database(arqDb, { readonly: true });
+        try { for (const l of db.prepare('SELECT name, source_pattern FROM auto_skills').all() as Array<{ name: string; source_pattern: string | null }>) doBanco.add(pastaDaSkill(l.source_pattern ?? l.name)); }
+        catch { /* sem a tabela */ } finally { db.close(); }
+    }
+    const soltas: SkillSolta[] = [];
+    for (const d of fs.readdirSync(c.skills, { withFileTypes: true }).filter(x => x.isDirectory()).sort((a, b) => a.name.localeCompare(b.name))) {
+        const arq = path.join(c.skills, d.name, 'SKILL.md');
+        if (!fs.existsSync(arq) || oficiais.has(d.name) || d.name.startsWith('aprendida_') || doBanco.has(d.name)) continue;
+        const nome = fs.readFileSync(arq, 'utf8').match(/^name:\s*(.+)$/m)?.[1]?.trim() ?? d.name;
+        soltas.push({ pasta: d.name, nome, novaPasta: pastaDaSkill(`aprendida_${d.name}`) });
+    }
+    return soltas;
+}
+
+/**
+ * Adota as soltas como aprendidas: a pasta ganha o prefixo (o mesmo nome que o `SkillLearner` daria) e a linha em
+ * `auto_skills` (ativa, como já estavam), para aparecerem no painel de skills com desativar e para viajarem pela ADR-034.
+ * O conteúdo dos arquivos não muda. Pacote de segurança antes.
+ */
+export async function aplicarAdocao(c: Caminhos, soltas: SkillSolta[]): Promise<{ adotadas: SkillSolta[]; pacoteDeSeguranca: string }> {
+    const seguranca = await criarPacote(path.join(c.dados, 'backups'), { segredos: false }, c, 'pre-adocao-skills');
+    const db = new Database(path.join(c.dados, 'newclaw.db'));
+    const adotadas: SkillSolta[] = [];
+    try {
+        const cols = (db.prepare(`PRAGMA table_info(auto_skills)`).all() as Array<{ name: string }>).map(x => x.name);
+        if (!cols.includes('source_pattern')) throw new Error('auto_skills sem a coluna source_pattern — inicie o NewClaw uma vez para criar a tabela');
+        for (const s of soltas) {
+            const de = path.join(c.skills, s.pasta);
+            const para = path.join(c.skills, s.novaPasta);
+            if (!fs.existsSync(de) || fs.existsSync(para)) continue;
+            const texto = fs.readFileSync(path.join(de, 'SKILL.md'), 'utf8');
+            const descricao = texto.match(/^description:\s*(.+)$/m)?.[1]?.trim() ?? s.nome;
+            const gatilhos = texto.match(/^triggers:\s*(.+)$/m)?.[1]?.trim() ?? s.nome;
+            const corpo = texto.replace(/^﻿/, '').replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, '').trim();
+            const agora = new Date().toISOString();
+            // Só as colunas que esta tabela tem (instalações antigas não têm todas), como a importação da ADR-020.
+            const valores: Record<string, unknown> = {
+                id: `skill_adotada_${s.novaPasta}_${Date.now()}`, name: s.nome, trigger: gatilhos, description: descricao, prompt: corpo,
+                status: 'active', source_pattern: s.novaPasta, source_tool: 'adotada', created_at: agora, updated_at: agora, file_exported: 1,
+            };
+            const usar = Object.keys(valores).filter(k => cols.includes(k));
+            fs.renameSync(de, para);
+            db.prepare(`INSERT INTO auto_skills (${usar.map(k => `"${k}"`).join(',')}) VALUES (${usar.map(() => '?').join(',')})`).run(...usar.map(k => valores[k]));
+            adotadas.push(s);
+        }
+    } finally { db.close(); }
+    return { adotadas, pacoteDeSeguranca: seguranca.arquivo };
+}
+
 /** O relatório para a operadora revisar (Markdown). */
 export function relatorioEmMarkdown(r: RelatorioDaMigracao): string {
     const mudam = r.itens.filter(i => i.mudou);

@@ -184,6 +184,22 @@ async function main(): Promise<void> {
         const carregadaM = new sl.SkillLoader(inst.skills, () => ({ newclaw: inst.raiz, workspace: inst.workspace, skills: inst.skills, pastas: sl.lerTabelaDePastas(inst.dados) })).loadAll().find(x => x.name === 'relatorio');
         assert(!!carregadaM && !carregadaM.avisos?.curtos.length && carregadaM.content.includes(path.join(base, 'Docs', 'Relatorios')), 'depois da migração, a skill carrega validada aqui, com o caminho real da pasta', carregadaM?.avisos);
 
+        console.log('\n=== S477-6b — decisão 17: skills soltas viram aprendidas ===');
+        escreverEm(inst, 'gmail-himalaya', skillMd('triggers: email\n', 'Use o himalaya.').replace('name: x', 'name: gmail-himalaya'));
+        escreverEm(inst, 'oficial', skillMd('', 'Versionada no git.').replace('name: x', 'name: oficial'));
+        assert(mig.planejarAdocao(inst, undefined).length === 0, 'sem a lista do git (oficiais), nada é adotado');
+        const soltas = mig.planejarAdocao(inst, new Set(['oficial', 'manual', 'ja-migrada']));
+        assert(JSON.stringify(soltas.map(s => s.pasta)) === '["gmail-himalaya"]' && soltas[0].novaPasta === 'aprendida_gmail_himalaya',
+            'solta = fora do git, sem prefixo e sem linha em auto_skills; a pasta nova é a que o SkillLearner daria', soltas);
+        const ad = await mig.aplicarAdocao(inst, soltas);
+        const dbAd = new Database(path.join(inst.dados, 'newclaw.db'), { readonly: true });
+        const linhaAd = dbAd.prepare(`SELECT name, status, source_pattern, prompt FROM auto_skills WHERE source_pattern = 'aprendida_gmail_himalaya'`).get() as { name: string; status: string; prompt: string } | undefined;
+        dbAd.close();
+        assert(ad.adotadas.length === 1 && fs.existsSync(ad.pacoteDeSeguranca) && fs.existsSync(path.join(inst.skills, 'aprendida_gmail_himalaya', 'SKILL.md'))
+            && !fs.existsSync(path.join(inst.skills, 'gmail-himalaya')) && linhaAd?.status === 'active' && linhaAd.prompt === 'Use o himalaya.',
+            'adotada: pasta com prefixo, linha ativa em auto_skills com o corpo, pacote de segurança antes', linhaAd);
+        assert(mig.planejarAdocao(inst, new Set(['oficial', 'manual', 'ja-migrada'])).length === 0, 'adotar de novo não faz nada');
+
         console.log('\n=== S477-7 — "funcionou aqui" ===');
         const t0 = skillMd(`validada_em: ${OUTRO}@${resumo}\n`, corpo);
         const t1 = sl.acrescentarValidacao(t0, AQUI, resumo)!;

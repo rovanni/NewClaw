@@ -683,13 +683,30 @@ async function migrarSkills(args) {
   const iPref = args.indexOf('--prefixos-de');
   const prefixos = iPref >= 0 && args[iPref + 1] ? bk.caminhosDaInstalacao(path.resolve(args[iPref + 1])) : undefined;
   const aplicar = args.includes('--aplicar');
+  // Decisão 17: skills soltas (gravadas direto em skills/, antes da ADR-036) viram aprendidas. O que é oficial é o que o
+  // git versiona; fora de um clone git não há como saber, e nada é adotado.
+  let oficiais;
+  const raizGit = iPref >= 0 && args[iPref + 1] ? path.resolve(args[iPref + 1]) : raiz;
+  try {
+    const saidaGit = execSync('git ls-files skills', { cwd: raizGit, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    oficiais = new Set(saidaGit.split(/\r?\n/).filter(Boolean).map(f => f.split('/')[1]).filter(Boolean));
+  } catch { oficiais = undefined; }
+  const soltas = args.includes('--adotar-soltas') ? mod.planejarAdocao(c, oficiais) : [];
+  let adocao;
+  if (aplicar && soltas.length) adocao = await bk.comTravaDeSync(c, () => mod.aplicarAdocao(c, soltas));
   const r = aplicar
     ? await bk.comTravaDeSync(c, () => mod.aplicarMigracao(c, pastas, prefixos))
     : mod.planejarMigracao(c, pastas, prefixos);
   const carimbo = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
   fs.mkdirSync(c.dados, { recursive: true });
   const saida = path.join(c.dados, `migracao-skills-${carimbo}.md`);
-  fs.writeFileSync(saida, mod.relatorioEmMarkdown(r));
+  const secaoSoltas = args.includes('--adotar-soltas')
+    ? ['', '## Skills soltas (decisão 17)', '', oficiais ? '' : 'Fora de um clone git: não há como saber o que é oficial; nada foi adotado.',
+       ...soltas.map(s => `- \`${s.pasta}\` (${s.nome}) → \`${s.novaPasta}\`${aplicar ? ' — adotada' : ''}`),
+       soltas.length ? '' : 'Nenhuma.', 'Promover alguma a oficial é por PR, escolha da operadora.'].join('\n')
+    : '';
+  fs.writeFileSync(saida, mod.relatorioEmMarkdown(r) + secaoSoltas);
+  if (adocao) console.log(`   Soltas adotadas como aprendidas: ${adocao.adotadas.length} (segurança: ${adocao.pacoteDeSeguranca})`);
   const mudam = r.itens.filter(i => i.mudou).length;
   console.log(`${aplicar ? '✅ Migração aplicada' : '📋 Só o plano (nada foi escrito)'}: ${r.itens.length} skills lidas, ${mudam} mudam, ${r.pastasPropostas.length} pasta(s) pessoal(is) para confirmar.`);
   console.log(`   Relatório: ${saida}`);
@@ -1826,7 +1843,8 @@ newclaw backup          Salva tudo o que o NewClaw aprendeu num arquivo .zip
 newclaw restore <a.zip> Restaura o conhecimento de um arquivo .zip
 newclaw import <a.zip>  Mescla o conhecimento de outra instalação (não apaga nada)
 newclaw skills-migrar   Planeja (ou, com --aplicar, aplica) o cabeçalho de portabilidade das skills
-                        (opções: --raiz <cópia> --prefixos-de <raiz original> --pasta nome=CAMINHO --aplicar)
+                        (opções: --raiz <cópia> --prefixos-de <raiz original> --pasta nome=CAMINHO
+                         --adotar-soltas --aplicar)
 newclaw restore         Abre o assistente de restauração de backups
 newclaw uninstall       Remove o NewClaw e limpa o sistema
 newclaw help            Mostra esta tela de ajuda
