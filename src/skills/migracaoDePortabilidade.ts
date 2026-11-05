@@ -167,12 +167,18 @@ export async function aplicarMigracao(c: Caminhos, pastasConfirmadas: Record<str
     const db = fs.existsSync(arqDb) ? new Database(arqDb) : undefined;
     try {
         const cols = db ? (db.prepare(`PRAGMA table_info(auto_skills)`).all() as Array<{ name: string }>).map(x => x.name) : [];
+        // Uma leitura só: pasta → linha de auto_skills.
+        const linhaDaPasta = new Map<string, { id: string }>();
+        if (db && cols.includes('sistema_origem')) {
+            for (const l of db.prepare('SELECT id, name, source_pattern FROM auto_skills').all() as Array<{ id: string; name: string; source_pattern: string | null }>) {
+                linhaDaPasta.set(pastaDaSkill(l.source_pattern ?? l.name), { id: l.id });
+            }
+        }
         for (const item of plano.itens.filter(i => i.mudou)) {
             fs.writeFileSync(path.join(c.skills, item.pasta, 'SKILL.md'), item.depois);
             if (!db || !cols.includes('sistema_origem')) continue;
             const corpo = separarCabecalho(item.depois)?.corpo.trim() ?? '';
-            const linha = (db.prepare('SELECT id, name, source_pattern FROM auto_skills').all() as Array<{ id: string; name: string; source_pattern: string | null }>)
-                .find(l => pastaDaSkill(l.source_pattern ?? l.name) === item.pasta);
+            const linha = linhaDaPasta.get(item.pasta);
             if (!linha) continue;
             const validada = item.camposNovos.find(f => f.startsWith('validada_em: '))?.slice('validada_em: '.length) ?? null;
             db.prepare('UPDATE auto_skills SET prompt = ?, sistema_origem = COALESCE(sistema_origem, ?), validada_em = COALESCE(validada_em, ?) WHERE id = ?')

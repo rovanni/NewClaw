@@ -7,7 +7,7 @@ import path from 'path';
 import Database from 'better-sqlite3';
 import { criarPacote, lerPacote, restaurarPacote, importarPacote, comTravaDeSync, caminhosDaInstalacao, SincronizacaoEmAndamento } from '../../core/backupDoConhecimento';
 import { rateLimit } from 'express-rate-limit';
-import { configuracaoDoSync, idDaInstalacao, nomeDaSubpasta, lerManifesto, ultimoRelatorio } from '../../core/syncAgent';
+import { configuracaoDoSync, nomeDaSubpasta, lerManifesto, ultimoRelatorio } from '../../core/syncAgent';
 import { applyEnvUpdates } from '../../shared/envSerializer';
 
 const log = createLogger('Maintenance');
@@ -623,7 +623,9 @@ export function createMaintenanceRouter(ctx: { controller?: unknown } = {}): Rou
         try {
             const cfg = configuracaoDoSync();
             const c = caminhosDaInstalacao();
-            const id = cfg.nome ? idDaInstalacao(c) : undefined;
+            // Leitura sem efeito: o id só existe depois da primeira rodada (que o cria); aqui ele é lido, nunca gerado.
+            let id: string | undefined;
+            try { id = JSON.parse(fs.readFileSync(path.join(c.dados, 'sync-instalacao.json'), 'utf8')).id; } catch { id = undefined; }
             const minha = id && cfg.nome ? nomeDaSubpasta(cfg.nome, id) : undefined;
             const pastaOk = !!cfg.pasta && fs.existsSync(cfg.pasta);
             const outras: Array<Record<string, unknown>> = [];

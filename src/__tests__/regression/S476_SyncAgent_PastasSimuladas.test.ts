@@ -134,7 +134,7 @@ async function main(): Promise<void> {
         const r1 = await rodar(nb);
         assert(temMemoria(nb, 'm-pc-1') && !temMemoria(nb, 'm-pc-local'), '1: o notebook importa a memória do PC (a "só desta máquina" não)', relatoDe(r1, 'PC'));
         assert(fs.existsSync(path.join(nb.c.skills, 'aprendida_relatorio', 'SKILL.md')) && statusDaSkill(nb, 'aprendida_relatorio')?.status === 'active'
-            && statusDaSkill(nb, 'aprendida_relatorio')?.origem === 'PC' && !!relatoDe(r1, 'PC')?.entrou?.skills.ativadas.includes('aprendida_relatorio'),
+            && statusDaSkill(nb, 'aprendida_relatorio')?.origem === 'PC' && !!relatoDe(r1, 'PC')?.entrou?.skills.ativadas.includes('relatorio-do-pc'),
             '1: no modo automático, a skill ativa do PC entra ativa, com origem_instalacao = PC e o aviso', statusDaSkill(nb, 'aprendida_relatorio'));
         memoria(nb, 'm-nb-1', 'Notebook: anotação de viagem');
         await rodar(nb);
@@ -153,6 +153,14 @@ async function main(): Promise<void> {
         const depois = [contar(nb, 'memory_nodes'), contar(nb, 'memory_edges'), contar(nb, 'auto_skills')];
         assert(JSON.stringify(antes) === JSON.stringify(depois), 'contagens iguais depois de 10 importações', { antes, depois });
         assert(!fs.existsSync(path.join(base, 'seg-idem')) || fs.readdirSync(path.join(base, 'seg-idem')).length === 0, 'nada entrou: nenhum pacote de segurança fica');
+        // Skill que diverge entre as instalações: a local fica, e o relatório diz (achado do review de 05/11/2026).
+        const arqNb = path.join(nb.c.skills, 'aprendida_relatorio', 'SKILL.md');
+        const antesDaEdicao = fs.readFileSync(arqNb);
+        fs.writeFileSync(arqNb, antesDaEdicao.toString('utf8') + '\nEditada no notebook.\n');
+        const relDif = await bk.importarPacote(pacotePc, nb.c, undefined, path.join(base, 'seg-dif'), { origemInstalacao: 'PC', modo: 'automatico' });
+        assert(relDif.skills.comDiferenca.includes('aprendida_relatorio') && fs.readFileSync(arqNb, 'utf8').includes('Editada no notebook.'),
+            'skill diferente aqui: a local fica e aparece em comDiferenca', relDif.skills);
+        fs.writeFileSync(arqNb, antesDaEdicao);
 
         console.log('\n=== S476-5 — aceitação 4: máquina desligada por vários pacotes recupera com o mais novo ===');
         for (let k = 0; k < 3; k++) { memoria(pc, `m-pc-lote-${k}`, `lote ${k}`); await sync.publicar(pc.cfg, pc.c); }

@@ -78,11 +78,14 @@ export function createSkillsRouter(ctx: DashboardContext): Router {
             if (!novo) return res.status(422).json({ success: false, error: 'a skill não tem cabeçalho' });
             fs.writeFileSync(arq, novo);
             const validada = novo.match(/^validada_em:\s*(.+)$/m)?.[1]?.trim() ?? null;
+            // O banco também guarda (o SKILL.md regerado a partir dele mantém a validação). Falha não é silenciosa.
+            let noBanco = false;
             try {
-                const mm = ctx.memoryManager as unknown as { db?: import('better-sqlite3').Database } | undefined;
-                mm?.db?.prepare(`UPDATE auto_skills SET validada_em = ? WHERE name = ?`).run(validada, nome);
-            } catch { /* sem a coluna: o arquivo é a fonte que o carregador lê */ }
-            res.json({ success: true, validadaEm: validada });
+                noBanco = (ctx.memoryManager?.getDatabase().prepare(`UPDATE auto_skills SET validada_em = ? WHERE name = ?`).run(validada, nome).changes ?? 0) > 0;
+            } catch (e) {
+                return res.status(500).json({ success: false, error: `arquivo atualizado, mas o banco não: ${errorMessage(e)}` });
+            }
+            res.json({ success: true, validadaEm: validada, noBanco });
         } catch (err) {
             res.status(500).json({ success: false, error: errorMessage(err) });
         }

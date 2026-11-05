@@ -450,7 +450,7 @@ export async function importarPacote(arquivo: string, c: Caminhos = caminhosDaIn
     }
 
     // 2. Arquivos: skills, histórico e workspace — só o que falta; nada local é sobrescrito.
-    const pastasDeSkill = new Map<string, { nova: boolean; igual: boolean; diferente: boolean; revisar: boolean; ativada?: boolean }>();
+    const pastasDeSkill = new Map<string, { nova: boolean; igual: boolean; diferente: boolean; revisar: boolean; ativada?: boolean; nome?: string }>();
     for (const [nome, entrada] of Object.entries(zip.files)) {
         if (entrada.dir) continue;
         if (nome.startsWith('skills/')) {
@@ -464,7 +464,8 @@ export async function importarPacote(arquivo: string, c: Caminhos = caminhosDaIn
                 const base = path.join(c.skills, pasta, 'SKILL.md');
                 if (fs.existsSync(base) || fs.existsSync(base + '.revisar')) {
                     const local = fs.existsSync(base) ? base : base + '.revisar';
-                    if (fs.readFileSync(local).equals(conteudo)) st.igual = true;
+                    // Igual: nada a dizer. Diferente: a local fica (o estado local nunca muda), e o relatório diz que divergem.
+                    if (fs.readFileSync(local).equals(conteudo)) st.igual = true; else st.diferente = true;
                     pastasDeSkill.set(pasta, st);
                     continue;
                 }
@@ -472,7 +473,7 @@ export async function importarPacote(arquivo: string, c: Caminhos = caminhosDaIn
                 const ativa = ativaNaOrigem && podeEntrarAtiva(pasta, conteudo.toString('utf8'));
                 destino = base + (ativa ? '' : '.revisar');
                 st.nova = true;
-                if (ativa) st.ativada = true; else st.revisar = true;
+                if (ativa) { st.ativada = true; st.nome = conteudo.toString('utf8').match(/^name:\s*(.+)$/m)?.[1]?.trim(); } else st.revisar = true;
                 fs.mkdirSync(path.dirname(destino), { recursive: true });
                 fs.writeFileSync(destino, conteudo);
                 pastasDeSkill.set(pasta, st);
@@ -503,7 +504,8 @@ export async function importarPacote(arquivo: string, c: Caminhos = caminhosDaIn
     for (const [pasta, st] of pastasDeSkill) {
         if (st.revisar) rel.skills.paraRevisar.push(pasta);
         else if (st.diferente) rel.skills.comDiferenca.push(pasta);
-        else if (st.nova) { rel.skills.novas++; if (st.ativada) rel.skills.ativadas.push(pasta); }
+        // `ativadas` leva o NOME da skill (o que o /skill_desativar procura), não a pasta.
+        else if (st.nova) { rel.skills.novas++; if (st.ativada) rel.skills.ativadas.push(st.nome || pasta); }
         else if (st.igual) rel.skills.iguais++;
     }
     if (opcoes.segurancaSoSeEntrar && !algoEntrou(rel)) {

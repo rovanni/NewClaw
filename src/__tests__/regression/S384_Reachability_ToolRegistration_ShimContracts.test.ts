@@ -45,6 +45,7 @@ const SEM_CONSUMIDOR: Record<string, { categoria: Categoria; porque: string }> =
     'loop/DecisionPostProcessor.ts': { categoria: 'shim-deprecado', porque: 'Re-exporta de ResponseBuilder (Fase 2.2). S384-3 trava a identidade dos símbolos.' },
     'channels/index.ts': { categoria: 'barrel', porque: 'Barrel de conveniência dos canais; os consumidores importam cada módulo direto. S384-4 trava as exportações.' },
     'memory/conversational/index.ts': { categoria: 'barrel', porque: 'Barrel do CMI; os consumidores importam cada módulo direto. S384-4 trava as exportações.' },
+    'skills/migracaoDePortabilidade.ts': { categoria: 'sem-consumidor', porque: 'ADR-035 §6: migração de uso único, que roda só a pedido da operadora. A CLI `newclaw skills-migrar` (bin/newclaw, JavaScript) a carrega de dist/, fora do grafo de imports que este teste lê. S477 cobre o módulo.' },
 };
 // Sprint 4 (14/10/2026, decisão da mantenedora): as 3 ferramentas nunca registradas (cmi_inspect, crypto_report,
 // manage_memory) e os 6 módulos sem consumidor (StateStabilityGuard, GoalStateMachine, MemoryScoringEngine, EventRanker,
@@ -100,7 +101,8 @@ console.log('\n=== S384-1 — alcançabilidade: o conjunto sem consumidor é exa
     assert(obsoletos.length === 0, 'nenhuma entrada declarada passou a ser alcançada (tire-a de SEM_CONSUMIDOR)', obsoletos);
     assert(declarados.every(f => fs.existsSync(path.join(SRC, f))), 'todo arquivo declarado ainda existe');
     assert(declarados.every(f => SEM_CONSUMIDOR[f].porque.length >= 40), 'toda entrada tem justificativa de verdade (>= 40 caracteres)');
-    assert(declarados.length === 7, `o registro cobre os 7 que restam dos 16 da auditoria — 9 removidos na Sprint 4 (tem ${declarados.length})`);
+    // 7 que restam dos 16 da auditoria (9 removidos na Sprint 4) + 1 da ADR-035 (migração só pela CLI, 05/11/2026).
+    assert(declarados.length === 8, `o registro cobre os 7 que restam da auditoria e a migração da ADR-035 (tem ${declarados.length})`);
 }
 
 console.log('\n=== S384-2 — registro de ferramentas: toda classe ToolExecutor está registrada ou declarada ===');
