@@ -1,6 +1,7 @@
 # ADR-034 — NewClaw Sync Agent: o conhecimento entre instalações por uma pasta sincronizada
 
-Data: 31/10/2026. Status: **proposta, revisão 4** (revisão 4: skill importada segue a mesma regra de ativação da
+Data: 31/10/2026. Status: **aceita (V1)** pela operadora em 04/11/2026 ("Operação Zero Pendências"); a sincronização real
+só é ligada nas três instalações com a autorização dela para configurar o Syncthing. Antes: **proposta, revisão 4** (revisão 4: skill importada segue a mesma regra de ativação da
 skill aprendida localmente, ADR-017, em vez de sempre esperar aprovação; revisão 3: ordem da publicação, retenção pelos cursores,
 validação da origem, regras da trava, skills pendentes protegidas da limpeza e os 12 testes de aceitação). Revisão 2 (ajustes pedidos pela operadora na primeira leitura: pacotes
 imutáveis, SHA-256, uma importação por vez, versionamento na pasta, skills sempre com aprovação (revisto na 4), V1/V2/V3 e a tela

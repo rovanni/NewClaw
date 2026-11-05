@@ -1,6 +1,7 @@
 # ADR-035 — Skills portáveis entre sistemas: cabeçalho de origem e marcadores de caminho
 
-Data: 31/10/2026. Status: **proposta, revisão 2** (revisão 2: os três limites da seção 8, validação presa ao
+Data: 31/10/2026. Status: **aceita** pela operadora em 04/11/2026 ("Operação Zero Pendências"), com D1, D2 e D3 como
+decididos abaixo. A migração das skills reais (etapa 5) roda só depois de ela revisar o relatório. Antes: **proposta, revisão 2** (revisão 2: os três limites da seção 8, validação presa ao
 conteúdo, `requer` com "não verificado", avisos no catálogo e no conteúdo, `origem` renomeado para `sistema_origem`). Nada será implementado antes da aprovação da operadora.
 
 Relacionadas: ADR-017 (aprendizado de skills automático), ADR-020 (backup e importação mesclando; detector de
