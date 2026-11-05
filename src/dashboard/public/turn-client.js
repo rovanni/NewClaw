@@ -1,5 +1,5 @@
 /**
- * turn-client.js — cliente público do contrato do turno (docs/CONTRATO_DO_TURNO.md), versão 1.
+ * turn-client.js — cliente público do contrato do turno (docs/CONTRATO_DO_TURNO.md), versão 2 (ADR-033; aditiva sobre a 1).
  *
  * Por que existe: o protocolo de acompanhar um turno do chat (enviar → aceito → em andamento → aprovação → resposta) estava
  * escrito duas vezes, no painel (`index.html`, startTurnPolling/fetchAndRenderOutbox) e no suplemento do PowerPoint
@@ -26,7 +26,7 @@
  */
 
 /** Versão do contrato que este módulo implementa. O servidor anuncia a dele em `GET /api/status` → `status.contracts.turn`. */
-export const TURN_CONTRACT_VERSION = 1;
+export const TURN_CONTRACT_VERSION = 2;
 
 /** Intervalo padrão entre consultas — o mesmo do painel (40/min; o limite geral do servidor é 120/min por IP). */
 export const DEFAULT_POLL_INTERVAL_MS = 1500;
@@ -84,6 +84,18 @@ export function phaseFromActive(body, sessionId) {
     work: mine ? { kind: mine.kind, status: mine.status } : null,
     approvals,
     progress: phase === 'finished' ? null : progress,
+    // v2 (ADR-033 §2–§3): o objetivo desta conversa (estado, plano, revisão e, se mudou, as etapas) e os últimos relatos.
+    // `plan.steps` ausente com `sinceRevision` igual: nada mudou, vale o que o cliente já tinha.
+    plan: body && body.trabalho ? {
+      state: body.trabalho.estado,
+      generation: body.trabalho.plano,
+      revision: body.trabalho.revisao,
+      steps: Array.isArray(body.trabalho.etapas)
+        ? body.trabalho.etapas.map((e) => ({ id: e.id, description: e.descricao, state: e.estado }))
+        : undefined,
+    } : null,
+    reports: body && Array.isArray(body.relatos) ? body.relatos.map((r) => ({ text: r.texto, at: r.em })) : undefined,
+    reportsOmitted: body && typeof body.relatosOmitidos === 'number' ? body.relatosOmitidos : undefined,
   };
 }
 
@@ -92,11 +104,13 @@ export function phaseFromActive(body, sessionId) {
  * @param {string} [options.baseUrl] Endereço do NewClaw ('' = mesma origem).
  * @param {Function} [options.fetch] Implementação de fetch (padrão: o global).
  * @param {object} [options.headers] Cabeçalhos de cada chamada — por exemplo `Authorization: Bearer <token>`.
+ * @param {string} [options.client] v2: nome do cliente (`[a-z0-9._-]`, até 64), enviado em cada mensagem. Só informativo.
  */
 export function createTurnClient(options = {}) {
   const baseUrl = (options.baseUrl || '').replace(/\/+$/, '');
   const fetchFn = options.fetch || globalThis.fetch;
   const headers = options.headers || {};
+  const client = options.client || undefined;
   if (typeof fetchFn !== 'function') throw new Error('turn-client: nenhuma implementação de fetch disponível');
 
   const url = (path) => baseUrl + path;
@@ -109,10 +123,11 @@ export function createTurnClient(options = {}) {
       const form = new FormData();
       form.append('message', message || '');
       form.append('sessionId', sessionId);
+      if (client) form.append('client', client);
       for (const f of files) form.append('files', f.blob, f.fileName);
       init = { method: 'POST', headers: Object.assign({}, headers), body: form };
     } else {
-      init = { method: 'POST', headers: jsonHeaders(), body: JSON.stringify({ message: message || '', sessionId }) };
+      init = { method: 'POST', headers: jsonHeaders(), body: JSON.stringify(Object.assign({ message: message || '', sessionId }, client ? { client } : {})) };
     }
     const res = await fetchFn(url('/api/chat'), init);
     const body = await readJson(res);
@@ -128,9 +143,13 @@ export function createTurnClient(options = {}) {
     };
   }
 
-  /** Estado atual do turno (uma consulta a `/api/chat/active`). Lança em falha de rede ou status inesperado. */
-  async function state({ sessionId, turnId }) {
-    const q = '?sessionId=' + encodeURIComponent(sessionId) + (turnId ? '&turnId=' + encodeURIComponent(turnId) : '');
+  /**
+   * Estado atual do turno (uma consulta a `/api/chat/active`). Lança em falha de rede ou status inesperado.
+   * v2: `sinceRevision` (a `plan.revision` que o cliente já tem) faz o servidor omitir etapas e relatos que não mudaram.
+   */
+  async function state({ sessionId, turnId, sinceRevision }) {
+    const q = '?sessionId=' + encodeURIComponent(sessionId) + (turnId ? '&turnId=' + encodeURIComponent(turnId) : '')
+      + (typeof sinceRevision === 'number' ? '&desdeRevisao=' + sinceRevision : '');
     const res = await fetchFn(url('/api/chat/active' + q), { method: 'GET', headers: Object.assign({}, headers) });
     if (res.status !== 200) {
       const err = new Error(`HTTP ${res.status}`);
@@ -151,7 +170,38 @@ export function createTurnClient(options = {}) {
     if (res.status === 404) return { kind: 'none' };
     const body = await readJson(res);
     if (res.status === 200 && body && body.success === true) {
-      return { kind: 'delivered', text: body.response || '', attachments: body.attachments || [], options: body.options };
+      return {
+        kind: 'delivered', text: body.response || '', attachments: body.attachments || [], options: body.options,
+        // v2 (ADR-033 §5): o resultado que o núcleo decidiu (só em entrega de objetivo) e o aviso de fila provisório.
+        outcome: body.resultado
+          ? { state: body.resultado.estado, steps: { total: body.resultado.etapas.total, done: body.resultado.etapas.concluidas } }
+          : undefined,
+        provisional: body.provisoria === true,
+      };
+    }
+    const err = new Error(res.status === 200 ? 'resposta 200 sem success' : `HTTP ${res.status}`);
+    err.status = res.status;
+    throw err;
+  }
+
+  /**
+   * v2 (ADR-033 §4): o que o servidor sabe da conversa — versão do contrato, canal, cliente e o modelo da última resposta.
+   * `none` (404): conversa ainda sem mensagem gravada ou desconhecida. Campo que o servidor não sabe vem ausente.
+   */
+  async function context({ sessionId }) {
+    const res = await fetchFn(url('/api/chat/context?sessionId=' + encodeURIComponent(sessionId)), {
+      method: 'GET', headers: Object.assign({}, headers),
+    });
+    if (res.status === 404) return { kind: 'none' };
+    const body = await readJson(res);
+    if (res.status === 200 && body && body.success === true) {
+      return {
+        kind: 'context', contract: body.contrato, channel: body.canal, client: body.cliente,
+        conversation: body.conversa
+          ? { sessionId: body.conversa.sessionId, id: body.conversa.id, createdAt: body.conversa.criadaEm, messages: body.conversa.mensagens }
+          : undefined,
+        model: body.modelo ? { name: body.modelo.nome, provider: body.modelo.provedor, at: body.modelo.em } : undefined,
+      };
     }
     const err = new Error(res.status === 200 ? 'resposta 200 sem success' : `HTTP ${res.status}`);
     err.status = res.status;
@@ -189,9 +239,12 @@ export function createTurnClient(options = {}) {
    *
    * `onState(estado)` é chamado a cada consulta bem-sucedida com o retorno de `phaseFromActive` mais `turnId`; exceção dentro
    * dele é ignorada (a interface não derruba a espera).
+   *
+   * v2: uma entrega `provisional` (o aviso de fila) não encerra a espera — a resposta final sai depois com o mesmo turnId.
+   * `onProvisional(entrega)` recebe o aviso, para a interface mostrá-lo enquanto espera.
    */
   async function waitForTurn({
-    sessionId, turnId, onState, signal,
+    sessionId, turnId, onState, onProvisional, signal,
     intervalMs = DEFAULT_POLL_INTERVAL_MS,
     maxWaitMs = DEFAULT_MAX_WAIT_MS,
     maxConsecutiveErrors = DEFAULT_MAX_CONSECUTIVE_ERRORS,
@@ -202,6 +255,7 @@ export function createTurnClient(options = {}) {
     const start = now();
     let consecutiveErrors = 0;
     let lastError = '';
+    let provisionalSeen = false;
     const elapsed = () => now() - start;
 
     for (;;) {
@@ -226,6 +280,13 @@ export function createTurnClient(options = {}) {
           for (let attempt = 0; attempt <= resultRetries; attempt++) {
             try {
               const r = await result(turnId);
+              if (r.kind === 'delivered' && r.provisional) {
+                if (onProvisional) {
+                  try { onProvisional(r); } catch { /* a interface não pode derrubar a espera */ }
+                }
+                provisionalSeen = true;
+                break;
+              }
               if (r.kind === 'delivered') return { kind: 'finished', delivery: r, elapsedMs: elapsed() };
             } catch (err) {
               if (err && isDefinitiveRejection(err.status)) return { kind: 'rejected', status: err.status, elapsedMs: elapsed() };
@@ -233,6 +294,7 @@ export function createTurnClient(options = {}) {
             }
             if (attempt < resultRetries) await sleep(intervalMs);
           }
+          if (provisionalSeen) { provisionalSeen = false; await sleep(intervalMs); continue; }
           return { kind: 'finished', delivery: null, elapsedMs: elapsed() };
         }
       }
@@ -242,5 +304,5 @@ export function createTurnClient(options = {}) {
     }
   }
 
-  return { send, state, result, cancel, decide, waitForTurn };
+  return { send, state, result, context, cancel, decide, waitForTurn };
 }

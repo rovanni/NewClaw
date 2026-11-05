@@ -14,11 +14,17 @@ import { AsyncLocalStorage } from 'async_hooks';
 
 // ADR-027 (23/10/2026): saiu o PRAZO FINAL do objetivo (executarComPrazo / prazoDoTurno) — o objetivo não tem mais relógio,
 // e nada do que ele executa herda um teto de duração.
-const contexto = new AsyncLocalStorage<{ signal?: AbortSignal; aguardarComandos?: boolean }>();
+const contexto = new AsyncLocalStorage<{ signal?: AbortSignal; aguardarComandos?: boolean; conversa?: string }>();
 
-/** Roda `fn` dentro do turno: toda chamada ao modelo feita por ela (e pelo que ela dispara) enxerga o sinal. */
-export function executarNoTurno<T>(signal: AbortSignal, fn: () => Promise<T>): Promise<T> {
-    return contexto.run({ ...contexto.getStore(), signal }, fn);
+/** Roda `fn` dentro do turno: toda chamada ao modelo feita por ela (e pelo que ela dispara) enxerga o sinal.
+ * `conversa`: a chave da conversa do turno (`canal:usuário`) (ADR-033: o modelo que respondeu fica registrado por conversa). */
+export function executarNoTurno<T>(signal: AbortSignal, fn: () => Promise<T>, conversa?: string): Promise<T> {
+    return contexto.run({ ...contexto.getStore(), signal, ...(conversa ? { conversa } : {}) }, fn);
+}
+
+/** A conversa do turno em que o código atual roda; `undefined` fora de um turno. */
+export function conversaDoTurno(): string | undefined {
+    return contexto.getStore()?.conversa;
 }
 
 /**

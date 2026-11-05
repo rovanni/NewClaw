@@ -259,6 +259,16 @@ export class SessionManager {
      * A última fala do assistente, se foi ela a última mensagem da conversa — o contexto que o cofre usa para reconhecer uma
      * senha respondida sozinha (S460). Lê do banco: vale também depois de reiniciar o processo.
      */
+    /**
+     * ADR-033 §4: o cliente do contrato do turno gravado na primeira mensagem da conversa que o trouxe (`meta.cliente`).
+     * Só informativo. Lê a transcrição: depois de uma compactação, mensagens antigas podem ter saído, e então não se sabe.
+     */
+    async clienteDaConversa(key: SessionKey): Promise<string | undefined> {
+        const transcript = await this.getOrCreateSession(key);
+        const entradas = await transcript.replayMessages();
+        return entradas.find(e => e.role === 'user' && typeof e.meta?.cliente === 'string')?.meta?.cliente;
+    }
+
     ultimaFalaDoAssistente(key: SessionKey): string | null {
         const [ultima] = this.memory.getRecentMessages(this.conversationId(key), 1);
         return ultima && ultima.role === 'assistant' ? ultima.content : null;

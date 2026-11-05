@@ -199,6 +199,11 @@ export interface LlmCallDiag {
     goalId?: string;
     cycle?: number;
     step?: string;
+    /**
+     * ADR-033 §4: esta chamada produz a RESPOSTA da conversa (o agente, o resumo da entrega), não um juiz nem um
+     * planejador. Só observabilidade: o modelo que respondeu fica registrado para o contrato do turno.
+     */
+    respostaDaConversa?: boolean;
 }
 
 export interface ChatFallbackOptions {

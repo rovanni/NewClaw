@@ -71,6 +71,10 @@ export interface NormalizedResponse {
      * trabalho roda — nunca o junta à resposta final.
      */
     progresso?: boolean;
+    /** ADR-033: resultado de um objetivo que terminou — o contrato do turno o devolve na outbox. Os outros canais ignoram. */
+    resultado?: import('../shared/contratoDoTurno').ResultadoDaTarefa;
+    /** ADR-033: aviso que NÃO é a resposta (ex.: "sua mensagem entrou na fila"); a resposta final ainda vem. */
+    provisoria?: boolean;
 }
 
 export interface ResponseOption {

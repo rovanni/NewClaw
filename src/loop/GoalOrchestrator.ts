@@ -29,6 +29,7 @@ import { MemoryManager, descreverNoDaMemoria } from '../memory/MemoryManager';
 import { ContextBuilder } from './ContextBuilder';
 import { obterMotor } from '../validation/motorPadrao';
 import { executarNoTurno } from '../shared/turnCancellation';
+import { resultadoDaTarefa } from '../shared/contratoDoTurno';
 import type { ValidationEngine } from '../validation/ValidationEngine';
 import { TIPO_SUFICIENCIA_DO_PEDIDO, type DecisaoDeSuficiencia } from '../validation/tipos/suficienciaDoPedido';
 import { ReflectionMemory } from '../memory/ReflectionMemory';
@@ -181,7 +182,7 @@ export class GoalOrchestrator {
         const turno = new AbortController();
         this.turnosAtivos.set(chaveDoTurno, turno);
         try {
-            return await executarNoTurno(turno.signal, () => this.processarTurno(conversationId, message, userId, context, recentMessages, options, turno.signal));
+            return await executarNoTurno(turno.signal, () => this.processarTurno(conversationId, message, userId, context, recentMessages, options, turno.signal), chaveDoTurno);
         } finally {
             if (this.turnosAtivos.get(chaveDoTurno) === turno) this.turnosAtivos.delete(chaveDoTurno);
         }
@@ -724,18 +725,21 @@ export class GoalOrchestrator {
             return { text: result.finalOutput, options: result.authOptions };
         }
 
+        // ADR-033: o contrato do turno devolve na outbox o resultado que o núcleo já decidiu (estado e etapas).
+        const resultado = resultadoDaTarefa(this.goalStore.getById(goal.id) ?? result.goal);
+
         // Retorna o output final como texto
         if (result.success) {
             if (abandonedAuthPending) {
-                return `⚠️ *Atenção:* havia uma solicitação pendente de autorização que foi cancelada ao iniciar esta nova tarefa.\n\n${result.finalOutput}`;
+                return { text: `⚠️ *Atenção:* havia uma solicitação pendente de autorização que foi cancelada ao iniciar esta nova tarefa.\n\n${result.finalOutput}`, resultado };
             }
-            return result.finalOutput;
+            return { text: result.finalOutput, resultado };
         }
 
         // Falhou — retorna a explicação gerada pelo GoalEvaluator
         // e deixa AgentLoop dar uma resposta mais rica se possível
         if (result.totalCycles > 0) {
-            return result.finalOutput;
+            return { text: result.finalOutput, resultado };
         }
 
         // Nunca chegou a executar — cai para AgentLoop normal
@@ -892,6 +896,11 @@ export class GoalOrchestrator {
      * goal, que é justamente o caso que mais demora. Olhar apenas os turnos deixava a tela
      * dizendo "ocioso" com um goal de minutos em execução (relatado em 02/08/2026).
      */
+    /** ADR-033: o objetivo em andamento desta conversa (a parte do usuário da chave de sessão), se houver. */
+    getActiveGoalForConversation(conversationId: string): Goal | undefined {
+        return this.goalStore.getAllActive().find(g => (g.sessionKey ?? '').split(':').pop() === conversationId);
+    }
+
     getActiveGoals(): Array<{ id: string; sessionKey: string; status: string; createdAt: number; statusEvent?: import('../shared/SemanticStatus').SemanticStatusEvent }> {
         const mapGoalStatusToSemanticStatus = (status: import('./GoalTypes').GoalStatus): import('../shared/SemanticStatus').SemanticStatus => {
             switch (status) {
