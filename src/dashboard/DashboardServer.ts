@@ -127,7 +127,7 @@ export class DashboardServer {
         this.app.use('/api/memory', createMemoryRouter(ctx));
         this.app.use('/api/conversations', createConversationsRouter(ctx));
         this.app.use('/api/system', createSystemRouter(ctx));
-        this.app.use('/api/maintenance', createMaintenanceRouter());
+        this.app.use('/api/maintenance', createMaintenanceRouter(ctx));
         this.app.use('/api/validators', createValidatorsRouter());
         this.app.use('/api/integrations', createIntegrationsRouter(ctx));
     }

@@ -28,6 +28,10 @@
  * texto original).
  */
 
+import { pastaDaSkill } from '../shared/pastaDaSkill';
+import { marcarCaminhos, pastasDaInstalacao, resumoDoCorpo } from '../skills/SkillLoader';
+import { configuracaoDoSync, idDaInstalacao, nomeDaSubpasta } from '../core/syncAgent';
+import { caminhosDaInstalacao } from '../core/backupDoConhecimento';
 import fs from 'fs';
 import path from 'path';
 import Database from 'better-sqlite3';
@@ -93,6 +97,12 @@ export interface Skill {
     updated_at: string;
     /** 1 when SKILL.md was exported to skillsDir — skill is handled by SkillLoader, not DB matching */
     file_exported?: number;
+    // ADR-035 — guardados aqui para o SKILL.md regerado a partir do banco não perder o cabeçalho. Ausente = desconhecido.
+    sistema_origem?: string | null;
+    validada_em?: string | null;
+    plataformas?: string | null;
+    requer?: string | null;
+    instalacao_origem?: string | null;
 }
 
 export interface SkillMatch {
@@ -106,6 +116,13 @@ export interface SkillContextResult {
     confidence: number;
     preferredTools: string[];
     matches: SkillMatch[];
+}
+
+/** ADR-035: `instalacao_origem` = a subpasta desta instalação no Sync Agent (ADR-034), só se ele foi configurado aqui. */
+function instalacaoDesta(): string | undefined {
+    const cfg = configuracaoDoSync();
+    if (!cfg.nome) return undefined;
+    try { return nomeDaSubpasta(cfg.nome, idDaInstalacao(caminhosDaInstalacao())); } catch { return undefined; }
 }
 
 export class SkillLearner {
@@ -248,7 +265,15 @@ export class SkillLearner {
             { column: 'source_pattern', sql: `ALTER TABLE auto_skills ADD COLUMN source_pattern TEXT` },
             { column: 'source_tool',   sql: `ALTER TABLE auto_skills ADD COLUMN source_tool TEXT` },
             { column: 'reviewed_at',   sql: `ALTER TABLE auto_skills ADD COLUMN reviewed_at TEXT` },
-            { column: 'file_exported', sql: `ALTER TABLE auto_skills ADD COLUMN file_exported INTEGER DEFAULT 0` }
+            { column: 'file_exported', sql: `ALTER TABLE auto_skills ADD COLUMN file_exported INTEGER DEFAULT 0` },
+            // ADR-034: a instalação de onde a skill chegou pelo Sync Agent (nome). Ausente = aprendida aqui.
+            { column: 'origem_instalacao', sql: `ALTER TABLE auto_skills ADD COLUMN origem_instalacao TEXT` },
+            // ADR-035: cabeçalho de portabilidade.
+            { column: 'sistema_origem', sql: `ALTER TABLE auto_skills ADD COLUMN sistema_origem TEXT` },
+            { column: 'validada_em',    sql: `ALTER TABLE auto_skills ADD COLUMN validada_em TEXT` },
+            { column: 'plataformas',    sql: `ALTER TABLE auto_skills ADD COLUMN plataformas TEXT` },
+            { column: 'requer',         sql: `ALTER TABLE auto_skills ADD COLUMN requer TEXT` },
+            { column: 'instalacao_origem', sql: `ALTER TABLE auto_skills ADD COLUMN instalacao_origem TEXT` }
         ];
 
         for (const migration of migrations) {
@@ -291,9 +316,12 @@ export class SkillLearner {
         // motivou o fix, só que sobrevivendo à primeira versão da migração (que só deduplicava
         // entre propostas, nunca comparava contra o que já estava ativo). Achado ao inspecionar o
         // banco de produção logo após o primeiro deploy deste fix (15/08/2026).
+        // ADR-034: propostas que chegaram de outra instalação (origem_instalacao) esperam a decisão da pessoa — a limpeza não as
+        // apaga, nem quando o padrão já está ativo aqui.
         const resultVsAtiva = this.db.prepare(`
             DELETE FROM auto_skills
             WHERE status = 'proposed'
+              AND origem_instalacao IS NULL
               AND source_pattern IN (${placeholders})
               AND source_pattern IN (
                   SELECT source_pattern FROM auto_skills
@@ -307,6 +335,7 @@ export class SkillLearner {
         const resultEntreDuplicatas = this.db.prepare(`
             DELETE FROM auto_skills
             WHERE status = 'proposed'
+              AND origem_instalacao IS NULL
               AND source_pattern IN (${placeholders})
               AND id NOT IN (
                   SELECT id FROM (
@@ -829,7 +858,9 @@ export class SkillLearner {
                 name: p.nome,
                 trigger: p.gatilhos.join(' '),
                 description: p.descricao,
-                prompt: montarCorpoDaSkill(p, { pedido: entrada.pedido, plataforma: entrada.plataforma, data: agora.slice(0, 10), segredos: entrada.segredos }),
+                // ADR-035: os caminhos desta instalação viram marcadores ({NEWCLAW}, {WORKSPACE}, {SKILLS}, {PASTA:nome}).
+                prompt: marcarCaminhos(montarCorpoDaSkill(p, { pedido: entrada.pedido, plataforma: entrada.plataforma, data: agora.slice(0, 10), segredos: entrada.segredos }),
+                    { ...pastasDaInstalacao(), skills: path.resolve(this.skillsDir) }),
                 tool_sequence: JSON.stringify(p.ferramentas),
                 priority: 7,
                 hits: 0,
@@ -841,12 +872,18 @@ export class SkillLearner {
                 created_at: agora,
                 updated_at: agora,
             };
+            // ADR-035: nasceu neste sistema e funcionou aqui, com este corpo.
+            skill.sistema_origem = process.platform;
+            skill.validada_em = `${process.platform}@${resumoDoCorpo(skill.prompt)}`;
+            skill.instalacao_origem = instalacaoDesta() ?? null;
             this.db.prepare(
                 `INSERT INTO auto_skills
-                 (id, name, trigger, description, prompt, tool_sequence, priority, hits, status, source_pattern, source_tool, created_at, updated_at, file_exported)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`
+                 (id, name, trigger, description, prompt, tool_sequence, priority, hits, status, source_pattern, source_tool, created_at, updated_at, file_exported,
+                  sistema_origem, validada_em, instalacao_origem)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`
             ).run(skill.id, skill.name, skill.trigger, skill.description, skill.prompt, skill.tool_sequence, skill.priority, skill.hits,
-                skill.status, skill.source_pattern, skill.source_tool, skill.created_at, skill.updated_at);
+                skill.status, skill.source_pattern, skill.source_tool, skill.created_at, skill.updated_at,
+                skill.sistema_origem, skill.validada_em, skill.instalacao_origem);
             this.exportSkillFile(skill);
             log.info(`[SKILL-APRENDIZADO] goal=${entrada.goalId} skill aprendida e ativada: "${p.nome}" (${p.ferramentas.join(',')})`);
             return { aprendida: true, nome: p.nome, aviso: textoDoAviso(p) };
@@ -941,6 +978,9 @@ export class SkillLearner {
             const skillDir = path.resolve(this.skillsDir, folderName);
             fs.mkdirSync(skillDir, { recursive: true });
             fs.writeFileSync(path.join(skillDir, 'SKILL.md'), this.buildSkillMd(skill), 'utf-8');
+            // Uma proposta que chegou por importação (ADR-020/034) fica como SKILL.md.revisar; aprovada, o arquivo ativo a substitui.
+            const revisar = path.join(skillDir, 'SKILL.md.revisar');
+            if (fs.existsSync(revisar)) fs.unlinkSync(revisar);
             log.info(`Exported SKILL.md: "${skill.name}" → ${skillDir}`);
         } catch (error) {
             log.error(`Failed to export SKILL.md for "${skill.name}": ${errorMessage(error)}`);
@@ -980,6 +1020,15 @@ export class SkillLearner {
         if (tags.length > 0) {
             lines.push('tags:');
             tags.forEach(t => lines.push(`  - ${t}`));
+        }
+        // ADR-035: linhas planas; campo vazio fica de fora (desconhecido). Só a skill com a origem conhecida declara o formato.
+        if (skill.sistema_origem) {
+            lines.push(`sistema_origem: ${skill.sistema_origem}`);
+            if (skill.validada_em) lines.push(`validada_em: ${skill.validada_em}`);
+            if (skill.plataformas) lines.push(`plataformas: ${skill.plataformas}`);
+            if (skill.requer) lines.push(`requer: ${skill.requer}`);
+            if (skill.instalacao_origem) lines.push(`instalacao_origem: ${skill.instalacao_origem}`);
+            lines.push('formato_skill: 1');
         }
         lines.push('---', '', skill.prompt);
         return lines.join('\n');
@@ -1022,13 +1071,8 @@ export class SkillLearner {
      * Uses source_pattern (already ASCII) when available; falls back to skill name.
      */
     private sanitizeSkillFolderName(skill: Skill): string {
-        const base = skill.source_pattern ?? skill.name;
-        return base
-            .toLowerCase()
-            .normalize('NFD')
-            .replace(/[̀-ͯ]/g, '')
-            .replace(/[^a-z0-9]+/g, '_')
-            .replace(/^_|_$/g, '');
+        // Módulo-folha: a importação (ADR-034) precisa do mesmo nome para reconhecer uma skill desativada aqui.
+        return pastaDaSkill(skill.source_pattern ?? skill.name);
     }
 
     // ── System observation ────────────────────────────────────────────────────

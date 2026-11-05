@@ -322,6 +322,8 @@ export function ensureMemorySchema(db: Database.Database): void {
     safeAddColumn(db, 'memory_nodes', 'expires_at', 'DATETIME');
     safeAddColumn(db, 'memory_nodes', 'epistemic_status', 'TEXT');
     safeAddColumn(db, 'memory_nodes', 'identity_scope', 'TEXT');
+    // ADR-034 (D1): 1 = "só desta máquina" — fica fora do pacote do Sync Agent. Padrão: compartilhar.
+    safeAddColumn(db, 'memory_nodes', 'so_desta_maquina', 'INTEGER DEFAULT 0');
     safeAddColumn(db, 'memory_edges', 'last_accessed', 'DATETIME');
     safeAddColumn(db, 'memory_edges', 'domain', 'TEXT');
     safeAddColumn(db, 'node_metrics', 'last_accessed', 'DATETIME');

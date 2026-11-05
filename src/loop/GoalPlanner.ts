@@ -11,6 +11,7 @@
  * Output: PlanStep[] — lista de steps com toolName, toolArgs e fallbackSteps.
  */
 
+import { linhaDoCatalogo } from '../skills/SkillLoader';
 import path from 'path';
 import { createLogger } from '../shared/AppLogger';
 import { errorMessage } from '../shared/errors';
@@ -808,7 +809,7 @@ export class GoalPlanner {
             const skills = this.skillLoader.loadAll();
             const summary = skills.length === 0
                 ? ''
-                : skills.map(s => `  - ${s.name}: ${s.description}`).join('\n');
+                : skills.map(s => linhaDoCatalogo(s, '  ')).join('\n');   // ADR-035: os mesmos avisos do roteador
             this.skillsSummaryCache = { summary, loadedAt: Date.now() };
             return summary;
         } catch {

@@ -614,7 +614,11 @@ async function restaurarConhecimento(arquivo, args) {
     if (!/^(s|sim|y|yes)$/i.test(String(resposta).trim())) { console.log('Nada foi alterado.'); return; }
   }
   const restaurarSegredos = args.includes('--segredos') || args.includes('--secrets');
-  const r = await mod.restaurarPacote(alvo, { restaurarSegredos }, caminhosParaBackup(mod));
+  const caminhos = caminhosParaBackup(mod);
+  // ADR-034: nunca ao mesmo tempo que o Sync Agent ou outra importação (trava data/sync.lock).
+  let r;
+  try { r = await mod.comTravaDeSync(caminhos, () => mod.restaurarPacote(alvo, { restaurarSegredos }, caminhos)); }
+  catch (e) { console.error(`❌ ${e.message}`); return; }
   console.log(`✅ Restaurado: ${r.skills} skills${r.banco ? ', banco (aplicado no próximo início)' : ''}${r.env ? ', .env' : ''}.`);
   if (r.skillsParaRevisar.length) console.log(`⚠️  ${r.skillsParaRevisar.length} skill(s) de outro sistema ficaram para revisão (SKILL.md.revisar): ${r.skillsParaRevisar.join(', ')}`);
   console.log(`   Estado anterior guardado em: ${r.pacoteDeSeguranca}`);
@@ -642,7 +646,10 @@ async function importarConhecimento(arquivo, args) {
     });
     if (!/^(s|sim|y|yes)$/i.test(String(resposta).trim())) { console.log('Nada foi alterado.'); return; }
   }
-  const r = await mod.importarPacote(alvo, caminhosParaBackup(mod));
+  const caminhos = caminhosParaBackup(mod);
+  let r;
+  try { r = await mod.comTravaDeSync(caminhos, () => mod.importarPacote(alvo, caminhos)); }
+  catch (e) { console.error(`❌ ${e.message}`); return; }
   console.log(`✅ Memórias: ${r.memorias.importadas} novas, ${r.memorias.jaExistiam} já existiam, ${r.memorias.paraRevisar} para revisar.`);
   console.log(`   Skills: ${r.skills.novas} novas, ${r.skills.iguais} iguais, ${r.skillsAprendidas} aprendidas (banco).`);
   if (r.skills.comDiferenca.length) console.log(`   Diferentes (a local ficou; a importada em SKILL.md.importada): ${r.skills.comDiferenca.join(', ')}`);
@@ -652,7 +659,65 @@ async function importarConhecimento(arquivo, args) {
   console.log('   Skills novas carregam no próximo início: newclaw restart');
 }
 
+/**
+ * ADR-035 §6: `newclaw skills-migrar [--raiz <pasta>] [--pasta nome=CAMINHO ...] [--aplicar]` — leva as skills existentes ao
+ * cabeçalho de portabilidade. Sem --aplicar, só gera o relatório (data/migracao-skills-<data>.md). Rode primeiro numa CÓPIA
+ * da instalação (--raiz). Com --aplicar, faz antes um pacote de segurança (ADR-020).
+ */
+async function migrarSkills(args) {
+  const modPath = path.join(DIR, 'dist', 'skills', 'migracaoDePortabilidade.js');
+  const bk = carregarBackupDoConhecimento();
+  if (!bk) return;
+  if (!fs.existsSync(modPath)) { console.error('❌ O NewClaw ainda não foi compilado nesta pasta. Rode: npm run build'); return; }
+  const mod = require(modPath);
+  const iRaiz = args.indexOf('--raiz');
+  const raiz = iRaiz >= 0 && args[iRaiz + 1] ? path.resolve(args[iRaiz + 1]) : DIR;
+  const c = raiz === DIR ? caminhosParaBackup(bk) : bk.caminhosDaInstalacao(raiz);
+  const pastas = {};
+  args.forEach((a, i) => {
+    if (a !== '--pasta' || !args[i + 1]) return;
+    const [nome, ...resto] = args[i + 1].split('=');
+    if (nome && resto.length) pastas[nome.trim()] = resto.join('=').trim();
+  });
+  // Numa cópia: os caminhos que aparecem nos corpos são os da instalação ORIGINAL (--prefixos-de <raiz original>).
+  const iPref = args.indexOf('--prefixos-de');
+  const prefixos = iPref >= 0 && args[iPref + 1] ? bk.caminhosDaInstalacao(path.resolve(args[iPref + 1])) : undefined;
+  const aplicar = args.includes('--aplicar');
+  // Decisão 17: skills soltas (gravadas direto em skills/, antes da ADR-036) viram aprendidas. O que é oficial é o que o
+  // git versiona; fora de um clone git não há como saber, e nada é adotado.
+  let oficiais;
+  const raizGit = iPref >= 0 && args[iPref + 1] ? path.resolve(args[iPref + 1]) : raiz;
+  try {
+    const saidaGit = execSync('git ls-files skills', { cwd: raizGit, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    oficiais = new Set(saidaGit.split(/\r?\n/).filter(Boolean).map(f => f.split('/')[1]).filter(Boolean));
+  } catch { oficiais = undefined; }
+  const soltas = args.includes('--adotar-soltas') ? mod.planejarAdocao(c, oficiais) : [];
+  let adocao;
+  if (aplicar && soltas.length) adocao = await bk.comTravaDeSync(c, () => mod.aplicarAdocao(c, soltas));
+  const r = aplicar
+    ? await bk.comTravaDeSync(c, () => mod.aplicarMigracao(c, pastas, prefixos))
+    : mod.planejarMigracao(c, pastas, prefixos);
+  const carimbo = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  fs.mkdirSync(c.dados, { recursive: true });
+  const saida = path.join(c.dados, `migracao-skills-${carimbo}.md`);
+  const secaoSoltas = args.includes('--adotar-soltas')
+    ? ['', '## Skills soltas (decisão 17)', '', oficiais ? '' : 'Fora de um clone git: não há como saber o que é oficial; nada foi adotado.',
+       ...soltas.map(s => `- \`${s.pasta}\` (${s.nome}) → \`${s.novaPasta}\`${aplicar ? ' — adotada' : ''}`),
+       soltas.length ? '' : 'Nenhuma.', 'Promover alguma a oficial é por PR, escolha da operadora.'].join('\n')
+    : '';
+  fs.writeFileSync(saida, mod.relatorioEmMarkdown(r) + secaoSoltas);
+  if (adocao) console.log(`   Soltas adotadas como aprendidas: ${adocao.adotadas.length} (segurança: ${adocao.pacoteDeSeguranca})`);
+  const mudam = r.itens.filter(i => i.mudou).length;
+  console.log(`${aplicar ? '✅ Migração aplicada' : '📋 Só o plano (nada foi escrito)'}: ${r.itens.length} skills lidas, ${mudam} mudam, ${r.pastasPropostas.length} pasta(s) pessoal(is) para confirmar.`);
+  console.log(`   Relatório: ${saida}`);
+  if (r.pacoteDeSeguranca) console.log(`   Estado anterior guardado em: ${r.pacoteDeSeguranca}`);
+}
+
 const commands = {
+  async ['skills-migrar'](args = []) {
+    return migrarSkills(args);
+  },
+
   async import(args = []) {
     const pacote = args.find(a => a.toLowerCase().endsWith('.zip'));
     if (!pacote) { console.log('Use: newclaw import <arquivo.zip> — mescla o conhecimento de outra instalação.'); return; }
@@ -1777,6 +1842,9 @@ newclaw backup          Salva tudo o que o NewClaw aprendeu num arquivo .zip
                         (opções: --historico --workspace --segredos)
 newclaw restore <a.zip> Restaura o conhecimento de um arquivo .zip
 newclaw import <a.zip>  Mescla o conhecimento de outra instalação (não apaga nada)
+newclaw skills-migrar   Planeja (ou, com --aplicar, aplica) o cabeçalho de portabilidade das skills
+                        (opções: --raiz <cópia> --prefixos-de <raiz original> --pasta nome=CAMINHO
+                         --adotar-soltas --aplicar)
 newclaw restore         Abre o assistente de restauração de backups
 newclaw uninstall       Remove o NewClaw e limpa o sistema
 newclaw help            Mostra esta tela de ajuda

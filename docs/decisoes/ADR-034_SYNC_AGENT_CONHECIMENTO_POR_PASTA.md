@@ -11,6 +11,20 @@ Relacionadas: ADR-020 (backup e importação mesclando — esta ADR a automatiza
 confirmação), ADR-031 (experiências opcionais não impõem dependências ao núcleo), `REUTILIZACAO_ANTES_DA_CRIACAO.md`,
 `NUNCA_ADIVINHAR.md`.
 
+## Implementação (04/11/2026)
+
+Etapas 1 a 4 implementadas (`src/core/syncAgent.ts`, extensões de `src/core/backupDoConhecimento.ts`, tela na página de
+Backup, "só desta máquina" no editor de memória). Os 12 testes de aceitação passam com pastas simuladas (`S476`). A etapa 5,
+prova real nas três instalações, depende da autorização da operadora para configurar o Syncthing. A sincronização continua
+desligada (`SYNC_LIGADO`) em todas as instalações.
+
+Decisões de implementação:
+- O banco do pacote é construído do zero só com `memory_nodes` (sem as "só desta máquina"), `memory_edges` e `auto_skills`.
+  Conversas, vetores e traços ficam na instalação, inclusive como páginas livres.
+- A assinatura que decide "mudou?" ignora colunas de leitura (`last_accessed`): ler uma memória não gera pacote.
+- A trava `data/sync.lock` vive no módulo da ADR-020 e vale para o painel e para a CLI (`newclaw import`, `restore`).
+- O aviso de skill que chegou ativa vai ao Telegram do dono, quando configurado, e sempre ao relatório da tela.
+
 ## Fase 1 — Compreensão
 
 ### O problema

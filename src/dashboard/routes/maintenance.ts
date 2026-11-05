@@ -5,8 +5,10 @@ import { createLogger } from '../../shared/AppLogger';
 import fs from 'fs';
 import path from 'path';
 import Database from 'better-sqlite3';
-import { criarPacote, lerPacote, restaurarPacote, importarPacote } from '../../core/backupDoConhecimento';
+import { criarPacote, lerPacote, restaurarPacote, importarPacote, comTravaDeSync, caminhosDaInstalacao, SincronizacaoEmAndamento } from '../../core/backupDoConhecimento';
 import { rateLimit } from 'express-rate-limit';
+import { configuracaoDoSync, nomeDaSubpasta, lerManifesto, ultimoRelatorio } from '../../core/syncAgent';
+import { applyEnvUpdates } from '../../shared/envSerializer';
 
 const log = createLogger('Maintenance');
 
@@ -232,7 +234,8 @@ function parseLastJsonLine(stdout: string): unknown {
     return JSON.parse(lastLine);
 }
 
-export function createMaintenanceRouter(): Router {
+/** `ctx` (opcional): o AgentController, para a Sincronização de Conhecimento (ADR-034) reagendar e sincronizar agora. */
+export function createMaintenanceRouter(ctx: { controller?: unknown } = {}): Router {
     const router = Router();
 
     // GET /api/maintenance/update/check?channel=&branch=
@@ -512,7 +515,8 @@ export function createMaintenanceRouter(): Router {
             const safe = path.basename(String(req.body?.filename || ''));
             const filePath = path.join(BACKUP_DIR, safe);
             if (!safe.endsWith('.zip') || !fs.existsSync(filePath)) return res.status(404).json({ success: false, error: 'Arquivo não encontrado' });
-            const relatorio = await restaurarPacote(filePath, { restaurarSegredos: req.body?.restaurarSegredos === true });
+            // ADR-034: nunca ao mesmo tempo que o Sync Agent ou outra importação (trava data/sync.lock).
+            const relatorio = await comTravaDeSync(caminhosDaInstalacao(), () => restaurarPacote(filePath, { restaurarSegredos: req.body?.restaurarSegredos === true }));
             log.info(`Conhecimento restaurado de ${safe}: skills=${relatorio.skills} revisar=${relatorio.skillsParaRevisar.length} banco=${relatorio.banco} — reiniciando`);
             res.json({ success: true, relatorio, message: 'Conhecimento restaurado. O NewClaw será reiniciado para carregar o banco.' });
             setTimeout(() => process.exit(0), 800);
@@ -528,11 +532,11 @@ export function createMaintenanceRouter(): Router {
             const safe = path.basename(String(req.body?.filename || ''));
             const filePath = path.join(BACKUP_DIR, safe);
             if (!safe.endsWith('.zip') || !fs.existsSync(filePath)) return res.status(404).json({ success: false, error: 'Arquivo não encontrado' });
-            const relatorio = await importarPacote(filePath);
+            const relatorio = await comTravaDeSync(caminhosDaInstalacao(), () => importarPacote(filePath));
             log.info(`Conhecimento importado de ${safe}: memórias=${relatorio.memorias.importadas} (já existiam ${relatorio.memorias.jaExistiam}, revisar ${relatorio.memorias.paraRevisar}) skills novas=${relatorio.skills.novas}`);
             res.json({ success: true, relatorio });
         } catch (err) {
-            res.status(422).json({ success: false, error: errorMessage(err) });
+            res.status(err instanceof SincronizacaoEmAndamento ? 409 : 422).json({ success: false, error: errorMessage(err) });
         }
     });
 
@@ -607,6 +611,107 @@ export function createMaintenanceRouter(): Router {
                     log.error(`Erro durante streaming de ${filename}: ${errorMessage(err)}`);
                 }
             });
+        } catch (err) {
+            res.status(500).json({ success: false, error: errorMessage(err) });
+        }
+    });
+
+    // ── ADR-034: Sincronização de Conhecimento ───────────────────────────────────────────────────────────────────────
+
+    /** Estado para a tela: configuração, esta instalação, o que os manifestos das outras dizem e a última rodada. */
+    router.get('/sync', backupFsRateLimit, (_req: Request, res: Response) => {
+        try {
+            const cfg = configuracaoDoSync();
+            const c = caminhosDaInstalacao();
+            // Leitura sem efeito: o id só existe depois da primeira rodada (que o cria); aqui ele é lido, nunca gerado.
+            let id: string | undefined;
+            try { id = JSON.parse(fs.readFileSync(path.join(c.dados, 'sync-instalacao.json'), 'utf8')).id; } catch { id = undefined; }
+            const minha = id && cfg.nome ? nomeDaSubpasta(cfg.nome, id) : undefined;
+            const pastaOk = !!cfg.pasta && fs.existsSync(cfg.pasta);
+            const outras: Array<Record<string, unknown>> = [];
+            let meuManifesto: ReturnType<typeof lerManifesto>;
+            if (pastaOk) {
+                for (const e of fs.readdirSync(cfg.pasta!, { withFileTypes: true })) {
+                    if (!e.isDirectory() || e.name.startsWith('.')) continue;
+                    const m = lerManifesto(path.join(cfg.pasta!, e.name));
+                    if (e.name === minha) { meuManifesto = m; continue; }
+                    if (!m) continue;
+                    const ultimo = [...m.pacotes].sort((a, b) => b.numero - a.numero)[0];
+                    outras.push({ subpasta: e.name, id: m.id, nome: m.nome, sistema: m.sistema, app: m.app, atualizadoEm: m.atualizadoEm, ultimoPacote: ultimo?.numero, contagens: ultimo?.contagens });
+                }
+            }
+            let soDestaMaquina = 0;
+            try {
+                const db = new Database(path.join(DIR, 'data', 'newclaw.db'), { readonly: true });
+                try { soDestaMaquina = (db.prepare('SELECT COUNT(*) n FROM memory_nodes WHERE so_desta_maquina = 1').get() as { n: number }).n; } finally { db.close(); }
+            } catch { /* coluna ainda não migrada */ }
+            const ultimo = meuManifesto ? [...meuManifesto.pacotes].sort((a, b) => b.numero - a.numero)[0] : undefined;
+            res.json({
+                success: true,
+                config: cfg,
+                instalacao: { id, subpasta: minha, ultimoPacote: ultimo ?? null, soDestaMaquina },
+                pastaDisponivel: pastaOk,
+                outras,
+                relatorio: ultimoRelatorio(c) ?? null,
+            });
+        } catch (err) {
+            res.status(500).json({ success: false, error: errorMessage(err) });
+        }
+    });
+
+    /** Grava SYNC_* no .env. A pasta é conferida ao salvar (existe e aceita escrita); ligar exige pasta e nome. */
+    router.post('/sync/config', backupFsRateLimit, (req: Request, res: Response) => {
+        try {
+            const digitada = typeof req.body?.pasta === 'string' ? req.body.pasta.trim() : '';
+            const nome = typeof req.body?.nome === 'string' ? req.body.nome.trim().slice(0, 40) : '';
+            const intervalo = Number(req.body?.intervaloMin);
+            const ligado = req.body?.ligado === true;
+            // A pasta é escolha da dona (a pasta do Syncthing, em qualquer unidade): não há fronteira fixa a impor. Exige-se
+            // caminho completo, a mesma regra de `resolveEffectiveRoot` (DirectoryPickerService): sem ela, um caminho relativo
+            // seria resolvido contra a pasta de instalação do NewClaw. Grava-se a forma normalizada.
+            if (digitada && !path.isAbsolute(digitada)) {
+                return res.status(400).json({ success: false, error: 'informe o caminho completo da pasta' });
+            }
+            const pasta = digitada ? path.resolve(digitada) : '';
+            if (pasta) {
+                try {
+                    fs.accessSync(pasta, fs.constants.R_OK | fs.constants.W_OK);
+                    if (!fs.statSync(pasta).isDirectory()) throw new Error('não é uma pasta');
+                } catch (e) {
+                    return res.status(400).json({ success: false, error: `pasta indisponível ou sem permissão de escrita: ${errorMessage(e)}` });
+                }
+            }
+            if (ligado && (!pasta || !nome)) return res.status(400).json({ success: false, error: 'para ligar, informe a pasta e o nome desta instalação' });
+            const updates: Record<string, string> = {
+                SYNC_LIGADO: ligado ? 'true' : 'false',
+                SYNC_PASTA: pasta,
+                SYNC_NOME: nome,
+                SYNC_INTERVALO_MIN: Number.isFinite(intervalo) && intervalo >= 1 ? String(Math.round(intervalo)) : '30',
+            };
+            const envPath = path.join(DIR, '.env');
+            const atual = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf-8') : '';
+            const { content, rejected } = applyEnvUpdates(atual, updates);
+            if (rejected.length) return res.status(400).json({ success: false, error: `valor sem representação segura no .env: ${rejected.join(', ')}` });
+            fs.writeFileSync(envPath, content);
+            Object.assign(process.env, updates);
+            const agente = (ctx.controller as unknown as { getSyncAgent?: () => { start(): boolean; stop(): void } } | undefined)?.getSyncAgent?.();
+            agente?.stop();
+            const agendado = agente?.start() ?? false;
+            log.info(`[SYNC] configuração salva: ligado=${updates.SYNC_LIGADO} nome=${nome || '-'} intervalo=${updates.SYNC_INTERVALO_MIN} agendado=${agendado}`);
+            res.json({ success: true, config: configuracaoDoSync(), agendado });
+        } catch (err) {
+            res.status(500).json({ success: false, error: errorMessage(err) });
+        }
+    });
+
+    /** "Sincronizar agora": uma rodada (publicar, importar, cursores), só com a sincronização ligada. */
+    router.post('/sync/agora', backupFsRateLimit, async (_req: Request, res: Response) => {
+        const cfg = configuracaoDoSync();
+        if (!cfg.ligado) return res.status(409).json({ success: false, error: 'a sincronização está desligada' });
+        const agente = (ctx.controller as unknown as { getSyncAgent?: () => { agora(): Promise<unknown> } } | undefined)?.getSyncAgent?.();
+        if (!agente) return res.status(503).json({ success: false, error: 'Agente não inicializado' });
+        try {
+            res.json({ success: true, relatorio: await agente.agora() });
         } catch (err) {
             res.status(500).json({ success: false, error: errorMessage(err) });
         }

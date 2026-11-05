@@ -2,6 +2,7 @@ import {
   listBackups, createSystemBackup, createDatabaseBackup, backupDownloadUrl,
   getBackupConfig, saveBackupConfig, getBackupSchedule, restoreBackup, uploadBackup,
   createKnowledgeBackup, inspectKnowledgeBackup, restoreKnowledgeBackup, importKnowledgeBackup,
+  getSyncState, saveSyncConfig, syncNow,
 } from '../api.js';
 import { showToast } from '../components/Toast.js';
 import { guideBox } from '../app.js';
@@ -37,6 +38,26 @@ export function render(container) {
           <div class="form-hint" style="margin:2px 0 10px 26px;color:var(--warning,#f59e0b)">${t('bkp_conh_opt_secrets_hint')}</div>
           <button class="btn btn-primary" id="bkp-conhBtn">${t('bkp_conh_btn')}</button>
           <div class="form-hint" style="margin-top:10px">${t('bkp_conh_restore_hint')}</div>
+        </div>
+      </details>
+
+      <details class="cfg-details">
+        <summary>🔄 ${t('sync_title')}</summary>
+        <div class="cfg-details-body">
+          <div class="form-hint" style="margin-bottom:10px">${t('sync_desc')}</div>
+          <label class="form-label">${t('sync_field_folder')}</label>
+          <input class="form-input" id="sync-pasta" placeholder="${t('sync_field_folder_ph')}">
+          <label class="form-label" style="margin-top:8px">${t('sync_field_name')}</label>
+          <input class="form-input" id="sync-nome" maxlength="40" placeholder="PC, Notebook, VPS">
+          <label class="form-label" style="margin-top:8px">${t('sync_field_interval')}</label>
+          <input class="form-input" id="sync-intervalo" type="number" min="1" value="30" style="max-width:120px">
+          <label style="display:flex;gap:8px;align-items:center;font-size:.85rem;margin:10px 0 4px"><input type="checkbox" id="sync-ligado"> ${t('sync_field_enabled')}</label>
+          <div class="form-hint" style="margin:2px 0 10px 26px;color:var(--warning,#f59e0b)">${t('sync_enabled_hint')}</div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn btn-primary" id="sync-salvar">${t('sync_save_btn')}</button>
+            <button class="btn btn-secondary" id="sync-agora">${t('sync_now_btn')}</button>
+          </div>
+          <div id="sync-estado" style="margin-top:12px;font-size:.85rem"></div>
         </div>
       </details>
 
@@ -309,6 +330,68 @@ export function render(container) {
     });
     return r.backup;
   }, conhBtn));
+  // ── ADR-034: Sincronização de Conhecimento ────────────────────────────────
+  const syncEstadoEl = document.getElementById('sync-estado');
+  function renderSync(s) {
+    const cfg = s.config || {};
+    document.getElementById('sync-pasta').value = cfg.pasta || '';
+    document.getElementById('sync-nome').value = cfg.nome || '';
+    document.getElementById('sync-intervalo').value = cfg.intervaloMin || 30;
+    document.getElementById('sync-ligado').checked = !!cfg.ligado;
+    const inst = s.instalacao || {};
+    const rel = s.relatorio || {};
+    const porId = new Map((rel.instalacoes || []).map(i => [i.id || i.subpasta, i]));
+    const linhas = (s.outras || []).map(o => {
+      const r = porId.get(o.id) || {};
+      const entrou = r.entrou || {};
+      const ativadas = (entrou.skills?.ativadas || []).map(esc).join(', ');
+      const revisar = (entrou.skills?.paraRevisar || []).map(esc).join(', ');
+      const erros = (r.erros || []).map(e => `<div style="color:var(--danger)">⚠️ ${esc(e)}</div>`).join('');
+      return `<tr>
+        <td style="padding:6px 8px"><b>${esc(o.nome || o.subpasta)}</b><br><span style="color:var(--text-soft)">${esc(o.sistema || '?')} · NewClaw ${esc(o.app || '?')}</span></td>
+        <td style="padding:6px 8px">${o.ultimoPacote ?? '—'}${o.contagens ? `<br><span style="color:var(--text-soft)">${t('sync_counts', { memorias: o.contagens.memorias ?? 0, skills: o.contagens.skills ?? 0 })}</span>` : ''}</td>
+        <td style="padding:6px 8px">${r.importadoAte ?? '—'}${r.pendente ? `<br><span style="color:var(--text-soft)">⏳ ${esc(r.pendente)}</span>` : ''}</td>
+        <td style="padding:6px 8px">${ativadas ? `${t('sync_skills_active')}: ${ativadas}<br>` : ''}${revisar ? `${t('sync_skills_review')}: ${revisar}` : ''}${erros}</td>
+      </tr>`;
+    }).join('');
+    syncEstadoEl.innerHTML = `
+      <div>${cfg.ligado ? '🟢 ' + t('sync_status_on') : '⚪ ' + t('sync_status_off')}${inst.subpasta ? ` · <code>${esc(inst.subpasta)}</code>` : ''}</div>
+      ${cfg.pasta && !s.pastaDisponivel ? `<div style="color:var(--danger);margin-top:4px">⚠️ ${t('sync_folder_unavailable')}</div>` : ''}
+      <div style="margin-top:4px;color:var(--text-soft)">${t('sync_last_published')}: ${inst.ultimoPacote ? `${inst.ultimoPacote.numero} (${fmtDate(inst.ultimoPacote.criadoEm)})` : '—'} · ${t('sync_local_only', { n: inst.soDestaMaquina ?? 0 })}</div>
+      ${rel.em ? `<div style="margin-top:4px;color:var(--text-soft)">${t('sync_last_round')}: ${fmtDate(rel.em)}${rel.erro ? ` — <span style="color:var(--danger)">${esc(rel.erro)}</span>` : ''}</div>` : ''}
+      <div style="margin-top:10px;font-weight:600">${t('sync_others_title')}</div>
+      ${linhas ? `<table style="width:100%;border-collapse:collapse;margin-top:6px"><thead><tr style="text-align:left;color:var(--text-soft)">
+        <th style="padding:6px 8px">${t('sync_col_install')}</th><th style="padding:6px 8px">${t('sync_col_last')}</th>
+        <th style="padding:6px 8px">${t('sync_col_imported')}</th><th style="padding:6px 8px">${t('sync_col_arrived')}</th></tr></thead><tbody>${linhas}</tbody></table>
+        <div class="form-hint" style="margin-top:6px">${t('sync_skills_hint')}</div>` : `<div style="color:var(--text-soft)">${t('sync_none_seen')}</div>`}`;
+  }
+  async function loadSync() {
+    try { renderSync(await getSyncState()); }
+    catch (e) { syncEstadoEl.innerHTML = `<div style="color:var(--danger)">❌ ${esc(e.message)}</div>`; }
+  }
+  document.getElementById('sync-salvar').addEventListener('click', async () => {
+    try {
+      await saveSyncConfig({
+        pasta: document.getElementById('sync-pasta').value,
+        nome: document.getElementById('sync-nome').value,
+        intervaloMin: Number(document.getElementById('sync-intervalo').value),
+        ligado: document.getElementById('sync-ligado').checked,
+      });
+      showToast(t('sync_saved_toast'), 'success');
+      loadSync();
+    } catch (e) { showToast('❌ ' + e.message, 'error'); }
+  });
+  document.getElementById('sync-agora').addEventListener('click', async (ev) => {
+    ev.target.disabled = true;
+    try {
+      const r = await syncNow();
+      showToast(r.relatorio?.erro ? '⚠️ ' + r.relatorio.erro : t('sync_now_toast'), r.relatorio?.erro ? 'error' : 'success');
+      loadSync();
+    } catch (e) { showToast('❌ ' + e.message, 'error'); }
+    finally { ev.target.disabled = false; }
+  });
+  loadSync();
+
   sysBtn.addEventListener('click', () => doBackup(t('sidebar_backup') + ' sistema', createSystemBackup, sysBtn));
   dbBtn.addEventListener('click',  () => doBackup('banco de dados', createDatabaseBackup, dbBtn));
 
