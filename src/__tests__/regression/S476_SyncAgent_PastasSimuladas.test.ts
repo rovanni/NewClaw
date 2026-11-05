@@ -134,7 +134,7 @@ async function main(): Promise<void> {
         const r1 = await rodar(nb);
         assert(temMemoria(nb, 'm-pc-1') && !temMemoria(nb, 'm-pc-local'), '1: o notebook importa a memória do PC (a "só desta máquina" não)', relatoDe(r1, 'PC'));
         assert(fs.existsSync(path.join(nb.c.skills, 'aprendida_relatorio', 'SKILL.md')) && statusDaSkill(nb, 'aprendida_relatorio')?.status === 'active'
-            && statusDaSkill(nb, 'aprendida_relatorio')?.origem === 'PC' && relatoDe(r1, 'PC')?.entrou?.skills.ativadas.includes('aprendida_relatorio'),
+            && statusDaSkill(nb, 'aprendida_relatorio')?.origem === 'PC' && !!relatoDe(r1, 'PC')?.entrou?.skills.ativadas.includes('aprendida_relatorio'),
             '1: no modo automático, a skill ativa do PC entra ativa, com origem_instalacao = PC e o aviso', statusDaSkill(nb, 'aprendida_relatorio'));
         memoria(nb, 'm-nb-1', 'Notebook: anotação de viagem');
         await rodar(nb);
