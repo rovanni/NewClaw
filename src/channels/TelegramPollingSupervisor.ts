@@ -156,10 +156,14 @@ export class TelegramPollingSupervisor {
         // aqui prendia `MessageBus.startAll()` — e, com ele, tudo o que o `AgentController.start()` faz depois (limpeza de
         // sessões, curadoria de memória, purga de workflows, Sync Agent…). Visto na produção Windows em 05/11/2026: o
         // último "NewClaw running" no log era de 06/08, e o SessionAutoCleaner não rodava desde 08/08. Erros e reconexões
-        // já são tratados dentro do laço; o que escapar fica no log, nunca sem rastro.
+        // já são tratados dentro do laço; o que escapar fica no log e no estado ('disconnected'), que o `isConnected` do
+        // adaptador e o painel leem — quem chamou start() já voltou e não recebe mais a exceção.
         this.pollingActive = true;
         this.laco = this.pollingLoop()
-            .catch(e => { log.error('polling_loop_failed', e instanceof Error ? e : undefined, `[TELEGRAM] laço de polling terminou com erro: ${errorMessage(e)}`); })
+            .catch(e => {
+                log.error('polling_loop_failed', e instanceof Error ? e : undefined, `[TELEGRAM] laço de polling terminou com erro: ${errorMessage(e)}`);
+                this.setState('disconnected');
+            })
             .finally(() => { this.pollingActive = false; });
     }
 
