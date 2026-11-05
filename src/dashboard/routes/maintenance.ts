@@ -662,10 +662,17 @@ export function createMaintenanceRouter(ctx: { controller?: unknown } = {}): Rou
     /** Grava SYNC_* no .env. A pasta é conferida ao salvar (existe e aceita escrita); ligar exige pasta e nome. */
     router.post('/sync/config', backupFsRateLimit, (req: Request, res: Response) => {
         try {
-            const pasta = typeof req.body?.pasta === 'string' ? req.body.pasta.trim() : '';
+            const digitada = typeof req.body?.pasta === 'string' ? req.body.pasta.trim() : '';
             const nome = typeof req.body?.nome === 'string' ? req.body.nome.trim().slice(0, 40) : '';
             const intervalo = Number(req.body?.intervaloMin);
             const ligado = req.body?.ligado === true;
+            // A pasta é escolha da dona (a pasta do Syncthing, em qualquer unidade): não há fronteira fixa a impor. Exige-se
+            // caminho completo, a mesma regra de `resolveEffectiveRoot` (DirectoryPickerService): sem ela, um caminho relativo
+            // seria resolvido contra a pasta de instalação do NewClaw. Grava-se a forma normalizada.
+            if (digitada && !path.isAbsolute(digitada)) {
+                return res.status(400).json({ success: false, error: 'informe o caminho completo da pasta' });
+            }
+            const pasta = digitada ? path.resolve(digitada) : '';
             if (pasta) {
                 try {
                     fs.accessSync(pasta, fs.constants.R_OK | fs.constants.W_OK);

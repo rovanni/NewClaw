@@ -3,6 +3,20 @@ import path from 'path';
 import { errorMessage } from '../../shared/errors';
 import { DashboardContext } from './types';
 import { SkillLoader, pastasDaInstalacao, acrescentarValidacao, lerTabelaDePastas, gravarTabelaDePastas, NOME_DE_PASTA } from '../../skills/SkillLoader';
+import { rateLimit } from 'express-rate-limit';
+
+/**
+ * Limite das rotas de portabilidade (ADR-035), em cima do geral: elas leem todas as skills do disco e gravam SKILL.md.
+ * `express-rate-limit` pelo mesmo motivo do limitador de backup em maintenance.ts: o CodeQL (js/missing-rate-limiting)
+ * só reconhece limitadores de bibliotecas conhecidas. Mesmo limite de lá: 20/min por IP.
+ */
+const skillsFsRateLimit = rateLimit({
+    windowMs: 60 * 1000,
+    limit: 20,
+    standardHeaders: 'draft-7',
+    legacyHeaders: false,
+    message: { error: 'Muitas requisições a rotas de skills — aguarde um instante.' },
+});
 
 export function createSkillsRouter(ctx: DashboardContext): Router {
     const router = Router();
@@ -35,7 +49,7 @@ export function createSkillsRouter(ctx: DashboardContext): Router {
     // ── ADR-035: portabilidade das skills em arquivo ──────────────────────────
 
     /** As skills em arquivo com os fatos de portabilidade e os avisos deste sistema. */
-    router.get('/portabilidade', (_req: Request, res: Response) => {
+    router.get('/portabilidade', skillsFsRateLimit, (_req: Request, res: Response) => {
         try {
             const skillsPath = path.resolve(ctx.config.skillsDir);
             const loader = new SkillLoader(skillsPath, () => ({ ...pastasDaInstalacao(), skills: skillsPath }));
@@ -62,7 +76,7 @@ export function createSkillsRouter(ctx: DashboardContext): Router {
     });
 
     /** "Funcionou aqui": acrescenta este sistema e o resumo atual do corpo a validada_em (arquivo e, se houver, auto_skills). */
-    router.post('/portabilidade/:pasta/funcionou', (req: Request, res: Response) => {
+    router.post('/portabilidade/:pasta/funcionou', skillsFsRateLimit, (req: Request, res: Response) => {
         try {
             const fs = require('fs') as typeof import('fs');
             const skillsPath = path.resolve(ctx.config.skillsDir);
@@ -92,7 +106,7 @@ export function createSkillsRouter(ctx: DashboardContext): Router {
     });
 
     /** Tabela local `nome → pasta` dos marcadores {PASTA:nome} (D2). Fica nesta instalação; não vai no pacote da ADR-034. */
-    router.put('/pastas', (req: Request, res: Response) => {
+    router.put('/pastas', skillsFsRateLimit, (req: Request, res: Response) => {
         try {
             const fs = require('fs') as typeof import('fs');
             const tabela = (req.body?.pastas ?? {}) as Record<string, unknown>;
