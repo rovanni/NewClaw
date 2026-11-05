@@ -225,6 +225,10 @@ com o OK da operadora.
 
 ## Riscos e hipóteses não comprovadas
 
+- **Achado na rodada de testes (05/11/2026): o painel não pode citar a integração pelo nome** (ADR-031, regra 1, cobrada pelo
+  `S465`). A marca das conversas vem do próprio manifesto da integração (campo opcional `icone`; a voz declara 🎙), lida do
+  catálogo pelo `cliente`. O validador do manifesto recusa campo desconhecido: o manifesto da voz só ganha `icone` **depois**
+  de as duas produções terem este NewClaw. Até lá, o prefixo `voz-` das conversas antigas mantém o 🎙.
 - **Achado na implementação (04/11/2026): a interface de voz exigia a versão EXATA.** A janela recusava um `turn-client.js`
   com `TURN_CONTRACT_VERSION !== 1`: publicar o NewClaw na versão 2 a teria derrubado, contra a promessa "um cliente da
   versão 1 continua funcionando". Correção, sem mudança irreversível: a janela passa a exigir a versão 1 **ou maior**

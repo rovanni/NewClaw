@@ -63,6 +63,9 @@ console.log('1. Validação do manifesto');
 const m = validarManifesto(BASE, HOSTS_PERMITIDOS);
 assert(m.id === ID && m.instalar.includes('{escolhas}'), 'manifesto bem formado é aceito');
 recusa(() => validarManifesto(com({ extra: 1 }), HOSTS_PERMITIDOS), "campo desconhecido: 'extra'", 'campo desconhecido');
+// ADR-033: `icone` opcional — a marca que o painel põe nas conversas desta integração.
+assert(validarManifesto(com({ icone: '🎙' }), HOSTS_PERMITIDOS).icone === '🎙' && m.icone === undefined, 'icone: emoji aceito; ausente continua ausente');
+recusa(() => validarManifesto(com({ icone: '<b>x</b>' }), HOSTS_PERMITIDOS), 'emoji curto', 'icone com marcação ou letras é recusado');
 recusa(() => validarManifesto(com({ formato: 2 }), HOSTS_PERMITIDOS), 'formato 2', 'formato que este NewClaw não entende');
 recusa(() => validarManifesto(com({ pacote: 'http://codeload.github.com/x.tar.gz' }), HOSTS_PERMITIDOS), 'https', 'pacote sem https');
 recusa(() => validarManifesto(com({ pacote: 'https://exemplo.com/x.tar.gz' }), HOSTS_PERMITIDOS), 'fora dos hosts', 'pacote de host fora da lista');

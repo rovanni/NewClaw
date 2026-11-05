@@ -663,19 +663,30 @@
           <div class="conv-meta">${c.messages?.length || 0} msgs · ${fmtTime(c.updatedAt)}</div>
         </div>`).join('');
     }
-    // Conversas da interface de voz ganham 🎙 no título, para se distinguirem das escritas aqui. Continuam sendo conversas
-    // comuns — dá para seguir escrevendo nelas pelo painel. Quem diz de onde a conversa veio é o NewClaw (`cliente` de
-    // GET /api/chat/context, contrato do turno v2 — ADR-033), não uma convenção do id. Conversa anterior à versão 2 não tem
-    // `cliente`: só para ela vale o prefixo `voz-` que a interface de voz usava.
-    function ehConversaDeVoz(c) {
-      return c.cliente ? c.cliente === 'newclaw-ivox' : String(c.id).startsWith('voz-');
+    // Conversas que chegam por uma integração opcional ganham, no título, a marca que a própria integração declara no
+    // manifesto (`icone`; a voz declara 🎙). Continuam sendo conversas comuns — dá para seguir escrevendo nelas pelo painel.
+    // Quem diz de onde a conversa veio é o NewClaw (`cliente` de GET /api/chat/context, contrato do turno v2 — ADR-033); o
+    // painel não conhece nome de integração nenhuma (ADR-031). Conversa anterior à versão 2 não tem `cliente`: só para ela
+    // vale o prefixo `voz-` que a interface de voz usava.
+    function marcaDaConversa(c) {
+      if (c.marca) return c.marca;
+      return !c.cliente && String(c.id).startsWith('voz-') ? '🎙' : '';
     }
     function tituloPelasMensagens(c) {
       const primeira = (c.messages || []).filter(m => m.role === 'user' && m.content)
         .sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0))[0];
       if (!primeira) return null;
       const texto = primeira.content.slice(0, 50) + (primeira.content.length > 50 ? '...' : '');
-      return (ehConversaDeVoz(c) ? '🎙 ' : '') + texto;
+      const marca = marcaDaConversa(c);
+      return (marca ? marca + ' ' : '') + texto;
+    }
+    /** id da integração → ícone que ela declara (catálogo de integrações opcionais). Falha = sem marcas, nunca erro. */
+    async function marcasDasIntegracoes() {
+      try {
+        const r = await newclawFetch('/api/integrations/opcionais');
+        const d = await r.json();
+        return Object.fromEntries((d.integracoes || []).filter(i => i && i.id && i.icone).map(i => [i.id, i.icone]));
+      } catch { return {}; }
     }
     /** O cliente que trouxe a conversa, pelo contrato do turno v2; undefined quando o servidor não sabe ou é da versão 1. */
     async function clienteDaConversa(sessionId) {
@@ -708,6 +719,7 @@
         // real, 23/10/2026: goal longo, página recarregada durante o trabalho — a resposta chegou ao banco e à contagem da
         // lista, "2 msgs", mas não à conversa na tela até um novo recarregamento).
         let abertaMudou = false;
+        let marcas;   // catálogo de integrações: buscado só se alguma conversa nova tiver `cliente`
         // Merge server convs into local (keep local if newer).
         //
         // `sc.id` é a CHAVE DE SESSÃO composta (`canal:usuário`); `sc.sessionId` é o que o
@@ -722,10 +734,16 @@
           if (!local) {
             const msgRes = await fetch(`/api/conversations/${sc.id}/messages?limit=50`);
             const msgData = await msgRes.json();
-            const cliente = await clienteDaConversa(localId);
+            // Contrato v2: de onde a conversa veio. Uma falha aqui (servidor v1, rede) nunca impede a sincronização.
+            let cliente, marca;
+            try {
+              cliente = await clienteDaConversa(localId);
+              if (cliente) { marcas = marcas ?? await marcasDasIntegracoes(); marca = marcas[cliente]; }
+            } catch { cliente = undefined; }
             conversations.push({
               id: localId, serverId: sc.id, title: localId,
               ...(cliente ? { cliente } : {}),
+              ...(marca ? { marca } : {}),
               messages: (msgData.messages || []).map(mapServerMessage),
               createdAt: new Date(sc.created_at).getTime(), updatedAt: serverUpdatedAt
             });

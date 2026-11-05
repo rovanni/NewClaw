@@ -256,7 +256,7 @@ async function main(): Promise<void> {
 
     console.log('\n=== S474-9 — MessageBus real: aviso de fila provisório, resultado passa, cliente gravado sem mudar decisão ===');
     const chamadas: unknown[][] = [];
-    let liberar: (() => void) | null = null;
+    let liberar = null as (() => void) | null;   // "as": atribuído dentro da promessa, o TS estreitaria para null
     let segurar = false;
     const fakeAgentLoop = {
         process: async (...args: unknown[]) => {
