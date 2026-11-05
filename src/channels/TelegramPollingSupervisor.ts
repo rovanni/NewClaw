@@ -63,6 +63,7 @@ export class TelegramPollingSupervisor {
     private lastConnectedAt: number | null = null;
     private cooldownEndsAt: number | null = null;
     private pollingActive = false;
+    private laco: Promise<void> | null = null;
     private stopped = false;
 
     // Usado para cancelar o sleep quando stop() é chamado
@@ -151,12 +152,20 @@ export class TelegramPollingSupervisor {
             await this.sleep(gracePeriodMs);
         }
 
+        // O laço de polling roda em SEGUNDO PLANO: `bot.start()` (grammY) só resolve quando o bot para, e esperar por ele
+        // aqui prendia `MessageBus.startAll()` — e, com ele, tudo o que o `AgentController.start()` faz depois (limpeza de
+        // sessões, curadoria de memória, purga de workflows, Sync Agent…). Visto na produção Windows em 05/11/2026: o
+        // último "NewClaw running" no log era de 06/08, e o SessionAutoCleaner não rodava desde 08/08. Erros e reconexões
+        // já são tratados dentro do laço; o que escapar fica no log, nunca sem rastro.
         this.pollingActive = true;
-        try {
-            await this.pollingLoop();
-        } finally {
-            this.pollingActive = false;
-        }
+        this.laco = this.pollingLoop()
+            .catch(e => { log.error('polling_loop_failed', e instanceof Error ? e : undefined, `[TELEGRAM] laço de polling terminou com erro: ${errorMessage(e)}`); })
+            .finally(() => { this.pollingActive = false; });
+    }
+
+    /** O laço de polling em curso (para testes e para quem precisar esperar o fim depois de `stop()`). */
+    aguardarLaco(): Promise<void> {
+        return this.laco ?? Promise.resolve();
     }
 
     async stop(): Promise<void> {
