@@ -231,6 +231,9 @@
           <select id="editType" style="margin-bottom:8px;background:var(--bg-input);border:1px solid var(--border-color);border-radius:6px;padding:4px 8px;color:var(--text-main);font-size:0.78rem;">
             ${['identity','preference','project','context','fact','skill','domain'].map(t => `<option value="${t}" ${t===n.type?'selected':''}>${t}</option>`).join('')}
           </select>
+          <label style="display:flex;gap:6px;align-items:center;font-size:0.78rem;margin-bottom:8px;color:var(--text-soft);" title="Sincronização de Conhecimento (ADR-034): fica só nesta instalação">
+            <input type="checkbox" id="editSoDaqui" ${n.so_desta_maquina ? 'checked' : ''}> Só desta máquina (não vai para as outras instalações)
+          </label>
           <textarea id="editContent" style="width:100%;min-height:200px;background:rgba(0,0,0,0.15);padding:12px;border-radius:8px;color:var(--text-main);font-size:0.82rem;line-height:1.5;border:1px solid var(--border-color);resize:vertical;">${esc(n.content || '')}</textarea>
           ${n.metadata ? `<div style="margin-top:8px;font-size:0.72rem;color:var(--text-soft);">Meta: ${esc(typeof n.metadata === 'string' ? n.metadata : JSON.stringify(n.metadata))}</div>` : ''}
           ${edgesHtml}
@@ -273,10 +276,11 @@
       const name = document.getElementById('editName').value;
       const type = document.getElementById('editType').value;
       const content = document.getElementById('editContent').value;
+      const soDaqui = document.getElementById('editSoDaqui');
       try {
         const r = await fetch(`/api/memory/nodes/${encodeURIComponent(id)}`, {
           method: 'PUT', headers: {'Content-Type':'application/json'},
-          body: JSON.stringify({ name, type, content })
+          body: JSON.stringify({ name, type, content, ...(soDaqui ? { soDestaMaquina: soDaqui.checked } : {}) })
         });
         const d = await r.json();
         if (d.success) { alert('✅ Salvo!'); loadStats(); searchNodes(); }

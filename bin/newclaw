@@ -614,7 +614,11 @@ async function restaurarConhecimento(arquivo, args) {
     if (!/^(s|sim|y|yes)$/i.test(String(resposta).trim())) { console.log('Nada foi alterado.'); return; }
   }
   const restaurarSegredos = args.includes('--segredos') || args.includes('--secrets');
-  const r = await mod.restaurarPacote(alvo, { restaurarSegredos }, caminhosParaBackup(mod));
+  const caminhos = caminhosParaBackup(mod);
+  // ADR-034: nunca ao mesmo tempo que o Sync Agent ou outra importação (trava data/sync.lock).
+  let r;
+  try { r = await mod.comTravaDeSync(caminhos, () => mod.restaurarPacote(alvo, { restaurarSegredos }, caminhos)); }
+  catch (e) { console.error(`❌ ${e.message}`); return; }
   console.log(`✅ Restaurado: ${r.skills} skills${r.banco ? ', banco (aplicado no próximo início)' : ''}${r.env ? ', .env' : ''}.`);
   if (r.skillsParaRevisar.length) console.log(`⚠️  ${r.skillsParaRevisar.length} skill(s) de outro sistema ficaram para revisão (SKILL.md.revisar): ${r.skillsParaRevisar.join(', ')}`);
   console.log(`   Estado anterior guardado em: ${r.pacoteDeSeguranca}`);
@@ -642,7 +646,10 @@ async function importarConhecimento(arquivo, args) {
     });
     if (!/^(s|sim|y|yes)$/i.test(String(resposta).trim())) { console.log('Nada foi alterado.'); return; }
   }
-  const r = await mod.importarPacote(alvo, caminhosParaBackup(mod));
+  const caminhos = caminhosParaBackup(mod);
+  let r;
+  try { r = await mod.comTravaDeSync(caminhos, () => mod.importarPacote(alvo, caminhos)); }
+  catch (e) { console.error(`❌ ${e.message}`); return; }
   console.log(`✅ Memórias: ${r.memorias.importadas} novas, ${r.memorias.jaExistiam} já existiam, ${r.memorias.paraRevisar} para revisar.`);
   console.log(`   Skills: ${r.skills.novas} novas, ${r.skills.iguais} iguais, ${r.skillsAprendidas} aprendidas (banco).`);
   if (r.skills.comDiferenca.length) console.log(`   Diferentes (a local ficou; a importada em SKILL.md.importada): ${r.skills.comDiferenca.join(', ')}`);

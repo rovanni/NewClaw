@@ -28,6 +28,7 @@
  * texto original).
  */
 
+import { pastaDaSkill } from '../shared/pastaDaSkill';
 import fs from 'fs';
 import path from 'path';
 import Database from 'better-sqlite3';
@@ -248,7 +249,9 @@ export class SkillLearner {
             { column: 'source_pattern', sql: `ALTER TABLE auto_skills ADD COLUMN source_pattern TEXT` },
             { column: 'source_tool',   sql: `ALTER TABLE auto_skills ADD COLUMN source_tool TEXT` },
             { column: 'reviewed_at',   sql: `ALTER TABLE auto_skills ADD COLUMN reviewed_at TEXT` },
-            { column: 'file_exported', sql: `ALTER TABLE auto_skills ADD COLUMN file_exported INTEGER DEFAULT 0` }
+            { column: 'file_exported', sql: `ALTER TABLE auto_skills ADD COLUMN file_exported INTEGER DEFAULT 0` },
+            // ADR-034: a instalação de onde a skill chegou pelo Sync Agent (nome). Ausente = aprendida aqui.
+            { column: 'origem_instalacao', sql: `ALTER TABLE auto_skills ADD COLUMN origem_instalacao TEXT` }
         ];
 
         for (const migration of migrations) {
@@ -291,9 +294,12 @@ export class SkillLearner {
         // motivou o fix, só que sobrevivendo à primeira versão da migração (que só deduplicava
         // entre propostas, nunca comparava contra o que já estava ativo). Achado ao inspecionar o
         // banco de produção logo após o primeiro deploy deste fix (15/08/2026).
+        // ADR-034: propostas que chegaram de outra instalação (origem_instalacao) esperam a decisão da pessoa — a limpeza não as
+        // apaga, nem quando o padrão já está ativo aqui.
         const resultVsAtiva = this.db.prepare(`
             DELETE FROM auto_skills
             WHERE status = 'proposed'
+              AND origem_instalacao IS NULL
               AND source_pattern IN (${placeholders})
               AND source_pattern IN (
                   SELECT source_pattern FROM auto_skills
@@ -307,6 +313,7 @@ export class SkillLearner {
         const resultEntreDuplicatas = this.db.prepare(`
             DELETE FROM auto_skills
             WHERE status = 'proposed'
+              AND origem_instalacao IS NULL
               AND source_pattern IN (${placeholders})
               AND id NOT IN (
                   SELECT id FROM (
@@ -941,6 +948,9 @@ export class SkillLearner {
             const skillDir = path.resolve(this.skillsDir, folderName);
             fs.mkdirSync(skillDir, { recursive: true });
             fs.writeFileSync(path.join(skillDir, 'SKILL.md'), this.buildSkillMd(skill), 'utf-8');
+            // Uma proposta que chegou por importação (ADR-020/034) fica como SKILL.md.revisar; aprovada, o arquivo ativo a substitui.
+            const revisar = path.join(skillDir, 'SKILL.md.revisar');
+            if (fs.existsSync(revisar)) fs.unlinkSync(revisar);
             log.info(`Exported SKILL.md: "${skill.name}" → ${skillDir}`);
         } catch (error) {
             log.error(`Failed to export SKILL.md for "${skill.name}": ${errorMessage(error)}`);
@@ -1022,13 +1032,8 @@ export class SkillLearner {
      * Uses source_pattern (already ASCII) when available; falls back to skill name.
      */
     private sanitizeSkillFolderName(skill: Skill): string {
-        const base = skill.source_pattern ?? skill.name;
-        return base
-            .toLowerCase()
-            .normalize('NFD')
-            .replace(/[̀-ͯ]/g, '')
-            .replace(/[^a-z0-9]+/g, '_')
-            .replace(/^_|_$/g, '');
+        // Módulo-folha: a importação (ADR-034) precisa do mesmo nome para reconhecer uma skill desativada aqui.
+        return pastaDaSkill(skill.source_pattern ?? skill.name);
     }
 
     // ── System observation ────────────────────────────────────────────────────

@@ -420,7 +420,8 @@ export function createMemoryRouter(ctx: DashboardContext): Router {
                 return res.status(403).json({ error: `Nó de sistema "${id}" não pode ser modificado via API. Use PUT /api/system/owner-profile para identidade do dono.` });
             }
             const { type, name, content } = req.body;
-            const updated = ctx.memoryManager.getDashboardRepository().updateNode(id, { type, name, content });
+            const soDestaMaquina = typeof req.body?.soDestaMaquina === 'boolean' ? req.body.soDestaMaquina : undefined;
+            const updated = ctx.memoryManager.getDashboardRepository().updateNode(id, { type, name, content, soDestaMaquina });
             if (!updated) return res.status(404).json({ error: 'Node not found' });
             log.info(`Node updated: ${id}`);
             res.json({ success: true });

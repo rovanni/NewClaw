@@ -389,6 +389,23 @@ export async function importKnowledgeBackup(filename) {
   }));
 }
 
+// ADR-034: Sincronização de Conhecimento (Sync Agent).
+export async function getSyncState() {
+  return json(f('/api/maintenance/sync'));
+}
+
+export async function saveSyncConfig(cfg) {
+  return json(f('/api/maintenance/sync/config', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(cfg || {}),
+  }));
+}
+
+export async function syncNow() {
+  return json(f('/api/maintenance/sync/agora', { method: 'POST' }));
+}
+
 export async function uploadBackup(file) {
   return json(f('/api/maintenance/backup/upload', {
     method: 'POST',

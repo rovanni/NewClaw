@@ -15,11 +15,14 @@
  */
 import fs from 'fs';
 import os from 'os';
+import crypto from 'crypto';
 import path from 'path';
 import JSZip from 'jszip';
 import Database from 'better-sqlite3';
 import { VERSAO_DO_ESQUEMA } from '../memory/memorySchema';
 import { rebuildFtsIndex } from '../memory/graphRepository';
+import { pastaDaSkill } from '../shared/pastaDaSkill';
+import type { ModoDeAprendizado } from '../loop/aprendizadoDeSkills';
 
 export const VERSAO_DO_FORMATO = 1;
 /** Teto do pacote descompactado — protege contra "zip bomb". */
@@ -33,6 +36,15 @@ export interface OpcoesDoPacote {
     workspace?: boolean;
     /** .env (chaves de API e o cofre de senhas) e as pastas ocultas do workspace. Só com escolha explícita. */
     segredos?: boolean;
+    /**
+     * ADR-034: recebe o caminho de uma cópia do banco e devolve o caminho do banco que entra no pacote (ex.: só as tabelas
+     * compartilháveis). O arquivo devolvido é apagado depois de lido.
+     */
+    filtrarBanco?: (copia: string) => string;
+    /** ADR-034: nome do arquivo no destino (ex.: `.000043.zip.parcial`), em vez de `<prefixo>-<data>.zip`. */
+    nomeDoArquivo?: string;
+    /** ADR-034: a instalação e o número do pacote, gravados no manifesto interno para a importação conferir a origem. */
+    sincronizacao?: { id: string; numero: number };
 }
 
 export interface Manifesto {
@@ -43,6 +55,8 @@ export interface Manifesto {
     sistema: NodeJS.Platform;
     conteudo: { banco: boolean; skills: boolean; perfilDosJuizes: boolean; historico: boolean; workspace: boolean; segredos: boolean };
     contagens: { memorias: number; skills: number; conversas: number; arquivosDoWorkspace: number };
+    /** ADR-034: presente nos pacotes do Sync Agent. */
+    sincronizacao?: { id: string; numero: number };
 }
 
 export interface Caminhos {
@@ -86,13 +100,22 @@ function listar(pasta: string, semOcultas: boolean): string[] {
     return out;
 }
 
-/** Cópia consistente do banco (Online Backup API — correta mesmo em WAL e com escrita concorrente). */
-async function copiaDoBanco(arquivoDoBanco: string): Promise<Buffer | null> {
+/**
+ * Cópia consistente do banco (Online Backup API — correta mesmo em WAL e com escrita concorrente). Com `filtrar`, o banco que
+ * entra é o que o filtro devolve; esquema e memórias são contados no banco que entra, não no original.
+ */
+async function copiaDoBanco(arquivoDoBanco: string, filtrar?: (copia: string) => string): Promise<{ dados: Buffer; esquema: number; memorias: number } | null> {
     if (!fs.existsSync(arquivoDoBanco)) return null;
-    const tmp = path.join(os.tmpdir(), `nc-backup-${process.pid}-${Date.now()}.db`);
+    const tmp = path.join(os.tmpdir(), `nc-backup-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.db`);
     const db = new Database(arquivoDoBanco, { readonly: true });
     try { await db.backup(tmp); } finally { db.close(); }
-    try { return fs.readFileSync(tmp); } finally { try { fs.unlinkSync(tmp); } catch { /* ok */ } }
+    let final = tmp;
+    try {
+        if (filtrar) final = filtrar(tmp);
+        return { dados: fs.readFileSync(final), esquema: versaoDoEsquemaDe(final), memorias: contarMemorias(final) };
+    } finally {
+        for (const f of new Set([tmp, final])) { try { fs.unlinkSync(f); } catch { /* ok */ } }
+    }
 }
 
 /** Versão REAL do esquema do banco copiado (PRAGMA user_version) — não a do código que gera o pacote. */
@@ -114,8 +137,8 @@ function contarMemorias(arquivoDoBanco: string): number {
 export async function criarPacote(destinoDir: string, opcoes: OpcoesDoPacote = {}, c: Caminhos = caminhosDaInstalacao(), prefixo = 'conhecimento'): Promise<{ arquivo: string; manifesto: Manifesto }> {
     const zip = new JSZip();
     const bancoArq = path.join(c.dados, 'newclaw.db');
-    const banco = await copiaDoBanco(bancoArq);
-    if (banco) zip.file('data/newclaw.db', banco);
+    const banco = await copiaDoBanco(bancoArq, opcoes.filtrarBanco);
+    if (banco) zip.file('data/newclaw.db', banco.dados);
     const perfil = path.join(c.dados, 'validation-judge-profile.json');
     if (fs.existsSync(perfil)) zip.file('data/validation-judge-profile.json', fs.readFileSync(perfil));
 
@@ -134,22 +157,23 @@ export async function criarPacote(destinoDir: string, opcoes: OpcoesDoPacote = {
     const manifesto: Manifesto = {
         formato: VERSAO_DO_FORMATO,
         app: versaoDoApp(c.raiz),
-        esquema: banco ? versaoDoEsquemaDe(bancoArq) : 0,
+        esquema: banco ? banco.esquema : 0,
         criadoEm: new Date().toISOString(),
         sistema: process.platform,
         conteudo: { banco: !!banco, skills: skills.length > 0, perfilDosJuizes: fs.existsSync(perfil), historico: !!opcoes.historico, workspace: !!opcoes.workspace, segredos: comEnv },
         contagens: {
-            memorias: banco ? contarMemorias(bancoArq) : 0,
+            memorias: banco ? banco.memorias : 0,
             skills: new Set(skills.map(f => f.split('/')[0])).size,
             conversas: sessoes.length,
             arquivosDoWorkspace: ws.length,
         },
+        ...(opcoes.sincronizacao ? { sincronizacao: opcoes.sincronizacao } : {}),
     };
     zip.file(ARQ_MANIFESTO, JSON.stringify(manifesto, null, 2));
 
     fs.mkdirSync(destinoDir, { recursive: true });
     const carimbo = manifesto.criadoEm.replace(/[:.]/g, '-').slice(0, 19);
-    const arquivo = path.join(destinoDir, `${prefixo}-${carimbo}.zip`);
+    const arquivo = path.join(destinoDir, opcoes.nomeDoArquivo ?? `${prefixo}-${carimbo}.zip`);
     fs.writeFileSync(arquivo, await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE', compressionOptions: { level: 6 } }));
     return { arquivo, manifesto };
 }
@@ -284,10 +308,33 @@ export interface RelatorioDeImportacao {
     memorias: { importadas: number; jaExistiam: number; preferenciasEmConflito: string[]; paraRevisar: number; estruturaisIgnoradas: number };
     arestas: number;
     skillsAprendidas: number;
-    skills: { novas: number; iguais: number; comDiferenca: string[]; paraRevisar: string[] };
+    skills: { novas: number; iguais: number; comDiferenca: string[]; paraRevisar: string[]; ativadas: string[] };
     conversas: number;
     arquivosDoWorkspace: number;
+    /** Vazio quando nada entrou e o pacote de segurança foi descartado (`segurancaSoSeEntrar`). */
     pacoteDeSeguranca: string;
+}
+
+/**
+ * ADR-034: importação vinda do Sync Agent. Sem estas opções, a importação manual da ADR-020 segue exatamente como era.
+ * - `origemInstalacao`: nome da instalação de origem; vai para `auto_skills.origem_instalacao`.
+ * - `modo`: `APRENDIZADO_DE_SKILLS` desta instalação (ADR-017) — decide se uma skill que chega ativa entra ativa.
+ * - `segurancaSoSeEntrar`: o pacote de segurança é descartado se nada entrou.
+ * - `prefixoDaSeguranca`: nome do pacote de segurança (padrão `pre-importacao`).
+ */
+export interface OpcoesDeImportacao {
+    origemInstalacao?: string;
+    modo?: ModoDeAprendizado;
+    segurancaSoSeEntrar?: boolean;
+    prefixoDaSeguranca?: string;
+}
+
+/** Pastas de skills desativadas, recusadas ou propostas AQUI: uma importação não as ativa por outra via. */
+function pastasQueNaoPodemAtivar(local: Database.Database): Set<string> {
+    try {
+        const linhas = local.prepare(`SELECT name, source_pattern FROM auto_skills WHERE status <> 'active'`).all() as Array<{ name: string; source_pattern: string | null }>;
+        return new Set(linhas.map(l => pastaDaSkill(l.source_pattern ?? l.name)));
+    } catch { return new Set(); }
 }
 
 function colunas(db: Database.Database, tabela: string): string[] {
@@ -299,9 +346,10 @@ function colunas(db: Database.Database, tabela: string): string[] {
  * conexão do próprio app quando chamado pelo painel (escreve no banco em uso, como qualquer operação do app); sem ela,
  * abre o arquivo do banco. O .env/cofre e o perfil dos juízes nunca entram — são desta instalação.
  */
-export async function importarPacote(arquivo: string, c: Caminhos = caminhosDaInstalacao(), dbLocal?: Database.Database, pastaDeSeguranca?: string): Promise<RelatorioDeImportacao> {
+export async function importarPacote(arquivo: string, c: Caminhos = caminhosDaInstalacao(), dbLocal?: Database.Database, pastaDeSeguranca?: string, opcoes: OpcoesDeImportacao = {}): Promise<RelatorioDeImportacao> {
     const { manifesto, zip } = await lerPacote(arquivo);
     const origem = manifesto.sistema;
+    const doSync = opcoes.origemInstalacao !== undefined;
 
     // Banco do pacote: arquivo temporário, validado antes de qualquer escrita local.
     const bancoNoPacote = zip.file('data/newclaw.db');
@@ -316,11 +364,19 @@ export async function importarPacote(arquivo: string, c: Caminhos = caminhosDaIn
         } finally { chk.close(); }
     }
 
-    const seguranca = await criarPacote(pastaDeSeguranca ?? path.join(c.dados, 'backups'), { historico: true, segredos: true }, c, 'pre-importacao');
+    const seguranca = await criarPacote(pastaDeSeguranca ?? path.join(c.dados, 'backups'), { historico: true, segredos: true }, c, opcoes.prefixoDaSeguranca ?? 'pre-importacao');
+    // ADR-034: skills desativadas, recusadas ou pendentes aqui não voltam ativas por uma importação.
+    let naoAtivar = new Set<string>();
+    if (doSync) {
+        const leitura = dbLocal ?? (fs.existsSync(path.join(c.dados, 'newclaw.db')) ? new Database(path.join(c.dados, 'newclaw.db'), { readonly: true }) : undefined);
+        if (leitura) { try { naoAtivar = pastasQueNaoPodemAtivar(leitura); } finally { if (!dbLocal) leitura.close(); } }
+    }
+    const podeEntrarAtiva = (pasta: string, texto: string): boolean =>
+        opcoes.modo === 'automatico' && !naoAtivar.has(pasta) && !temCaminhoDeOutroSistema(texto, origem);
     const rel: RelatorioDeImportacao = {
         memorias: { importadas: 0, jaExistiam: 0, preferenciasEmConflito: [], paraRevisar: 0, estruturaisIgnoradas: 0 },
         arestas: 0, skillsAprendidas: 0,
-        skills: { novas: 0, iguais: 0, comDiferenca: [], paraRevisar: [] },
+        skills: { novas: 0, iguais: 0, comDiferenca: [], paraRevisar: [], ativadas: [] },
         conversas: 0, arquivosDoWorkspace: 0, pacoteDeSeguranca: seguranca.arquivo,
     };
 
@@ -366,9 +422,21 @@ export async function importarPacote(arquivo: string, c: Caminhos = caminhosDaIn
                     }
                 }
                 if (colsSkills.includes('id')) {
-                    const inserirSkill = local.prepare(`INSERT OR IGNORE INTO auto_skills (${lista(colsSkills)}) VALUES (${marcas(colsSkills)})`);
+                    // ADR-034: vinda do Sync Agent, a skill leva a instalação de origem e segue a regra de ativação DESTA instalação
+                    // (ADR-017): só entra ativa se lá estava ativa, aqui o aprendizado é automático, não foi desativada aqui e não
+                    // tem caminho de outro sistema. O que já existe aqui não muda (INSERT OR IGNORE).
+                    const comOrigem = doSync && colunas(local, 'auto_skills').includes('origem_instalacao');
+                    const colsInsert = comOrigem && !colsSkills.includes('origem_instalacao') ? [...colsSkills, 'origem_instalacao'] : colsSkills;
+                    const inserirSkill = local.prepare(`INSERT OR IGNORE INTO auto_skills (${lista(colsInsert)}) VALUES (${marcas(colsInsert)})`);
                     for (const s of fonte.prepare(`SELECT ${lista(colsSkills)} FROM auto_skills`).all() as Array<Record<string, unknown>>) {
-                        rel.skillsAprendidas += inserirSkill.run(...colsSkills.map(k => s[k])).changes;
+                        if (doSync) {
+                            const pasta = pastaDaSkill(String(s.source_pattern ?? s.name ?? ''));
+                            const ativa = s.status === 'active' && podeEntrarAtiva(pasta, String(s.prompt ?? ''));
+                            if (colsSkills.includes('status')) s.status = ativa ? 'active' : 'proposed';
+                            if (colsSkills.includes('file_exported')) s.file_exported = ativa ? 1 : 0;
+                            if (comOrigem) s.origem_instalacao = opcoes.origemInstalacao;
+                        }
+                        rel.skillsAprendidas += inserirSkill.run(...colsInsert.map(k => s[k])).changes;
                     }
                 }
             });
@@ -382,7 +450,7 @@ export async function importarPacote(arquivo: string, c: Caminhos = caminhosDaIn
     }
 
     // 2. Arquivos: skills, histórico e workspace — só o que falta; nada local é sobrescrito.
-    const pastasDeSkill = new Map<string, { nova: boolean; igual: boolean; diferente: boolean; revisar: boolean }>();
+    const pastasDeSkill = new Map<string, { nova: boolean; igual: boolean; diferente: boolean; revisar: boolean; ativada?: boolean }>();
     for (const [nome, entrada] of Object.entries(zip.files)) {
         if (entrada.dir) continue;
         if (nome.startsWith('skills/')) {
@@ -391,6 +459,25 @@ export async function importarPacote(arquivo: string, c: Caminhos = caminhosDaIn
             const st = pastasDeSkill.get(pasta) ?? { nova: false, igual: false, diferente: false, revisar: false };
             const conteudo = await entrada.async('nodebuffer');
             let destino = path.join(c.skills, relativo);
+            if (doSync && (relativo.endsWith('/SKILL.md') || relativo.endsWith('/SKILL.md.revisar'))) {
+                // ADR-034: o estado local nunca muda. Ativa aqui (SKILL.md) ou pendente aqui (SKILL.md.revisar): nada entra.
+                const base = path.join(c.skills, pasta, 'SKILL.md');
+                if (fs.existsSync(base) || fs.existsSync(base + '.revisar')) {
+                    const local = fs.existsSync(base) ? base : base + '.revisar';
+                    if (fs.readFileSync(local).equals(conteudo)) st.igual = true;
+                    pastasDeSkill.set(pasta, st);
+                    continue;
+                }
+                const ativaNaOrigem = relativo.endsWith('/SKILL.md');
+                const ativa = ativaNaOrigem && podeEntrarAtiva(pasta, conteudo.toString('utf8'));
+                destino = base + (ativa ? '' : '.revisar');
+                st.nova = true;
+                if (ativa) st.ativada = true; else st.revisar = true;
+                fs.mkdirSync(path.dirname(destino), { recursive: true });
+                fs.writeFileSync(destino, conteudo);
+                pastasDeSkill.set(pasta, st);
+                continue;
+            }
             if (fs.existsSync(destino)) {
                 if (fs.readFileSync(destino).equals(conteudo)) { st.igual = true; pastasDeSkill.set(pasta, st); continue; }
                 destino += '.importada';   // a local fica; a importada ao lado, para comparar
@@ -416,8 +503,57 @@ export async function importarPacote(arquivo: string, c: Caminhos = caminhosDaIn
     for (const [pasta, st] of pastasDeSkill) {
         if (st.revisar) rel.skills.paraRevisar.push(pasta);
         else if (st.diferente) rel.skills.comDiferenca.push(pasta);
-        else if (st.nova) rel.skills.novas++;
+        else if (st.nova) { rel.skills.novas++; if (st.ativada) rel.skills.ativadas.push(pasta); }
         else if (st.igual) rel.skills.iguais++;
     }
+    if (opcoes.segurancaSoSeEntrar && !algoEntrou(rel)) {
+        try { fs.unlinkSync(seguranca.arquivo); } catch { /* ok */ }
+        rel.pacoteDeSeguranca = '';
+    }
     return rel;
+}
+
+/** A importação mudou alguma coisa nesta instalação? */
+export function algoEntrou(r: RelatorioDeImportacao): boolean {
+    return r.memorias.importadas > 0 || r.arestas > 0 || r.skillsAprendidas > 0 || r.skills.novas > 0
+        || r.skills.comDiferenca.length > 0 || r.skills.paraRevisar.length > 0 || r.conversas > 0 || r.arquivosDoWorkspace > 0;
+}
+
+// ── Trava (ADR-034): uma operação de conhecimento por vez ────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+export class SincronizacaoEmAndamento extends Error {
+    constructor() { super('já há uma sincronização ou importação em andamento'); }
+}
+
+function processoVivo(pid: number): boolean {
+    try { process.kill(pid, 0); return true; } catch (e) { return (e as NodeJS.ErrnoException).code === 'EPERM'; }
+}
+
+/**
+ * `data/sync.lock`: criação exclusiva, com pid e hora. Uma segunda importação (automática, `newclaw import`, painel, backup
+ * ou restauração da ADR-020) recebe `SincronizacaoEmAndamento` em vez de esperar às cegas. Trava de processo que morreu é
+ * retomada; de processo vivo, fica. Liberada no `finally`.
+ */
+export async function comTravaDeSync<T>(c: Caminhos, fn: () => Promise<T>): Promise<T> {
+    fs.mkdirSync(c.dados, { recursive: true });
+    const arq = path.join(c.dados, 'sync.lock');
+    const marca = JSON.stringify({ pid: process.pid, em: new Date().toISOString(), id: crypto.randomUUID() });
+    for (let tentativa = 0; ; tentativa++) {
+        try {
+            fs.writeFileSync(arq, marca, { flag: 'wx' });
+            break;
+        } catch (e) {
+            if ((e as NodeJS.ErrnoException).code !== 'EEXIST' || tentativa > 0) throw (e as NodeJS.ErrnoException).code === 'EEXIST' ? new SincronizacaoEmAndamento() : e;
+            let dona: { pid?: number } | undefined;
+            try { dona = JSON.parse(fs.readFileSync(arq, 'utf8')); } catch { dona = undefined; }
+            if (dona?.pid && processoVivo(dona.pid)) throw new SincronizacaoEmAndamento();
+            console.warn(`[SYNC] trava abandonada (pid=${dona?.pid ?? '?'} não existe mais) — retomada`);
+            try { fs.unlinkSync(arq); } catch { /* outro processo pode ter retomado */ }
+        }
+    }
+    try {
+        return await fn();
+    } finally {
+        try { if (fs.readFileSync(arq, 'utf8') === marca) fs.unlinkSync(arq); } catch { /* ok */ }
+    }
 }

@@ -17,6 +17,8 @@ import { MemoryManager } from '../memory/MemoryManager';
 import type { MemoryFacade } from '../memory/MemoryFacade';
 import { SkillLoader } from '../skills/SkillLoader';
 import { SkillLearner } from '../loop/SkillLearner';
+import { SyncAgent } from './syncAgent';
+import { caminhosDaInstalacao } from './backupDoConhecimento';
 import { ExecCommandTool } from '../tools/exec_command';
 import { WebSearchTool } from '../tools/web_search';
 import { WebNavigateTool } from '../tools/web_navigate';
@@ -99,6 +101,8 @@ export class AgentController {
     private lifecycle = new LifecycleManager();
     private skillLoader: SkillLoader;
     private skillLearner: SkillLearner;
+    /** ADR-034: desligado por padrão (SYNC_LIGADO); criado sempre, para o painel ler o estado e sincronizar agora. */
+    private syncAgent!: SyncAgent;
     private sessionManager: SessionManager;
     private sessionLearner: SessionLearner;
     private memoryGovernor: MemoryGovernor;
@@ -126,6 +130,7 @@ export class AgentController {
     public getMemoryGovernor(): MemoryGovernor { return this.memoryGovernor; }
     public getSessionLearner(): SessionLearner { return this.sessionLearner; }
     public getMessageBus(): MessageBus { return this.messageBus; }
+    public getSyncAgent(): SyncAgent { return this.syncAgent; }
     public getWebAdapter(): WebChannelAdapter { return this.webAdapter; }
     public getWorkflowEngine(): WorkflowEngine { return this.workflowEngine; }
     public getEventBus() { return this._eventBus; }
@@ -361,6 +366,15 @@ export class AgentController {
         }, this.db);
 
         registerCommands(this.messageBus, this.memory, this.memoryFacade, this.sessionManager, this.auditor, this.config, this.agentLoop, this.goalOrchestrator, this.skillLearner);
+
+        // ADR-034: skill que chegou ATIVA de outra instalação ganha o aviso com o desfazer — no Telegram do dono, quando ele está
+        // configurado (o mesmo de quem recebe o auditor), e sempre no relatório da tela "Sincronização de Conhecimento".
+        this.syncAgent = new SyncAgent(undefined, caminhosDaInstalacao(), this.db, (origem, skills) => {
+            const dono = this.config.telegramAllowedUserIds[0];
+            const texto = `🔄 Chegou da instalação "${origem}": ${skills.join(', ')}.\nPara desfazer: ${skills.map(s => `/skill_desativar ${s}`).join(' · ')}`;
+            log.info(`[SYNC] skills ativadas vindas de ${origem}: ${skills.join(', ')}`);
+            if (dono) void this.messageBus.sendToChat('telegram', dono, { text: texto, format: 'markdown' }).catch(e => log.warn(`[SYNC] aviso no Telegram falhou: ${(e as Error).message}`));
+        });
 
         eventBus.on('circuit:open', (data) => {
             log.warn(`[CircuitBreaker] ${data.name} OPEN — ${data.failures}/${data.threshold} failures`);
@@ -634,6 +648,8 @@ export class AgentController {
             if (removed > 0) log.info(`[WF] periodic purge removed=${removed}`);
         }, 60_000);
 
+        this.syncAgent.start();
+
         log.info('✅ NewClaw running — multi-channel pipeline active');
         log.info('   Modules: EventBus ✅ | CircuitBreaker ✅ | ConfidenceClassifier ✅ | PromptRegistry ✅ | SessionAutoCleaner ✅');
     }
@@ -656,6 +672,7 @@ export class AgentController {
         } catch {
             // GoalStore pode já ter sido destruído; ignorar
         }
+        this.syncAgent?.stop();
         await this.lifecycle.shutdown(reason);
         log.info('NewClaw stopped');
     }

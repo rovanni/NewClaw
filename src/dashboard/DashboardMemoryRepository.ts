@@ -182,12 +182,14 @@ export class DashboardMemoryRepository {
         ).run(id, type, name, content, '{}');
     }
 
-    updateNode(id: string, fields: { type?: string; name?: string; content?: string }): boolean {
+    updateNode(id: string, fields: { type?: string; name?: string; content?: string; soDestaMaquina?: boolean }): boolean {
         const exists = this.db.prepare('SELECT id FROM memory_nodes WHERE id = ?').get(id);
         if (!exists) return false;
         if (fields.type) this.db.prepare('UPDATE memory_nodes SET type = ? WHERE id = ?').run(fields.type, id);
         if (fields.name) this.db.prepare('UPDATE memory_nodes SET name = ? WHERE id = ?').run(fields.name, id);
         if (fields.content !== undefined) this.db.prepare('UPDATE memory_nodes SET content = ? WHERE id = ?').run(fields.content, id);
+        // ADR-034 (D1): "só desta máquina" fica fora do pacote do Sync Agent.
+        if (typeof fields.soDestaMaquina === 'boolean') this.db.prepare('UPDATE memory_nodes SET so_desta_maquina = ? WHERE id = ?').run(fields.soDestaMaquina ? 1 : 0, id);
         this.db.prepare('UPDATE memory_nodes SET updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(id);
         return true;
     }
