@@ -89,11 +89,11 @@ export function tipoDaPerguntaDoMotor(mensagens: Array<{ content?: unknown }> | 
     return null;
 }
 
-/** `conclusao_do_objetivo`: aprovado → resumo; reprovado → motivo (+ sugestões). */
+/** `conclusao_do_objetivo`: aprovado → resposta_ao_usuario (ADR-032); reprovado → motivo (+ sugestões). */
 export function vereditoConclusao(achieved: boolean, extras: { summary?: string; reason?: string; suggestions?: string[] } = {}): string {
     return j({
         estado: achieved ? 'aprovado' : 'reprovado', itens: [], confianca: 0.9,
         motivo: achieved ? (extras.summary ?? '') : (extras.reason ?? ''),
-        resumo: achieved ? (extras.summary ?? '') : '', sugestoes: (extras.suggestions ?? []).join(' | '),
+        resposta_ao_usuario: achieved ? (extras.summary ?? '') : '', sugestoes: (extras.suggestions ?? []).join(' | '),
     });
 }

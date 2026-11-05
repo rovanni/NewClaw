@@ -31,6 +31,7 @@ import { obterMotor } from '../validation/motorPadrao';
 import { DECISION_PROMPT_MAX_CHARS } from '../core/providerTypes';
 import { AgentLoop } from './AgentLoop';
 import { traceManager } from '../core/ExecutionTrace';
+import { buildLanguageDirective } from '../core/agentControllerSetup';
 import { GoalStore } from './GoalStore';
 import { GoalPlanner } from './GoalPlanner';
 import { GoalEvaluator } from './GoalEvaluator';
@@ -136,6 +137,8 @@ export type ProgressCallback = (update: GoalProgressUpdate) => Promise<void>;
 interface GoalExecutionState {
     cognitiveContext: StepCognitiveContext;
     progressModel: GoalProgressModel | null;
+    /** O canal desta execução — para a entrega dos artefatos prontos numa saída por falha (política O8 revista). */
+    canal?: ChannelContext;
     /**
      * Campanha 09/10/2026: a saída COMPLETA de cada passo desta execução, por `${planGeneration}:${stepId}`. O
      * registro do goal guarda só um trecho (ATTEMPT_OUTPUT_EVIDENCE_LIMIT) para não crescer sem limite; quem
@@ -943,6 +946,7 @@ export class GoalExecutionLoop {
         const state: GoalExecutionState = {
             cognitiveContext: createEmptyStepCognitiveContext(),
             progressModel: this.buildInitialProgressModel(goal),
+            canal: channelContext,
             saidasCompletas: new Map(),
         };
 
@@ -1356,6 +1360,7 @@ export class GoalExecutionLoop {
 
         // Verificar se ainda tem replan budget
         if (goal.replanBudget <= 0) {
+            goal = await this.entregarProntosAntesDaFalha(goal, totalCycles, state);
             this.goalStore.setStatus(goal.id, 'failed');
             const explanation = this.gracefulDelivery.buildFailureMessage(goal, state.cognitiveContext);
             await onProgress?.({ goalId: goal.id, cycle: totalCycles, event: 'failed', message: explanation });
@@ -1401,6 +1406,7 @@ export class GoalExecutionLoop {
         this.updateProgressModel(step, 'failed', cycleResult.output, state);
         // cycleResult.output carrega o motivo específico quando existe (ex: dep install falhou →
         // instrução manual). Entra como FATO de entrada; quem compõe a mensagem é a autoridade única.
+        goal = await this.entregarProntosAntesDaFalha(goal, totalCycles, state);
         const explanation = this.gracefulDelivery.buildFailureMessage(goal, state.cognitiveContext, cycleResult.output);
         await onProgress?.({ goalId: goal.id, cycle: totalCycles, event: 'failed', message: explanation });
         return { earlyReturn: true, result: this.buildResult(goal, false, totalCycles, totalReplans, explanation) };
@@ -1863,6 +1869,7 @@ export class GoalExecutionLoop {
             }
 
             this.goalStore.setStatus(goal.id, 'failed');
+            goal = await this.entregarProntosAntesDaFalha(goal, totalCycles, state);
             const explanation = this.gracefulDelivery.buildFailureMessage(goal, state.cognitiveContext, validation.reason);
             const graceful = this.gracefulDelivery.assess(goal, state.cognitiveContext);
             log.info(
@@ -2371,6 +2378,7 @@ export class GoalExecutionLoop {
             : `Atingi o limite de ${GOAL_LIMITS.MAX_CYCLES} ciclos sem avanço (passos que falharam ou replanejamentos) com ${pendentes.length} passo(s) ainda por fazer` +
               (pendentes.length ? `: ${pendentes.map(s => `"${s.description.slice(0, 120)}"`).join('; ')}.` : '.');
         log.warn(`[GoalLoop] goal=${currentGoal.id} MAX_CYCLES=${GOAL_LIMITS.MAX_CYCLES} ciclos sem avanço esgotados (ciclos no total=${totalCycles}) — replans=${totalReplans} pendentes=${pendentes.map(s => s.id).join(',') || 'nenhum'} → failed`);
+        currentGoal = await this.entregarProntosAntesDaFalha(currentGoal, totalCycles, state);
         this.goalStore.setStatus(currentGoal.id, 'failed');
         const explanation = this.gracefulDelivery.buildFailureMessage(currentGoal, state.cognitiveContext, motivoDaSaida);
         return this.buildResult(currentGoal, false, totalCycles, totalReplans, explanation);
@@ -4600,6 +4608,8 @@ Se a intenção original pedia uma explicação condicional (ex: "se não conseg
                 resultados: `PASSOS EXECUTADOS:\n${stepsContext || '(nenhum)'}\n\nRESULTADOS DAS FERRAMENTAS:\n${attemptsContext || '(nenhum)'}`,
                 artefatos: `${artifactBlock}${deliveredArtifactsBlock}`.trim() || undefined,
                 contratos: `${progressBlock}${responseContractBlock}${abandonedDeliveryBlock}`.trim() || undefined,
+                // ADR-032: `resposta_ao_usuario` pode ser a mensagem final; vai no idioma da instalação, a mesma diretiva do AgentLoop.
+                idioma: buildLanguageDirective(process.env.APP_LANG || 'pt-BR'),
             }, { goalId: goal.id, phase: 'conclusao' });
             if (deveBloquear) {   // política do tipo: sem veredito não é sucesso
                 log.warn(`[OUTCOME-INTEGRITY] goal=${goal.id} validator_sem_veredito="${veredito.naoAvaliavelPorque ?? 'n/d'}" — tratando como NÃO verificado (achieved=false), não como sucesso`);
@@ -5037,6 +5047,42 @@ Se a intenção original pedia uma explicação condicional (ex: "se não conseg
      * aprovou mesmo assim. Aqui é fato estrutural, sem interpretação: etapa `send_document` PENDENTE no plano anterior,
      * cujo arquivo o plano novo não envia e que ainda não foi entregue → segue no plano novo.
      */
+    /**
+     * Política O8 revista (decisão da operadora, 04/11/2026): numa saída por FALHA, o que já ficou pronto é entregue antes
+     * da mensagem de falha — e a mensagem (GracefulDeliveryOrchestrator) passa a dizer "Consegui gerar e enviar: X. Porém
+     * não finalizei o restante", porque lê `sentArtifacts`. Antes os envios adiados só saíam depois de o objetivo ser
+     * validado, e um passo de conferência que falhava depois escondia o trabalho pronto (goal qejk6, 04/11: 14 módulos e o
+     * .zip no disco, resposta "Não consegui completar").
+     *
+     * "Já validado" é fato estrutural, sem interpretação: o envio foi ADIADO pelo agente (`originStepId`, não um envio que o
+     * planejador previu), a etapa de origem terminou com SUCESSO na geração vigente do plano (o validador do passo aprovou),
+     * o arquivo existe no disco e ainda não foi entregue. Cancelamento pelo usuário não passa por aqui (ele pediu para parar).
+     */
+    private async entregarProntosAntesDaFalha(goal: Goal, totalCycles: number, state: GoalExecutionState): Promise<Goal> {
+        if (!state.canal) return goal;
+        const geracao = goal.planGeneration ?? 0;
+        const jaEntregues = new Set(goal.sentArtifacts ?? []);
+        const caminho = (s: PlanStep) => String(s.toolArgs?.file_path ?? s.toolArgs?.path ?? '');
+        const prontos = this.getPendingSteps(goal.currentPlan, 'send_document').filter(s => {
+            const fp = caminho(s);
+            return !!s.originStepId && !!fp && !jaEntregues.has(fp) && fs.existsSync(resolvePath(fp).resolved)
+                && goal.attempts.some(a => a.planStepId === s.originStepId && a.result === 'success' && (a.planGeneration ?? 0) === geracao);
+        });
+        for (const passo of prontos) {
+            const fp = caminho(passo);
+            const r = await this.executeStep(goal, passo, state.canal, totalCycles, state);
+            goal = this.goalStore.getById(goal.id)!;
+            log.info(`[O8-ENTREGA-PARCIAL] goal=${goal.id} artifact="${fp}" result=${r.outcome}`);
+            if (r.outcome === 'success') {
+                this.markStepDone(goal, passo, r.output ?? '', 'skip');
+                const atuais = this.goalStore.getById(goal.id)!.sentArtifacts ?? [];
+                if (!atuais.includes(fp)) this.goalStore.update(goal.id, { sentArtifacts: [...atuais, fp] });
+                goal = this.goalStore.getById(goal.id)!;
+            }
+        }
+        return goal;
+    }
+
     static pendingDeferredSends(previousPlan: PlanStep[], newPlan: PlanStep[], sentArtifacts: readonly string[]): PlanStep[] {
         const key = (s: PlanStep) => {
             const raw = String(s.toolArgs?.file_path ?? s.toolArgs?.path ?? '');
