@@ -1,5 +1,7 @@
 # ADR-013 — Responsabilidades de verificação da resposta (uma pergunta, um responsável)
 
+> **Estado conferido em 05/11/2026 (Operação Zero Pendências):** **substituída pela ADR-014.** A pergunta "uma pergunta, um responsável" foi resolvida pelo motor único com descritores (ADR-014, M0); o gravador de voo (D0) continua em uso. D1 foi testado e não confirmado; D2 e D3 deixaram de valer com a troca para o motor único. O status original fica abaixo, como histórico.
+
 > **Status:** **em investigação.** Implementado só o passo de observabilidade (D0, gravador de voo dos
 > avaliadores). D1 (checklist) foi **testado e não confirmado** (§5); D2 e D3 aguardam dados do gravador.
 > **Data:** 07/10/2026

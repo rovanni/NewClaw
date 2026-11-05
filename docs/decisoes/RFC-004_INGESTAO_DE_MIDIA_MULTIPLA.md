@@ -1,5 +1,7 @@
 # RFC-004 — Ingestão de Mídia: Fatos em vez de Decisões no Limiar do Canal
 
+> **Estado conferido em 05/11/2026 (Operação Zero Pendências):** **implementada.** As seis correções têm cobertura: perfis de modelo só de leitura (`S196`), todos os anexos viram fato (`S197`), retry único de download (`S198`), álbum do Telegram numa mensagem (`S200`), limite de anexos com erro legível (`S199`), materialização com teto de tamanho (`S280`) e nenhum endereço de rede privada no código (`S195`). O status original fica abaixo, como histórico.
+
 **Status:** Proposta (2026-08-05) — aguardando aprovação. Alinhamento da documentação derivada
 (`ARCHITECTURE.md`, `EVIDENCE_PROVIDER_PATTERN.md`) e implementação ficam para etapas seguintes,
 deliberadamente separadas desta — ver "Impacto na Documentação Existente" e "Próximos Passos".
