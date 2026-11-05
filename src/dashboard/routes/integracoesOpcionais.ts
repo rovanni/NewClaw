@@ -41,7 +41,7 @@ export function createIntegracoesOpcionaisRouter(gerenciador: GerenciadorDeInteg
         for (const item of gerenciador.catalogo()) {
             try {
                 const m = await gerenciador.manifesto(item.id);
-                lista.push({ id: m.id, nome: m.nome, descricao: m.descricao, site: m.site, ...(await gerenciador.estado(m)) });
+                lista.push({ id: m.id, nome: m.nome, descricao: m.descricao, site: m.site, ...(m.icone ? { icone: m.icone } : {}), ...(await gerenciador.estado(m)) });
             } catch (e) {
                 lista.push({ id: item.id, erro: errorMessage(e) });
             }

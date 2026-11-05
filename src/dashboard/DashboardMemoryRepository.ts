@@ -97,6 +97,14 @@ export class DashboardMemoryRepository {
         return rows.map(r => ({ ...r, created_at: sqliteUtcToIso(r.created_at), updated_at: sqliteUtcToIso(r.updated_at) }));
     }
 
+    /** ADR-033 §4: a conversa pela chave (`canal:usuário`): quando foi criada e quantas mensagens tem; undefined se não existe. */
+    infoDaConversa(id: string): { id: string; criadaEm: string; mensagens: number } | undefined {
+        const row = this.db.prepare('SELECT id, created_at FROM conversations WHERE id = ?').get(id) as { id: string; created_at: string } | undefined;
+        if (!row) return undefined;
+        const { n } = this.db.prepare('SELECT COUNT(*) AS n FROM messages WHERE conversation_id = ?').get(id) as { n: number };
+        return { id: row.id, criadaEm: sqliteUtcToIso(row.created_at), mensagens: n };
+    }
+
     exportAllConversations(): { conversations: unknown[]; messages: unknown[] } {
         const conversations = this.db.prepare('SELECT * FROM conversations').all();
         const messages = this.db.prepare('SELECT * FROM messages').all();

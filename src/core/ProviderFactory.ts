@@ -3,7 +3,8 @@
  * Suporta: Gemini, DeepSeek, Groq, OpenAI, OpenRouter, Anthropic, Ollama
  */
 
-import { combinarSinais, sinalDoTurno } from '../shared/turnCancellation';
+import { combinarSinais, sinalDoTurno, conversaDoTurno } from '../shared/turnCancellation';
+import { registrarModeloQueRespondeu, esquecerModeloQueRespondeu } from '../shared/contratoDoTurno';
 import { createLogger } from '../shared/AppLogger';
 import { errorMessage } from '../shared/errors';
 import { circuitRegistry } from './CircuitBreaker';
@@ -425,6 +426,16 @@ export class ProviderFactory {
                 log.info(`[TOKENS-SOMBRA] ${medidorDoProcesso.registrar(obs)}`);
             }
         } catch { /* medição nunca derruba a chamada */ }
+        try {
+            // ADR-033 §4: o modelo que respondeu nesta conversa. A tentativa de sucesso diz o provedor e o modelo reais; o
+            // caminho não-streaming não diz o modelo, e aí o registro some em vez de mostrar um palpite.
+            const conversa = opts?.diag?.respostaDaConversa && result.status === 'success' ? conversaDoTurno() : undefined;
+            if (conversa) {
+                const respondeu = [...(result.attempts ?? [])].reverse().find(a => a.status === 'success');
+                if (respondeu && respondeu.model !== 'non-streaming-fallback') registrarModeloQueRespondeu(conversa, respondeu.provider, respondeu.model);
+                else esquecerModeloQueRespondeu(conversa);
+            }
+        } catch { /* registro nunca derruba a chamada */ }
         return result;
     }
 

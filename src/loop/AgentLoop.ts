@@ -1809,7 +1809,7 @@ export class AgentLoop {
         const callStart = Date.now();
         try {
             const result = await generationQueue.add(
-                () => this.providerFactory.chatWithFallback(messages, toolDefs, chatProfile?.provider, timeoutMs, signal, chatProfile?.model, { diag: { component: 'AgentLoop', role: chatProfile?.category, phase } }),
+                () => this.providerFactory.chatWithFallback(messages, toolDefs, chatProfile?.provider, timeoutMs, signal, chatProfile?.model, { diag: { component: 'AgentLoop', role: chatProfile?.category, phase, respostaDaConversa: true } }),
                 { priority: TaskPriority.INTERACTIVE }
             );
 

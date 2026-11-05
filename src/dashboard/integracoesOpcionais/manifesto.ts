@@ -35,6 +35,8 @@ export interface Manifesto {
     iniciar: PorPlataforma<string[]>;
     abrir: string;
     saude: string;
+    /** ADR-033 (opcional): a marca que o painel põe nas conversas que chegam por esta integração (`cliente` = `id`). */
+    icone?: string;
 }
 
 /** Uma escolha que a integração oferece (saída do comando `opcoes`). */
@@ -49,11 +51,19 @@ export interface Opcao {
 export class ManifestoInvalido extends Error {}
 
 const CAMPOS = ['formato', 'id', 'nome', 'descricao', 'site', 'pacote', 'pasta', 'python', 'precisa', 'opcoes', 'licencas',
-    'instalar', 'iniciar', 'abrir', 'saude'];
+    'instalar', 'iniciar', 'abrir', 'saude', 'icone'];
+/** `icone`: um emoji curto. Sem letras, números, espaço ou marcação — vai direto para o título da conversa no painel. */
+const RE_ICONE = /^[^\p{L}\p{N}\s<>"'&`]{1,8}$/u;
 const RE_ID = /^[a-z0-9][a-z0-9-]{1,40}$/;
 const RE_PASTA = /^[A-Za-z0-9][A-Za-z0-9._-]{0,59}$/;
 const RE_PROGRAMA = /^[A-Za-z0-9][A-Za-z0-9._-]{0,40}$/;  // nome de programa no PATH, sem caminho
 const RE_ESCOLHA_ID = /^[a-z][a-z0-9_]{0,30}$/;
+
+function icone(v: unknown): string {
+    const s = texto(v, 'icone').trim();
+    if (!RE_ICONE.test(s)) throw new ManifestoInvalido(`'icone' precisa ser um emoji curto`);
+    return s;
+}
 
 function texto(v: unknown, campo: string): string {
     if (typeof v !== 'string' || !v.trim()) throw new ManifestoInvalido(`'${campo}' precisa ser um texto`);
@@ -143,6 +153,7 @@ export function validarManifesto(bruto: unknown, hosts: readonly string[]): Mani
         iniciar: porPlataforma(m.iniciar, 'iniciar', (v, c) => comando(v, c, 'relativo')),
         abrir: urlLocal(m.abrir, 'abrir'),
         saude: urlLocal(m.saude, 'saude'),
+        ...(m.icone !== undefined ? { icone: icone(m.icone) } : {}),
     };
 }
 

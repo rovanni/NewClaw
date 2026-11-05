@@ -82,6 +82,9 @@ interface TimedOutRequest {
     cleanupTimer: NodeJS.Timeout;
 }
 
+/** ADR-033 §3: quantos relatos de progresso por conversa o contrato do turno devolve. */
+const MAX_RELATOS = 20;
+
 export class WebChannelAdapter implements ChannelAdapter {
     readonly channelType: ChannelType = 'web';
     readonly displayName: string = 'Web Dashboard';
@@ -108,11 +111,19 @@ export class WebChannelAdapter implements ChannelAdapter {
     // ADR-027: o ÚLTIMO relato de progresso de cada conversa (sendToChat com `progresso`). Não é entrega: o painel o lê
     // pelo mesmo polling do turno (GET /api/chat/active) e ele some quando a resposta final sai. Antes caía em
     // orphanedDeliveries e só aparecia colado na resposta final (teste real, 23/10/2026: 10 relatos de uma vez, no fim).
-    private progressoPorConversa: Map<string, { texto: string; em: number }> = new Map();
+    // ADR-033 §3: guarda os últimos MAX_RELATOS (do mais antigo ao mais novo); os que saem são contados em `omitidos`.
+    private relatosPorConversa: Map<string, { relatos: Array<{ texto: string; em: number }>; omitidos: number }> = new Map();
 
     /** O último relato de progresso desta conversa, enquanto o trabalho dela roda; undefined se não há. */
     public progressoAtual(chatId: string): { texto: string; em: number } | undefined {
-        return this.progressoPorConversa.get(chatId);
+        const r = this.relatosPorConversa.get(chatId);
+        return r?.relatos[r.relatos.length - 1];
+    }
+
+    /** ADR-033 §3: os últimos relatos desta conversa e quantos mais antigos saíram; undefined se não há. */
+    public relatosDaConversa(chatId: string): { relatos: Array<{ texto: string; em: number }>; omitidos: number } | undefined {
+        const r = this.relatosPorConversa.get(chatId);
+        return r ? { relatos: [...r.relatos], omitidos: r.omitidos } : undefined;
     }
 
     private outbox: Map<string, NormalizedResponse> = new Map();
@@ -167,7 +178,7 @@ export class WebChannelAdapter implements ChannelAdapter {
         for (const [, t] of this.timedOutRequests) clearTimeout(t.cleanupTimer);
         this.timedOutRequests.clear();
         this.orphanedDeliveries.clear();
-        this.progressoPorConversa.clear();
+        this.relatosPorConversa.clear();
     }
 
     async healthCheck(): Promise<{ ok: boolean; details?: string }> {
@@ -263,7 +274,7 @@ export class WebChannelAdapter implements ChannelAdapter {
         clearTimeout(timedOut.cleanupTimer);
         this.timedOutRequests.delete(requestId);
         // A resposta final desta conversa chegou (atrasada): o relato de andamento deixa de valer, como em mergeOrphaned.
-        this.progressoPorConversa.delete(timedOut.chatId);
+        this.relatosPorConversa.delete(timedOut.chatId);
         this.queueOrphaned(timedOut.chatId, response);
         log.info(
             'response_queued_orphaned',
@@ -277,9 +288,12 @@ export class WebChannelAdapter implements ChannelAdapter {
      * push: vira uma entrega órfã da sessão e chega mesclada na próxima resposta, o mesmo caminho das respostas atrasadas.
      */
     async sendToChat(chatId: string, response: NormalizedResponse): Promise<void> {
-        // ADR-027: relato de progresso substitui o anterior e é lido pelo polling do turno — não entra na fila de entregas.
+        // ADR-027: relato de progresso é lido pelo polling do turno — não entra na fila de entregas.
         if (response.progresso) {
-            this.progressoPorConversa.set(chatId, { texto: response.text, em: Date.now() });
+            const r = this.relatosPorConversa.get(chatId) ?? { relatos: [], omitidos: 0 };
+            r.relatos.push({ texto: response.text, em: Date.now() });
+            if (r.relatos.length > MAX_RELATOS) { r.relatos.shift(); r.omitidos++; }
+            this.relatosPorConversa.set(chatId, r);
             return;
         }
         this.queueOrphaned(chatId, response);
@@ -307,8 +321,9 @@ export class WebChannelAdapter implements ChannelAdapter {
      * Consome a fila (delete) para nunca reentregar a mesma entrega órfã duas vezes.
      */
     private mergeOrphaned(chatId: string, response: NormalizedResponse): NormalizedResponse {
-        // A resposta final desta conversa está saindo: o relato de andamento deixa de valer.
-        this.progressoPorConversa.delete(chatId);
+        // A resposta final desta conversa está saindo: os relatos de andamento deixam de valer. O aviso de fila
+        // (`provisoria`) não é a resposta final: o trabalho em curso continua e os relatos ficam.
+        if (!response.provisoria) this.relatosPorConversa.delete(chatId);
         const queued = this.orphanedDeliveries.get(chatId);
         if (!queued || queued.length === 0) return response;
         this.orphanedDeliveries.delete(chatId);
