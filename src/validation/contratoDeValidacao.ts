@@ -212,10 +212,25 @@ export function lerSaidaDoModelo(
     saida: string,
     nomesExtras: readonly string[] = [],
     diagnostico?: { motivo?: string },
+    /**
+     * `exigeItens`: o tipo agrega o veredito pelos itens (`agregacao: 'itens'`). Sem a lista, "nenhuma afirmação" e "o modelo
+     * não devolveu a lista" ficavam iguais — e lista vazia agrega como aprovado (falha aberta; medição de 05/11/2026: o
+     * Bonsai devolveu um veredito sem itens cujo motivo citava três afirmações sem evidência). Aqui a falta é saída inválida.
+     */
+    opcoes: { exigeItens?: boolean } = {},
 ): Omit<VereditoPadrao, 'estado'> & { estadoDoModelo?: 'aprovado' | 'reprovado' } | null {
     const bruto = extrairObjetoDoVeredito(saida);
     if (!bruto) return null;
 
+    const temItens = Object.prototype.hasOwnProperty.call(bruto, 'itens');
+    if (temItens && !Array.isArray(bruto.itens)) {
+        diagnostico && (diagnostico.motivo = 'campo "itens" não é uma lista');
+        return null;
+    }
+    if (!temItens && opcoes.exigeItens) {
+        diagnostico && (diagnostico.motivo = 'faltou o campo "itens" (use "itens": [] quando não houver o que listar)');
+        return null;
+    }
     const itensBrutos = Array.isArray(bruto.itens) ? bruto.itens : [];
     const itens: ItemJulgado[] = [];
     for (const x of itensBrutos) {

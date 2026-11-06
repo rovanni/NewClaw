@@ -304,7 +304,7 @@ export class ValidationEngine {
             if (resultado.status === 'success') {
                 saidaBruta = resultado.content;
                 const diagnosticoLeitura: { motivo?: string } = {};
-                lido = lerSaidaDoModelo(saidaBruta || '', (d.camposExtras ?? []).map(c => c.nome), diagnosticoLeitura);
+                lido = lerSaidaDoModelo(saidaBruta || '', (d.camposExtras ?? []).map(c => c.nome), diagnosticoLeitura, { exigeItens: d.agregacao === 'itens' });
                 this.perfil.registrar(chaveDoModelo, modos[i], !!lido, ms, d.tipo);
                 log.info(`[VALIDACAO] tipo=${d.tipo} modelo=${chaveDoModelo} modo=${modos[i]} ${lido ? 'veredito' : 'saída sem estrutura'} em ${ms} ms${lido || ultimo ? '' : ' — tentando o outro modo'}`);
                 if (lido) break;
