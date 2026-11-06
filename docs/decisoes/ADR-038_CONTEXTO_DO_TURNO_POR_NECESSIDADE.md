@@ -1,7 +1,8 @@
 # ADR-038 — Contexto do turno por necessidade: o que entra em cada chamada do agente
 
-Data: 04/11/2026. Status: **aceita em parte** (Revisão 2, 04/11/2026). D1 e D2 descartadas pela medição da Revisão 1;
-D3 = β, provisória, sem mexer na ADR-015; D4 aguarda o teste real no modelo local. Nada implementado.
+Data: 04/11/2026. Status: **encerrada sem mudança no código** (Revisão 3, 05/11/2026). D1 e D2 descartadas pela medição
+da Revisão 1. D3 = β foi medida no D4 (modelo local e modelo de produção) e **não é ativada**. O juiz de suficiência segue
+como está (ADR-015 intacta). Nada implementado.
 
 Relacionadas: ADR-021 (catálogo de ferramentas sob demanda), ADR-015/029 (juiz de suficiência e pedido completo),
 ADR-036 (skills oficiais, aprendidas e promovidas), `docs/ARCHITECTURE/INFORMACAO_COMPLETA_PARA_DECIDIR.md`,
@@ -175,3 +176,46 @@ e ~10 mil de saída por chamada). Perguntas da próxima investigação:
 - validações independentes podem compartilhar o resultado?
 - o mesmo contexto é reenviado entre elas?
 - que parte é estrutural (determinismo) e que parte é semântica (LLM)?
+
+## Revisão 3 (05/11/2026) — D4 medido: β não é ativada
+
+**Como a β foi definida para o teste** (decisão da operadora, 05/11): a especificação original apontava para a C.1, que foi
+descartada. Mediu-se a forma mais simples que sobra:
+- a lista de ferramentas passa a ter só "nome: descrição", sem o `| exige: …`;
+- as skills ficam como estão (já são "nome: descrição").
+
+**Como foi medido:**
+- 10 avaliações reais do `suficiencia_do_pedido` (produção Windows, 23/10–04/11): as 7 não aprovadas e 3 aprovadas.
+- Cada uma reprocessada duas vezes, com a lista atual e com a β, no mesmo modelo, uma logo depois da outra.
+- O prompt é o gravado pelo gravador de voo, palavra por palavra. A leitura e a conferência da citação usam as funções do
+  motor (`lerSaidaDoModelo`, `citacaoExiste`, `agregarPorItens`).
+- Nada foi gravado na produção.
+
+| | Bonsai 27B local (GPU) | Modelo de produção (Ollama Cloud) |
+|---|---|---|
+| Mesmo veredito nas duas listas | 9 de 10 | 8 de 10 |
+| Perguntaria ao usuário: atual → β | 4 → 3 | 3 → 4 |
+| Tokens de entrada (total) | -9% | -9% |
+| Tokens de saída (total) | -10% | **+47%** |
+| Tempo (total) | -9% | **+35%** |
+| Citação que confere: atual → β | 11/11 → 12/12 | 8/8 → **8/11** |
+
+**O que mudou com a β:**
+- **No Bonsai:** "Quais as novidades?" deixou de perguntar de onde vêm as novidades, pergunta que a produção também fazia.
+- **No modelo de produção:** dois vereditos viraram "não avaliável". Num deles, "Romântica básica" deixa de perguntar, porque
+  sem veredito o pedido segue (ADR-015).
+
+**Decisão da operadora (05/11/2026): β não é ativada.**
+- A economia de entrada é de cerca de 9% (uns 540 tokens por chamada).
+- No modelo de produção, a β aumentou a saída e o tempo.
+- As mudanças de decisão foram todas para pior.
+- O `exige:` é justamente o que diz ao juiz quais dados cada ferramenta precisa.
+- A α (ferramenta de esclarecimento no lugar do juiz) continua registrada como alternativa, com a mesma condição da Revisão
+  2: só volta com o custo total comparado.
+
+**Limitações:**
+- Uma execução por caso.
+- Com 10 casos, os números servem para recusar, não para aprovar.
+
+O relatório completo, fora do repositório (tem conteúdo das conversas), traz também a medição dos juízes depois da resposta
+(A2 e A4). Ali, raciocínio desligado e modelo local como juiz foram medidos e recusados.
