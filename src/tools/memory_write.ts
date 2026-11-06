@@ -248,7 +248,12 @@ export class MemoryWriteTool implements ToolExecutor {
         if (!id) {
             parecido = this.findSimilarNode(content as string, type as string);
             const slug = (name || content || 'node').toLowerCase().replace(/[^a-z0-9]+/g, '_').slice(0, 30);
-            id = `${slug}_${Date.now()}`;
+            // O id GERADO nunca pode cair num nó existente: duas gravações com o mesmo nome no mesmo milissegundo davam o
+            // mesmo id, e a segunda entrava no ramo "já existia" abaixo — SOBRESCREVIA a primeira (CI, 06/11/2026: S240-3 no
+            // Ubuntu/Node 24). Só o id que o agente passa explicitamente atualiza um nó.
+            const base = `${slug}_${Date.now()}`;
+            id = base;
+            for (let n = 2; this.memoryManager.getNode(id); n++) id = `${base}_${n}`;
         }
 
         const existing = this.memoryManager.getNode(id);
