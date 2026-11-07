@@ -8,6 +8,7 @@ import { createLogger } from '../../shared/AppLogger';
 import { getEventLoopMonitor } from '../../shared/EventLoopMonitor';
 import { DashboardContext } from './types';
 import { TURN_CONTRACT_VERSION } from './chat';
+import { VOZ_VOCABULARIO_VERSION } from './voz';
 import { assertNotSsrfTarget } from '../../core/ssrfGuard';
 
 const log = createLogger('Dashboardserver');
@@ -148,7 +149,7 @@ export function createStatusRouter(ctx: DashboardContext): Router {
                 },
                 version: getAppVersion(),
                 // Contratos públicos que este servidor cumpre, por versão — o cliente confere antes de usar (ADR-031, regra 5).
-                contracts: { turn: TURN_CONTRACT_VERSION },
+                contracts: { turn: TURN_CONTRACT_VERSION, voz_vocabulario: VOZ_VOCABULARIO_VERSION },
                 nodeVersion: process.version,
                 platform: process.platform,
                 arch: process.arch,
