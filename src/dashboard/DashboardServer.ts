@@ -40,6 +40,7 @@ import { createSystemRouter } from './routes/system';
 import { createMaintenanceRouter } from './routes/maintenance';
 import { createValidatorsRouter } from './routes/validators';
 import { createIntegrationsRouter } from './routes/integrations';
+import { createVozRouter } from './routes/voz';
 import { DashboardContext } from './routes/types';
 import { isUnsafeExposedBoot } from './hostSafety';
 import { planejarEscuta } from './hostSafety';
@@ -130,6 +131,7 @@ export class DashboardServer {
         this.app.use('/api/maintenance', createMaintenanceRouter(ctx));
         this.app.use('/api/validators', createValidatorsRouter());
         this.app.use('/api/integrations', createIntegrationsRouter(ctx));
+        this.app.use('/api/voz', createVozRouter(ctx));   // ADR-039: o dicionário da voz, guardado no banco (vai no backup)
     }
 
     public setController(controller: AgentController) {

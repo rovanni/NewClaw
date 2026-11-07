@@ -1,6 +1,7 @@
 # ADR-039 — Dicionário da voz, correção pelo balão e "Corrigir e reenviar"
 
-Data: 04/11/2026. Status: **aceita** (ordem de trabalho, "Corrigir e reenviar" e D2), com a D1 em aberto até a medição.
+Data: 04/11/2026; Revisão 2 em 07/11/2026. Status: **aceita** (ordem de trabalho, "Corrigir e reenviar", D2 revista e
+D3–D7 da Revisão 2), com a D1 em aberto até a medição.
 A ordem de trabalho e o "Corrigir e reenviar" foram aprovados pela operadora em 04/11/2026; a D2 foi decidida no mesmo dia
 ("Operação Zero Pendências": manter o comportamento atual). "Corrigir e reenviar" já está na janela (newclaw-ivox `25fd7d9`). A medição com a voz dela (Sprint 0) decide qual apoio de vocabulário vale e se o modelo muda. Implementação no
 repositório da interface de voz (newclaw-ivox), fora do núcleo, como na ADR-030 e na ADR-037.
@@ -99,6 +100,94 @@ de código novo; só o teste `tests/test_medir_stt.py`.
   - **Decidida em 04/11/2026: manter o comportamento atual.** Com pedido em andamento, o "Corrigir e reenviar" não age: a
     resposta segue, e parar é decisão da pessoa (botão Parar). Coberto pelo teste da janela "com pedido em andamento,
     recusa: parar a resposta é decisão da pessoa" (`janela/src/conversa.test.ts`).
+  - **Revista em 07/11/2026 pela operadora:** "não adianta ele ficar trabalhando, pensando, tentando resolver um problema
+    errado". Com pedido em andamento, o botão da fala é **Parar e corrigir**: cancela o pedido, corta a fala e abre o
+    texto. Na caixa, o botão é **Enviar**. A resposta do pedido parado é descartada. Na janela desde newclaw-ivox
+    `02a9901`.
 - **D1 continua em aberto:** depende da medição com as gravações da operadora (Sprint 0), que é ação dela.
 
 O ditado do painel fica fora: ele usa o reconhecimento do próprio navegador, que não aceita vocabulário.
+
+## Revisão 2 (07/11/2026): o dicionário antes da medição, guardado no NewClaw
+
+**Pedido da operadora:** fazer as Sprints 1 e 2 já, com a lista valendo no reconhecimento, "pensando no usuário leigo".
+O limite provisório fica anotado como provisório até a D1. Três pontos dela mudam a proposta da Fase 4:
+- **Backup:** "se eu fizer backup das minhas informações, isso vai junto? Porque isso é importante". Na Sprint 1, a
+  lista ficava num arquivo da pasta da voz, que o backup do NewClaw (ADR-020) não leva.
+- **Erro de digitação:** "e se a pessoa digitou errado e enviou sem querer?". Errar é comum, então a lista precisa de
+  uma tela para listar e corrigir, e não só de adicionar e remover.
+- **Aprender:** sempre perguntando antes, nunca sozinho. É a opção 1 dela, o padrão da ADR-028.
+
+### Fase 1: o que existe (conferido no código em 07/11)
+
+- **Backup (ADR-020, `backupDoConhecimento.ts`):**
+  - leva o banco `data/newclaw.db` inteiro, as skills e o perfil dos juízes; o histórico, o workspace e o `.env` só se
+    a pessoa marcar;
+  - a pasta da voz (newclaw-ivox) não entra, e os ajustes da janela ficam no navegador.
+- **Sincronização (ADR-034, `syncAgent.ts`):**
+  - só compartilha `memory_nodes`, `memory_edges` e `auto_skills`, cada tabela com regra própria de junção em
+    `importarPacote`;
+  - a tabela `memory` (chave e valor) fica fora, porque guarda dados desta máquina, como o resumo da senha do painel.
+- **Chave e valor já existentes:** `MemoryManager.getSetting`/`setSetting` gravam na tabela `memory`.
+- **O Whisper (Pipecat 1.12, faster-whisper):**
+  - o `WhisperSTTService.run_stt` lê `hotwords` a cada trecho, então a lista muda sem recarregar o modelo
+    (`STTUpdateSettingsFrame`);
+  - o faster-whisper corta `hotwords` em `max_length // 2 - 1` tokens: 223 no Whisper, de `max_length` 448, lido do
+    modelo. Ele guarda o começo e joga fora o resto sem avisar.
+- **O harness** só repassa as rotas do contrato do turno (`ROTAS_DO_CONTRATO`).
+
+### Fase 2: crítica
+
+- **Memória do agente (`memory_nodes`)** daria a sincronização de graça, mas cada palavra viraria contexto do agente
+  nas buscas, e o curador (`MemoryCurator`) pode juntar ou apagar nós. O dicionário mudaria sem a pessoa pedir. Recusado.
+- **Tabela própria** pediria uma regra de junção nova na sincronização. Ela ainda não está ligada (falta a prova do
+  Syncthing), então isso pode vir depois, sem perder nada.
+- **Corte silencioso do Whisper:** com a lista maior que o teto, as últimas palavras deixariam de valer sem ninguém
+  saber. Por isso o motor conta os tokens com o tokenizador do modelo carregado, e a janela mostra quantas palavras cabem.
+- **Quando oferecer o cartão:** a correção pode ser uma troca de ideia. A comparação é só de forma (determinismo): um
+  único trecho trocado, com palavras iguais em volta. Uma frase reescrita inteira não oferece nada, e quem decide
+  guardar é sempre a pessoa.
+- **Erro de digitação:** três camadas. O cartão mostra a palavra e deixa mudar antes; logo depois, "Desfazer"; e, a
+  qualquer hora, a tela das palavras, com editar e apagar (com "Desfazer", sem caixa de "tem certeza?").
+
+### Decisões
+
+- **D3. Onde fica:** no banco do NewClaw, `memory`, chave `voz_vocabulario`, categoria `voz`, pelo
+  `getSetting`/`setSetting` que já existem. O valor é `{ "revisao": n, "palavras": [{ "palavra", "ouvia": [], "vezes",
+  "criadaEm", "atualizadaEm" }] }`.
+  - Vai no backup e volta na restauração.
+  - **Não** vai na importação entre instalações nem na sincronização (ADR-034). Isso fica como extensão da ADR-034,
+    quando a sincronização for ligada.
+- **D4. Rota:** `GET` e `PUT /api/voz/vocabulario`, com o login do painel.
+  - O `PUT` leva a lista inteira e a `revisao` lida. Se outra janela mudou antes, o `PUT` responde 409 e não sobrescreve.
+  - O "Desfazer" é um `PUT` da lista anterior.
+  - Tetos de proteção contra abuso: 200 palavras, 60 caracteres por palavra e 10 "eu ouvia" por palavra. Não são o
+    tamanho bom da lista: esse vem da D1.
+  - `GET /api/status` anuncia `contracts.voz_vocabulario: 1`. Com um NewClaw sem a rota, a janela não oferece o
+    dicionário e diz por quê.
+  - O harness repassa só essas duas rotas.
+- **D5. Apoio no Whisper (provisório até a D1):** `hotwords`, com as palavras na ordem da lista: as mais corrigidas e,
+  no empate, as mais recentes primeiro, porque o corte do Whisper descarta o fim.
+  - Na prova da CPU, `hotwords` e `initial_prompt` deram 0% cada. O `hotwords` foi feito para isso, e o
+    `initial_prompt` também muda o estilo da transcrição.
+  - A janela manda a lista ao motor a cada conexão e a cada mudança (protocolo do motor, versão 4:
+    `{"t": "vocabulario", "d": {"palavras": [...]}}`). O motor não fala com o NewClaw: a fonte é uma só.
+- **D6. Teto (provisório até a D1):** o do próprio modelo (`max_length // 2 - 1` tokens), contado com o tokenizador do
+  modelo carregado. A tela mostra "N de M palavras cabem". Com o modelo descarregado, mostra que a conta aparece quando
+  ele carregar. Um teto de qualidade menor que esse só com a medição.
+- **D7. A janela:**
+  - o cartão "Quer que eu aprenda **X**? Eu tinha ouvido Y", com [Aprender], [Mudar a palavra] e [Agora não], só em fala
+    por voz;
+  - "Aprendi X. [Desfazer]" logo depois;
+  - a tela "Palavras que eu conheço", em Ajustes e pelo link do cartão: editar a palavra e os "eu ouvia", apagar com
+    "Desfazer", ensinar palavra nova e buscar quando a lista crescer.
+
+### Fase 5: validação
+
+- **Evidência real:** os erros dos 38 trechos ("Rigger", "Cornelia Procobre"), as correções reais de 07/11 e o código
+  medido acima.
+- **Complexidade:** soma uma rota, uma mensagem do motor e uma tela. A chave e valor do banco, o apoio do Whisper e o
+  backup já existiam.
+- **Reversível:** lista vazia funciona como hoje; com a rota ausente, a janela esconde o dicionário.
+- **Hipóteses não comprovadas:** que `hotwords` vale mais que `initial_prompt` com a voz dela, e que o teto do modelo é
+  um tamanho bom. As duas ficam para a D1.
