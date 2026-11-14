@@ -2,6 +2,7 @@ import { ILLMProvider, LLMMessage, LLMResponse, ToolDefinition, ChatOptions, Gem
 import { taskQueue, TaskPriority } from './providerQueue';
 import { createLogger } from '../shared/AppLogger';
 import { guessCapabilities } from './modelCapabilityHeuristics';
+import { consumirStreamSSE, TelemetriaAoVivo, TRANSPORTE_SEM_PRAZO_PROPRIO } from './streamVigiado';
 
 const log = createLogger('GeminiProvider');
 
@@ -43,50 +44,111 @@ export class GeminiProvider implements ILLMProvider {
         });
     }
 
+    /**
+     * ADR-027: streaming (`:streamGenerateContent?alt=sse`), e a chamada só para por TRAVAMENTO — nenhum primeiro pedaço ou
+     * silêncio entre pedaços (streamVigiado.ts). Pedaço sem texto nem chamada de ferramenta não conta (antes da correção de
+     * 14/11/2026, `candidates[0]` vazio contava como atividade).
+     */
+    readonly vigiaSilencio = true;
+
     async chat(messages: LLMMessage[], tools?: ToolDefinition[], options?: ChatOptions): Promise<LLMResponse> {
         const queueEntryTime = Date.now();
         return await taskQueue.add(async () => {
             const queueWaitMs = Date.now() - queueEntryTime;
-            if (queueWaitMs > 500) log.info(`Queue wait: ${queueWaitMs}ms (budget: ${options?.timeoutMs ?? 'none'}ms)`);
-            const response = await fetch(
-                `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:generateContent?key=${this.apiKey}`,
-                {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    signal: options?.signal,
-                    body: JSON.stringify({
-                        contents: messages.map(m => ({
-                            role: m.role === 'assistant' ? 'model' : m.role,
-                            parts: [{ text: m.content }]
-                        })),
-                        tools: tools ? [{ functionDeclarations: tools.map(t => ({
-                            name: t.name,
-                            description: t.description,
-                            parameters: t.parameters
-                        }))}] : undefined
-                    })
-                }
-            );
+            if (queueWaitMs > 500) log.info(`Queue wait: ${queueWaitMs}ms`);
+            const corpo = JSON.stringify({
+                contents: messages.map(m => ({
+                    role: m.role === 'assistant' ? 'model' : m.role,
+                    parts: [{ text: m.content }]
+                })),
+                tools: tools ? [{ functionDeclarations: tools.map(t => ({
+                    name: t.name,
+                    description: t.description,
+                    parameters: t.parameters
+                }))}] : undefined
+            });
 
-            if (!response.ok) throw new Error(`Gemini API error: ${response.status}`);
+            const id = `ge-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 5)}`;
+            const tele = options?.telemetry;
+            const aoVivo = new TelemetriaAoVivo(tele);
+            let content = '';
+            let thinking = '';
+            const chamadas: Array<{ name?: string; args?: unknown }> = [];
+            let motivoDoFim: string | undefined;
+            let uso: GeminiChatResponse['usageMetadata'];
+            let cortada = false;
+            const preencher = (): void => {
+                if (!tele) return;
+                Object.assign(tele, {
+                    chunks: aoVivo.pedacos, contentChars: content.length, thinkingChars: thinking.length, contentText: content, thinkingText: thinking,
+                    toolCalls: chamadas.length, doneReason: motivoDoFim, promptTokens: uso?.promptTokenCount, evalTokens: uso?.candidatesTokenCount,
+                });
+            };
 
-            const data = await response.json() as GeminiChatResponse;
-            const candidate = data.candidates?.[0];
-            const content = candidate?.content?.parts?.[0]?.text || '';
-            const functionCall = candidate?.content?.parts?.[0]?.functionCall;
+            try {
+                await consumirStreamSSE({
+                    id, log, modelo: this.model, messages, signal: options?.signal,
+                    abrir: async (signal) => {
+                        const response = await fetch(
+                            `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:streamGenerateContent?alt=sse&key=${this.apiKey}`,
+                            { method: 'POST', headers: { 'Content-Type': 'application/json' }, signal, dispatcher: TRANSPORTE_SEM_PRAZO_PROPRIO, body: corpo } as RequestInit,
+                        );
+                        if (!response.ok) throw new Error(`Gemini API error: ${response.status}`);
+                        return response;
+                    },
+                    aoEvento: ({ dados }) => {
+                        const d = dados as GeminiStreamChunk;
+                        if (d.error) throw new Error(`Gemini API error: ${d.error.message ?? d.error.status ?? 'erro no stream'}`);
+                        if (d.usageMetadata) uso = d.usageMetadata;   // o último traz o total
+                        const candidato = d.candidates?.[0];
+                        if (!candidato) return;
+                        for (const parte of candidato.content?.parts ?? []) {
+                            if (parte.functionCall) {
+                                aoVivo.pedaco('tool_call', thinking.length, content.length);
+                                chamadas.push(parte.functionCall);   // o Gemini manda a chamada inteira num pedaço só
+                            } else if (typeof parte.text === 'string' && parte.text) {
+                                // `thought: true` marca o resumo do raciocínio — nunca é resposta.
+                                if (parte.thought === true) { aoVivo.pedaco('thinking', thinking.length, content.length); thinking += parte.text; }
+                                else { aoVivo.pedaco('content', thinking.length, content.length); content += parte.text; }
+                            }
+                        }
+                        if (candidato.finishReason) motivoDoFim = candidato.finishReason;
+                    },
+                });
+            } catch (err) {
+                // Issue 060: corte com texto já recebido → entregue marcado como interrompido; sem texto → erro (quem chama decide).
+                if (!content) { preencher(); throw err; }
+                cortada = true;
+                log.warn(`[${id}] stream cortado com ${content.length} chars de conteúdo — entregue marcado como interrompido`);
+            }
+            preencher();
 
             return {
                 content,
-                toolCalls: functionCall ? [{
-                    id: `call_${Date.now()}`,
-                    name: functionCall?.name ?? '',
-                    arguments: (functionCall?.args ?? {}) as Record<string, unknown>
-                }] : undefined,
-                usage: data.usageMetadata ? {
-                    prompt_tokens: data.usageMetadata?.promptTokenCount ?? 0,
-                    completion_tokens: data.usageMetadata?.candidatesTokenCount ?? 0
-                } : undefined
+                thinking: thinking || undefined,
+                toolCalls: chamadas.length > 0 ? chamadas.map((fc, i) => ({
+                    id: `call_${Date.now()}_${i}`,
+                    name: fc.name ?? '',
+                    arguments: (fc.args ?? {}) as Record<string, unknown>
+                })) : undefined,
+                usage: uso ? {
+                    prompt_tokens: uso.promptTokenCount ?? 0,
+                    completion_tokens: uso.candidatesTokenCount ?? 0
+                } : undefined,
+                // Issue 060: fim normal = `finishReason` STOP. Sem ele (stream cortado) ou com outro (MAX_TOKENS, SAFETY…), a
+                // resposta pode ser fragmento.
+                interrupted: cortada || motivoDoFim !== 'STOP',
             };
         }, { priority: TaskPriority.INTERACTIVE });
     }
+}
+
+/** Um pedaço do `streamGenerateContent` (SSE): um `GenerateContentResponse` parcial. */
+interface GeminiStreamChunk {
+    candidates?: Array<{
+        content?: { parts?: Array<{ text?: string; thought?: boolean; functionCall?: { name?: string; args?: unknown } }> };
+        finishReason?: string;
+    }>;
+    usageMetadata?: GeminiChatResponse['usageMetadata'];
+    error?: { message?: string; status?: string };
 }

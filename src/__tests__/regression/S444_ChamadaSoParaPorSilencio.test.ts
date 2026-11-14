@@ -8,8 +8,8 @@
  * INCIDENTE REAL (VPS, 23/10/2026 00:15): uma chamada foi cortada aos 32,6 s com 866 pedaços de raciocínio chegando (9.357
  * caracteres descartados). Medido: 58 cortes assim no Windows e 42 na VPS.
  *
- * REGRESSÃO SE: o modelo gerando for cortado por um prazo; o silêncio deixar de cortar; o provedor deixar de declarar que
- * vigia o silêncio; ou um provedor sem streaming passar a ser tratado como se vigiasse.
+ * REGRESSÃO SE: o modelo gerando for cortado por um prazo; o silêncio deixar de cortar; ou o provedor deixar de declarar que
+ * vigia o silêncio. (Até 14/11/2026 o OpenAIProvider não fazia streaming e não vigiava; os outros provedores estão em S483.)
  *
  * Execução: npx ts-node src/__tests__/regression/S444_ChamadaSoParaPorSilencio.test.ts
  */
@@ -87,9 +87,9 @@ async function main(): Promise<void> {
         delete process.env.SILENCIO_DO_MODELO_S;
     }
 
-    console.log('\n=== S444-3 — quem vigia o silêncio declara; quem não tem streaming, não ===');
+    console.log('\n=== S444-3 — quem vigia o silêncio declara (desde 14/11/2026, todos os provedores fazem streaming — ver S483) ===');
     assert(new OllamaProvider('http://x.invalid', 'm').vigiaSilencio === true, 'OllamaProvider (streaming) vigia o silêncio');
-    assert((new OpenAIProvider('', 'm', 'http://x.invalid') as any).vigiaSilencio !== true, 'OpenAIProvider (sem streaming) não vigia — o prazo pelo trabalho continua valendo para ele');
+    assert(new OpenAIProvider('', 'm', 'http://x.invalid').vigiaSilencio === true, 'OpenAIProvider (streaming desde 14/11/2026) vigia o silêncio — o prazo de quem chama não o corta');
 
     console.log('\n=== S444-4 — estrutura: nenhum teto de duração no streaming nem relógio do ProviderFactory para quem vigia ===');
     const ollama = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'OllamaProvider.ts'), 'utf-8');

@@ -55,9 +55,11 @@ async function main(): Promise<void> {
             const opcoes = agente ? (agente as any)[Object.getOwnPropertySymbols(agente).find(s => s.description === 'options') as symbol] : undefined;
             assert(!!agente && opcoes?.headersTimeout === 0, 'com prazo do chamador: Agent sem prazo de cabeçalho (headersTimeout 0)', opcoes);
 
+            // ADR-027 em todos os provedores (14/11/2026, S483): com streaming, quem detecta travamento é o vigia de silêncio — o
+            // transporte nunca tem prazo próprio, com ou sem prazo do chamador. (Antes: sem prazo do chamador valia o padrão do Node.)
             vistos.length = 0;
             await p.chat([{ role: 'user', content: 'oi' }]);
-            assert(vistos.find(v => v.url.endsWith('/chat/completions'))?.dispatcher === undefined, 'sem prazo do chamador: vale o padrão do Node');
+            assert(vistos.find(v => v.url.endsWith('/chat/completions'))?.dispatcher === agente, 'sem prazo do chamador: o mesmo transporte sem prazo próprio');
         } finally {
             globalThis.fetch = fetchOriginal;
             srv.close();

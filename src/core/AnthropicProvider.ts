@@ -1,4 +1,5 @@
-import { ILLMProvider, LLMMessage, LLMResponse, ToolDefinition, ChatOptions, ToolCall, AnthropicChatResponse, AnthropicContentBlock, ModelInfo } from './providerTypes';
+import { ILLMProvider, LLMMessage, LLMResponse, ToolDefinition, ChatOptions, ToolCall, AnthropicContentBlock, ModelInfo } from './providerTypes';
+import { consumirStreamSSE, TelemetriaAoVivo, TRANSPORTE_SEM_PRAZO_PROPRIO } from './streamVigiado';
 import { taskQueue, TaskPriority } from './providerQueue';
 import { createLogger } from '../shared/AppLogger';
 import { guessCapabilities } from './modelCapabilityHeuristics';
@@ -10,6 +11,7 @@ const log = createLogger('AnthropicProvider');
 // truncar prematuramente em nenhum modelo Claude atual.
 const DEFAULT_MAX_TOKENS = 8192;
 const ANTHROPIC_VERSION = '2023-06-01';
+const ANTHROPIC_MESSAGES_URL = 'https://api.anthropic.com/v1/messages';
 
 interface AnthropicMessage {
     role: 'user' | 'assistant';
@@ -105,64 +107,144 @@ export class AnthropicProvider implements ILLMProvider {
         }));
     }
 
+    /**
+     * ADR-027: streaming (`stream: true`), e a chamada só para por TRAVAMENTO — nenhum primeiro pedaço ou silêncio entre
+     * pedaços (streamVigiado.ts). O `ping` que a API intercala no stream não conta como pedaço: é a conexão viva, não o modelo.
+     */
+    readonly vigiaSilencio = true;
+
     async chat(messages: LLMMessage[], tools?: ToolDefinition[], options?: ChatOptions): Promise<LLMResponse> {
         const queueEntryTime = Date.now();
         return await taskQueue.add(async () => {
             const queueWaitMs = Date.now() - queueEntryTime;
-            if (queueWaitMs > 500) log.info(`Queue wait: ${queueWaitMs}ms (budget: ${options?.timeoutMs ?? 'none'}ms)`);
+            if (queueWaitMs > 500) log.info(`Queue wait: ${queueWaitMs}ms`);
 
             const { system, anthropicMessages } = convertMessages(messages);
             const body: Record<string, unknown> = {
                 model: this.model,
                 max_tokens: DEFAULT_MAX_TOKENS,
                 messages: anthropicMessages,
+                stream: true,
             };
             if (system) body.system = system;
             if (tools && tools.length > 0) {
                 body.tools = tools.map(t => ({ name: t.name, description: t.description, input_schema: t.parameters }));
             }
+            const corpo = JSON.stringify(body);
 
-            const response = await fetch('https://api.anthropic.com/v1/messages', {
-                method: 'POST',
-                headers: {
-                    'content-type': 'application/json',
-                    'x-api-key': this.apiKey,
-                    'anthropic-version': ANTHROPIC_VERSION,
-                },
-                signal: options?.signal,
-                body: JSON.stringify(body),
-            });
-
-            if (!response.ok) {
-                const error = await response.text();
-                throw new Error(`Anthropic API error (${response.status}): ${error}`);
-            }
-
-            const data = await response.json() as AnthropicChatResponse;
-            if (data.error) throw new Error(`Anthropic API error: ${data.error.message ?? data.error.type}`);
-
+            const id = `an-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 5)}`;
+            const tele = options?.telemetry;
+            const aoVivo = new TelemetriaAoVivo(tele);
             let content = '';
             let thinking = '';
-            const toolCalls: ToolCall[] = [];
-            for (const block of data.content ?? []) {
-                if (block.type === 'text' && block.text) content += block.text;
-                else if (block.type === 'thinking' && block.thinking) thinking += block.thinking;
-                else if (block.type === 'tool_use' && block.name) {
-                    toolCalls.push({ id: block.id ?? `call_${Date.now()}`, name: block.name, arguments: (block.input ?? {}) as Record<string, unknown> });
-                }
+            // Blocos por `index` do stream: `tool_use` chega com id e nome no início e os argumentos em pedaços de JSON.
+            const ferramentas = new Map<number, { id?: string; name: string; json: string }>();
+            let entrada: number | undefined;
+            let saida: number | undefined;
+            let motivoDoFim: string | undefined;
+            let terminou = false;
+            let cortada = false;
+            const preencher = (): void => {
+                if (!tele) return;
+                Object.assign(tele, {
+                    chunks: aoVivo.pedacos, contentChars: content.length, thinkingChars: thinking.length, contentText: content, thinkingText: thinking,
+                    toolCalls: ferramentas.size, doneReason: motivoDoFim, promptTokens: entrada, evalTokens: saida,
+                });
+            };
+
+            try {
+                await consumirStreamSSE({
+                    id, log, modelo: this.model, messages, signal: options?.signal,
+                    abrir: async (signal) => {
+                        const response = await fetch(ANTHROPIC_MESSAGES_URL, {
+                            method: 'POST',
+                            headers: {
+                                'content-type': 'application/json',
+                                'x-api-key': this.apiKey,
+                                'anthropic-version': ANTHROPIC_VERSION,
+                            },
+                            signal,
+                            dispatcher: TRANSPORTE_SEM_PRAZO_PROPRIO,
+                            body: corpo,
+                        } as RequestInit);
+                        if (!response.ok) {
+                            const error = await response.text();
+                            throw new Error(`Anthropic API error (${response.status}): ${error}`);
+                        }
+                        return response;
+                    },
+                    aoEvento: ({ dados }) => {
+                        const e = dados as AnthropicStreamEvent;
+                        switch (e.type) {
+                            case 'message_start':
+                                entrada = e.message?.usage?.input_tokens ?? entrada;
+                                break;
+                            case 'content_block_start':
+                                if (e.content_block?.type === 'tool_use' && typeof e.index === 'number') {
+                                    aoVivo.pedaco('tool_call', thinking.length, content.length);
+                                    ferramentas.set(e.index, { id: e.content_block.id, name: e.content_block.name ?? '', json: '' });
+                                }
+                                break;
+                            case 'content_block_delta':
+                                if (e.delta?.type === 'text_delta' && e.delta.text) {
+                                    aoVivo.pedaco('content', thinking.length, content.length);
+                                    content += e.delta.text;
+                                } else if (e.delta?.type === 'thinking_delta' && e.delta.thinking) {
+                                    aoVivo.pedaco('thinking', thinking.length, content.length);
+                                    thinking += e.delta.thinking;
+                                } else if (e.delta?.type === 'input_json_delta' && typeof e.index === 'number' && e.delta.partial_json) {
+                                    aoVivo.pedaco('tool_call', thinking.length, content.length);
+                                    const f = ferramentas.get(e.index);
+                                    if (f) f.json += e.delta.partial_json;
+                                }
+                                break;
+                            case 'message_delta':
+                                motivoDoFim = e.delta?.stop_reason ?? motivoDoFim;
+                                saida = e.usage?.output_tokens ?? saida;
+                                break;
+                            case 'message_stop':
+                                terminou = true;
+                                break;
+                            case 'error':
+                                throw new Error(`Anthropic API error: ${e.error?.message ?? e.error?.type ?? 'erro no stream'}`);
+                        }
+                    },
+                });
+            } catch (err) {
+                // Issue 060: corte com texto já recebido → entregue marcado como interrompido; sem texto → erro (quem chama decide).
+                if (!content) { preencher(); throw err; }
+                cortada = true;
+                log.warn(`[${id}] stream cortado com ${content.length} chars de conteúdo — entregue marcado como interrompido`);
             }
+            preencher();
+
+            const toolCalls: ToolCall[] = [...ferramentas.entries()].sort((x, y) => x[0] - y[0]).map(([, f]) => ({
+                id: f.id ?? `call_${Date.now()}`,
+                name: f.name,
+                arguments: (() => { try { return JSON.parse(f.json || '{}') as Record<string, unknown>; } catch { return {}; } })(),
+            }));
 
             return {
                 content,
                 thinking: thinking || undefined,
                 toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
-                usage: data.usage ? {
-                    prompt_tokens: data.usage.input_tokens ?? 0,
-                    completion_tokens: data.usage.output_tokens ?? 0,
-                } : undefined,
+                usage: entrada !== undefined || saida !== undefined ? { prompt_tokens: entrada ?? 0, completion_tokens: saida ?? 0 } : undefined,
+                // Issue 060: fim normal = `message_stop` recebido e o motivo não foi o limite de tokens (`max_tokens`).
+                interrupted: cortada || !terminou || motivoDoFim === 'max_tokens',
             };
         }, { priority: TaskPriority.INTERACTIVE });
     }
+}
+
+/** Um evento do streaming da Messages API (os que este provedor usa; `ping` e os demais são ignorados). */
+interface AnthropicStreamEvent {
+    type?: string;
+    index?: number;
+    message?: { usage?: { input_tokens?: number } };
+    content_block?: { type?: string; id?: string; name?: string };
+    delta?: { type?: string; text?: string; thinking?: string; partial_json?: string; stop_reason?: string };
+    usage?: { output_tokens?: number };
+    error?: { type?: string; message?: string };
 }
 
 export { convertMessages as _convertMessagesForTest };

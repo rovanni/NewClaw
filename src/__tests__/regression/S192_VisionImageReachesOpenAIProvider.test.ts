@@ -45,7 +45,8 @@ function captureBody(): { get: () => any } {
     let body: any = null;
     globalThis.fetch = (async (_url: any, init?: any) => {
         if (init?.body) body = JSON.parse(init.body);
-        return { ok: true, json: async () => ({ choices: [{ message: { content: 'ok' } }] }) } as any;
+        // Resposta inteira (sem streaming): desde 14/11/2026 o provedor pede streaming e lê o content-type para saber o formato.
+        return { ok: true, headers: new Headers({ 'content-type': 'application/json' }), json: async () => ({ choices: [{ message: { content: 'ok' } }] }) } as any;
     }) as any;
     return { get: () => body };
 }

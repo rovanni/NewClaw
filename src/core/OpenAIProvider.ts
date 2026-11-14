@@ -1,23 +1,15 @@
-import { ILLMProvider, LLMMessage, LLMResponse, ToolDefinition, ChatOptions, OpenAIChatResponse, RawToolCall, ModelInfo } from './providerTypes';
+import { ILLMProvider, LLMMessage, LLMResponse, ToolDefinition, ChatOptions, OpenAIChatResponse, RawToolCall, ModelInfo, AttemptTelemetry } from './providerTypes';
 import { taskQueue, TaskPriority } from './providerQueue';
 import { createLogger } from '../shared/AppLogger';
 import { guessCapabilities } from './modelCapabilityHeuristics';
 import { assertNotSsrfTarget } from './ssrfGuard';
-import { Agent } from 'undici';
+import { consumirStreamSSE, TelemetriaAoVivo, TRANSPORTE_SEM_PRAZO_PROPRIO } from './streamVigiado';
 
 const log = createLogger('OpenAIProvider');
 
-/**
- * Transporte sem prazo próprio para os cabeçalhos — o prazo é o de quem chamou (o sinal de cancelamento da chamada).
- *
- * O `fetch` do Node desiste sozinho se os cabeçalhos não chegam em 300 s (`headersTimeout` do undici), seja qual for o
- * prazo do chamador. Esta requisição é sem streaming: o servidor local só manda cabeçalho ao TERMINAR de gerar. Produção,
- * 18/10/2026: as 9 chamadas longas ao modelo local falharam entre 302,8 e 304,6 s com `fetch failed`, enquanto o próprio
- * provedor registrava "modelo está gerando, seguindo até o timeout do chamador". Medido no Node 24.20 e no 22.23: servidor
- * que responde aos 310 s, prazo do chamador de 400 s → `UND_ERR_HEADERS_TIMEOUT` aos 303,9 s; com este Agent, a resposta
- * chega. Só é usado quando o chamador tem prazo (sinal); sem ele, vale o padrão do Node.
- */
-const TRANSPORTE_COM_PRAZO_DO_CHAMADOR = new Agent({ headersTimeout: 0, bodyTimeout: 0 });
+// Transporte: `TRANSPORTE_SEM_PRAZO_PROPRIO` (streamVigiado.ts). Produção, 18/10/2026: as 9 chamadas longas ao modelo local
+// falharam entre 302,8 e 304,6 s com `fetch failed` — o `headersTimeout` de 300 s do Node, não o modelo. Com streaming
+// (14/11/2026), quem detecta travamento é o vigia de silêncio; o transporte não tem prazo nenhum, sempre.
 
 /**
  * Teto para ESTABELECER a conexão — não para a resposta inteira.
@@ -36,6 +28,10 @@ const TRANSPORTE_COM_PRAZO_DO_CHAMADOR = new Agent({ headersTimeout: 0, bodyTime
  * Agora o teto não decide sozinho: ao estourar, pergunta ao servidor via `isResponsive()`. Vivo
  * → segue até o timeout do chamador (gerar texto pode levar minutos, e isso é legítimo). Sem
  * resposta → aborta como antes, preservando o fallback rápido que motivou o teto.
+ *
+ * 14/11/2026 (ADR-027 em todos os provedores): a requisição passou a ser com streaming. A pergunta ao
+ * servidor continua: há servidores que só mandam o cabeçalho com o primeiro pedaço, depois de ler o
+ * prompt. Vivo → quem decide travamento é o vigia de silêncio (streamVigiado.ts), não um prazo.
  */
 const CONNECT_TIMEOUT_MS = 15_000;
 
@@ -235,118 +231,226 @@ export class OpenAIProvider implements ILLMProvider {
         return discoverOpenAICompatibleModels(this.baseUrl, this.apiKey, this.label);
     }
 
+    /**
+     * ADR-027: com streaming, este provedor só para por TRAVAMENTO (nenhum primeiro pedaço; silêncio entre pedaços —
+     * streamVigiado.ts). O `ProviderFactory` não arma prazo de duração para ele. Vale para os derivados (OpenRouter, Groq,
+     * DeepSeek) e para todo servidor compatível cadastrado (modelo local, LM Studio, vLLM, OpenAI oficial).
+     */
+    readonly vigiaSilencio = true;
+
+    /**
+     * Abre a requisição. O teto de 15 s para os CABEÇALHOS não decide sozinho (ver CONNECT_TIMEOUT_MS): ao estourar, pergunta
+     * ao servidor (`/models`). Vivo → segue, e quem decide travamento é o vigia de silêncio; sem resposta → aborta como antes,
+     * preservando a passagem rápida para o próximo provedor. Alguns servidores com streaming só mandam o cabeçalho junto do
+     * primeiro pedaço, depois de ler o prompt inteiro.
+     */
+    private async abrir(corpo: string, signal: AbortSignal): Promise<Response> {
+        const connectAbort = new AbortController();
+        const connectTimer = setTimeout(async () => {
+            const alive = await this.isResponsive(LIVENESS_PROBE_TIMEOUT_MS);
+            if (alive) {
+                log.info(`${this.label}: sem cabeçalhos em ${CONNECT_TIMEOUT_MS / 1000}s, mas /models respondeu — o servidor está trabalhando; segue (o vigia de silêncio decide travamento)`);
+                return;
+            }
+            log.warn(`${this.label}: sem resposta em ${CONNECT_TIMEOUT_MS / 1000}s e /models não respondeu — tratando como fora do ar`);
+            connectAbort.abort();
+        }, CONNECT_TIMEOUT_MS);
+        const onAbort = () => connectAbort.abort();
+        if (signal.aborted) connectAbort.abort();
+        signal.addEventListener('abort', onAbort, { once: true });
+
+        let response: Response;
+        try {
+            response = await fetch(`${this.baseUrl}/chat/completions`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${this.apiKey}` },
+                signal: connectAbort.signal,
+                dispatcher: TRANSPORTE_SEM_PRAZO_PROPRIO,
+                body: corpo,
+            } as RequestInit);
+        } catch (err) {
+            // Distingue "servidor fora do ar" de corte pelo vigia ou "Parar" — a primeira é motivo para tentar o próximo
+            // provider com a frase de fato; as outras seguem como o erro original.
+            if (connectAbort.signal.aborted && !signal.aborted) {
+                throw new Error(`${this.label} não respondeu em ${CONNECT_TIMEOUT_MS / 1000}s (${this.baseUrl})`);
+            }
+            throw err;
+        } finally {
+            // Só o teto dos cabeçalhos sai daqui. O elo `signal` → `connectAbort` fica: é ele que leva o corte do vigia (e o
+            // "Parar") à LEITURA do corpo; desligado aqui, o vigia abortava e o stream seguia aberto para sempre.
+            clearTimeout(connectTimer);
+        }
+
+        if (!response.ok) {
+            const error = await response.text();
+            throw new Error(`${this.name} API error (${response.status}): ${error}`);
+        }
+        return response;
+    }
+
     async chat(messages: LLMMessage[], tools?: ToolDefinition[], options?: ChatOptions): Promise<LLMResponse> {
         assertNotSsrfTarget(this.baseUrl);
         const queueEntryTime = Date.now();
         return await taskQueue.add(async () => {
             const queueWaitMs = Date.now() - queueEntryTime;
-            if (queueWaitMs > 500) log.info(`Queue wait: ${queueWaitMs}ms (budget: ${options?.timeoutMs ?? 'none'}ms)`);
-            // Aborta se a conexão não se estabelecer a tempo, mas encadeia o signal externo para
-            // que um cancelamento do usuário continue valendo depois disso.
-            const connectAbort = new AbortController();
-            // Ao estourar o teto, NÃO presume morte — pergunta ao servidor. Ver nota do
-            // CONNECT_TIMEOUT_MS: esta requisição é não-streaming, então os cabeçalhos de um
-            // servidor local só chegam quando a geração termina, e "demorou 15s" é
-            // indistinguível de "está gerando" sem perguntar. `/models` responde na hora num
-            // servidor saudável (é o mesmo endpoint que o discovery já usa) e falha rápido num
-            // morto/travado — que é exatamente a distinção que faltava.
-            const connectTimer = setTimeout(async () => {
-                const alive = await this.isResponsive(LIVENESS_PROBE_TIMEOUT_MS);
-                if (alive) {
-                    log.info(`${this.label}: sem resposta em ${CONNECT_TIMEOUT_MS / 1000}s, mas /models respondeu — modelo está gerando, seguindo até o timeout do chamador`);
-                    return;
-                }
-                log.warn(`${this.label}: sem resposta em ${CONNECT_TIMEOUT_MS / 1000}s e /models não respondeu — tratando como fora do ar`);
-                connectAbort.abort();
-            }, CONNECT_TIMEOUT_MS);
-            const onExternalAbort = () => connectAbort.abort();
-            options?.signal?.addEventListener('abort', onExternalAbort, { once: true });
+            if (queueWaitMs > 500) log.info(`Queue wait: ${queueWaitMs}ms`);
+            const id = `oa-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 5)}`;
+            const corpo = JSON.stringify({
+                model: this.model,
+                // Imagem viaja dentro de `content` (ver toOpenAIContent) — um campo
+                // `images` solto seria ignorado pelo servidor, e a visão responderia
+                // sobre uma imagem que nunca chegou.
+                messages: normalizeSystemMessages(messages).map(toOpenAIMessage),
+                tools: tools ? tools.map(t => ({
+                    type: 'function',
+                    function: { name: t.name, description: t.description, parameters: t.parameters }
+                })) : undefined,
+                // ADR-027 (14/11/2026): streaming — é o sinal de progresso que separa "gerando" de "travado". `include_usage`
+                // (parâmetro oficial da API) pede os números do servidor no último pedaço (ADR-024: é deles que sai a velocidade).
+                stream: true,
+                stream_options: { include_usage: true },
+                // Issue 054 (D3): só quando o operador declarou `thinking` no provedor. Nunca por
+                // padrão — a API oficial da OpenAI pode recusar parâmetro desconhecido.
+                // ADR-014 (campanha 09/10/2026): declarado o controle, a chamada que pede raciocínio
+                // 'desligado' (descritor de validação) prevalece — mesmo efeito do `think: false` do Ollama.
+                ...(options?.saidaJson ? { response_format: { type: 'json_object' } } : {}),
+                // ADR-024: limite de tokens de saída declarado por quem chama — o modelo para sozinho, sem relógio.
+                ...(options?.limiteDeSaidaTokens && options.limiteDeSaidaTokens > 0 ? { max_tokens: Math.round(options.limiteDeSaidaTokens) } : {}),
+                ...(this.thinking ? { chat_template_kwargs: { enable_thinking: options?.raciocinio === 'desligado' ? false : this.thinking === 'on' } } : {}),
+            });
 
-            let response: Response;
+            const tele = options?.telemetry;
+            const aoVivo = new TelemetriaAoVivo(tele);
+            let content = '';
+            let thinking = '';
+            const ferramentas: Array<{ id?: string; name: string; args: string }> = [];
+            let fim: string | undefined;
+            let usage: OpenAIChatResponse['usage'] | undefined;
+            let timings: Timings | undefined;
+            let inteira: OpenAIChatResponse | undefined;
+            let cortada = false;
+
             try {
-                response = await fetch(`${this.baseUrl}/chat/completions`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${this.apiKey}` },
-                    signal: connectAbort.signal,
-                    ...(options?.signal ? { dispatcher: TRANSPORTE_COM_PRAZO_DO_CHAMADOR } : {}),
-                    body: JSON.stringify({
-                        model: this.model,
-                        // Imagem viaja dentro de `content` (ver toOpenAIContent) — um campo
-                        // `images` solto seria ignorado pelo servidor, e a visão responderia
-                        // sobre uma imagem que nunca chegou.
-                        messages: normalizeSystemMessages(messages).map(toOpenAIMessage),
-                        tools: tools ? tools.map(t => ({
-                            type: 'function',
-                            function: { name: t.name, description: t.description, parameters: t.parameters }
-                        })) : undefined,
-                        // Issue 054 (D3): só quando o operador declarou `thinking` no provedor. Nunca por
-                        // padrão — a API oficial da OpenAI pode recusar parâmetro desconhecido.
-                        // ADR-014 (campanha 09/10/2026): declarado o controle, a chamada que pede raciocínio
-                        // 'desligado' (descritor de validação) prevalece — mesmo efeito do `think: false` do Ollama.
-                        ...(options?.saidaJson ? { response_format: { type: 'json_object' } } : {}),
-                        // ADR-024: limite de tokens de saída declarado por quem chama — o modelo para sozinho, sem relógio.
-                        ...(options?.limiteDeSaidaTokens && options.limiteDeSaidaTokens > 0 ? { max_tokens: Math.round(options.limiteDeSaidaTokens) } : {}),
-                        ...(this.thinking ? { chat_template_kwargs: { enable_thinking: options?.raciocinio === 'desligado' ? false : this.thinking === 'on' } } : {}),
-                    })
+                await consumirStreamSSE({
+                    id, log, modelo: this.model, messages, signal: options?.signal,
+                    abrir: (signal) => this.abrir(corpo, signal),
+                    // Servidor que ignorou `stream: true` e respondeu o JSON inteiro: lido como antes (sem sinal de progresso).
+                    semStreaming: async (resposta) => { inteira = await resposta.json() as OpenAIChatResponse; },
+                    aoEvento: ({ dados }) => {
+                        const d = dados as OpenAIStreamChunk;
+                        if (d.error) throw new Error(`${this.name} API error (stream): ${JSON.stringify(d.error).slice(0, 300)}`);
+                        if (d.usage) usage = d.usage;
+                        if (d.timings) timings = d.timings;
+                        const escolha = d.choices?.[0];
+                        if (!escolha) return;
+                        const delta = escolha.delta ?? {};
+                        if (typeof delta.content === 'string' && delta.content) {
+                            aoVivo.pedaco('content', thinking.length, content.length);
+                            content += delta.content;
+                        }
+                        // Raciocínio: `reasoning_content` (DeepSeek, llama-server), `reasoning` (OpenRouter), `thinking`.
+                        const raciocinio = delta.reasoning_content ?? delta.reasoning ?? delta.thinking;
+                        if (typeof raciocinio === 'string' && raciocinio) {
+                            aoVivo.pedaco('thinking', thinking.length, content.length);
+                            thinking += raciocinio;
+                        }
+                        for (const tc of delta.tool_calls ?? []) {
+                            aoVivo.pedaco('tool_call', thinking.length, content.length);
+                            // A chamada chega em pedaços: o 1º traz id e nome; os seguintes, só pedaços dos argumentos (mesmo `index`).
+                            let i = typeof tc.index === 'number' ? tc.index : (tc.id ? ferramentas.findIndex(f => f.id === tc.id) : ferramentas.length - 1);
+                            if (i < 0) i = ferramentas.length;
+                            const f = (ferramentas[i] ??= { name: '', args: '' });
+                            if (tc.id) f.id = tc.id;
+                            if (tc.function?.name) f.name += tc.function.name;
+                            if (tc.function?.arguments) f.args += tc.function.arguments;
+                        }
+                        if (escolha.finish_reason) fim = escolha.finish_reason;
+                    },
                 });
             } catch (err) {
-                // Distingue "servidor fora do ar" de "usuário cancelou" — a primeira é um motivo
-                // para tentar o próximo provider, a segunda não.
-                if (connectAbort.signal.aborted && !options?.signal?.aborted) {
-                    throw new Error(`${this.label} não respondeu em ${CONNECT_TIMEOUT_MS / 1000}s (${this.baseUrl})`);
-                }
-                throw err;
-            } finally {
-                clearTimeout(connectTimer);  // conectou (ou falhou): daqui em diante vale o timeout normal
-                options?.signal?.removeEventListener('abort', onExternalAbort);
+                // Issue 060: corte (vigia, erro de rede) com conteúdo já recebido → entregue marcado como interrompido; sem
+                // conteúdo → erro, e quem chama decide (retentar). Raciocínio cortado nunca vira resposta (S72).
+                if (!content) { this.preencherTelemetria(tele, aoVivo.pedacos, content, thinking, fim, usage, timings); throw err; }
+                cortada = true;
+                log.warn(`[${id}] stream cortado com ${content.length} chars de conteúdo — entregue marcado como interrompido`);
             }
 
-            if (!response.ok) {
-                const error = await response.text();
-                throw new Error(`${this.name} API error (${response.status}): ${error}`);
-            }
+            if (inteira) return this.respostaInteira(inteira, tele);
 
-            const data = await response.json() as OpenAIChatResponse;
-            const message = data.choices?.[0]?.message;
-
-            // ADR-024 (etapa 1): os números que o SERVIDOR mediu vão para a telemetria da tentativa — é deles que sai a
-            // velocidade do modelo. Antes eram descartados: na produção (18–21/10/2026), em mais de 100 chamadas ao modelo
-            // local, a velocidade nunca foi medida (`geracao=?`), e a extensão de prazo pelo trabalho nunca agiu para ele.
-            // `usage` é do contrato OpenAI; `timings` é do llama-server (llama.cpp) — ausente, os tempos ficam sem medir.
-            const tele = options?.telemetry;
-            if (tele) {
-                const timings = (data as { timings?: { prompt_n?: number; prompt_ms?: number; predicted_ms?: number } }).timings;
-                const raciocinio = (message as { reasoning_content?: unknown } | undefined)?.reasoning_content;
-                // Com cache de prompt, `prompt_ms` cobre só os `prompt_n` tokens lidos agora (não o prompt inteiro): dividir o
-                // total por ele superestimaria a leitura e encurtaria o prazo. Medido no Strata: cache_n/prompt_n em `timings`.
-                if (typeof timings?.prompt_n === 'number' && typeof timings?.prompt_ms === 'number') tele.promptTokens = timings.prompt_n;
-                else if (typeof data.usage?.prompt_tokens === 'number') tele.promptTokens = data.usage.prompt_tokens;
-                if (typeof data.usage?.completion_tokens === 'number') tele.evalTokens = data.usage.completion_tokens;
-                if (typeof timings?.prompt_ms === 'number') tele.promptEvalMs = timings.prompt_ms;
-                if (typeof timings?.predicted_ms === 'number') tele.evalMs = timings.predicted_ms;
-                tele.contentChars = (message?.content ?? '').length;
-                tele.thinkingChars = typeof raciocinio === 'string' ? raciocinio.length : 0;
-                const fim = data.choices?.[0]?.finish_reason;
-                if (typeof fim === 'string') tele.doneReason = fim;
-            }
-
+            this.preencherTelemetria(tele, aoVivo.pedacos, content, thinking, fim, usage, timings);
             return {
-                content: message?.content || '',
-                toolCalls: message?.tool_calls?.map((tc: RawToolCall) => ({
-                    id: tc.id ?? `call_${Date.now()}`,
-                    name: tc.function?.name ?? '',
-                    arguments: (() => { try { return JSON.parse(tc.function?.arguments || '{}'); } catch { return {}; } })()
-                })),
-                usage: data.usage ? {
-                    prompt_tokens: data.usage?.prompt_tokens ?? 0,
-                    completion_tokens: data.usage?.completion_tokens ?? 0
-                } : undefined,
-                // Issue 060: requisição não-streaming — a resposta chega inteira; só o corte por limite de
-                // tokens (finish_reason=length) a interrompe.
-                interrupted: data.choices?.[0]?.finish_reason === 'length',
+                content,
+                toolCalls: ferramentas.length > 0 ? ferramentas.map((f, i) => ({
+                    id: f.id ?? `call_${Date.now()}_${i}`,
+                    name: f.name,
+                    arguments: (() => { try { return JSON.parse(f.args || '{}'); } catch { return {}; } })(),
+                })) : undefined,
+                usage: usage ? { prompt_tokens: usage.prompt_tokens ?? 0, completion_tokens: usage.completion_tokens ?? 0 } : undefined,
+                // Issue 060: fim normal = `finish_reason` recebido e diferente de `length` (limite de tokens).
+                interrupted: cortada || !fim || fim === 'length',
             };
         }, { priority: TaskPriority.INTERACTIVE });
     }
+
+    /**
+     * ADR-024 (etapa 1): os números que o SERVIDOR mediu vão para a telemetria da tentativa — é deles que sai a velocidade do
+     * modelo. Antes eram descartados: na produção (18–21/10/2026), em mais de 100 chamadas ao modelo local, a velocidade nunca
+     * foi medida (`geracao=?`). `usage` é do contrato OpenAI; `timings` é do llama-server (llama.cpp) — ausente, os tempos
+     * ficam sem medir.
+     */
+    private preencherTelemetria(tele: AttemptTelemetry | undefined, pedacos: number, content: string, thinking: string, fim: string | undefined, usage: OpenAIChatResponse['usage'] | undefined, timings: Timings | undefined): void {
+        if (!tele) return;
+        // Com cache de prompt, `prompt_ms` cobre só os `prompt_n` tokens lidos agora (não o prompt inteiro): dividir o
+        // total por ele superestimaria a leitura e encurtaria o prazo. Medido no Strata: cache_n/prompt_n em `timings`.
+        if (typeof timings?.prompt_n === 'number' && typeof timings?.prompt_ms === 'number') tele.promptTokens = timings.prompt_n;
+        else if (typeof usage?.prompt_tokens === 'number') tele.promptTokens = usage.prompt_tokens;
+        if (typeof usage?.completion_tokens === 'number') tele.evalTokens = usage.completion_tokens;
+        if (typeof timings?.prompt_ms === 'number') tele.promptEvalMs = timings.prompt_ms;
+        if (typeof timings?.predicted_ms === 'number') tele.evalMs = timings.predicted_ms;
+        tele.chunks = pedacos;
+        tele.contentChars = content.length;
+        tele.thinkingChars = thinking.length;
+        tele.contentText = content;
+        tele.thinkingText = thinking;
+        if (typeof fim === 'string') tele.doneReason = fim;
+    }
+
+    /** Resposta inteira (servidor que não fez streaming): o formato `choices[0].message` de antes. */
+    private respostaInteira(data: OpenAIChatResponse, tele: AttemptTelemetry | undefined): LLMResponse {
+        const message = data.choices?.[0]?.message;
+        const raciocinio = (message as { reasoning_content?: unknown } | undefined)?.reasoning_content;
+        const timings = (data as { timings?: Timings }).timings;
+        const fim = data.choices?.[0]?.finish_reason;
+        this.preencherTelemetria(tele, 0, message?.content ?? '', typeof raciocinio === 'string' ? raciocinio : '', typeof fim === 'string' ? fim : undefined, data.usage, timings);
+        return {
+            content: message?.content || '',
+            toolCalls: message?.tool_calls?.map((tc: RawToolCall) => ({
+                id: tc.id ?? `call_${Date.now()}`,
+                name: tc.function?.name ?? '',
+                arguments: (() => { try { return JSON.parse(tc.function?.arguments || '{}'); } catch { return {}; } })()
+            })),
+            usage: data.usage ? {
+                prompt_tokens: data.usage?.prompt_tokens ?? 0,
+                completion_tokens: data.usage?.completion_tokens ?? 0
+            } : undefined,
+            // Issue 060: a resposta chega inteira; só o corte por limite de tokens (finish_reason=length) a interrompe.
+            interrupted: fim === 'length',
+        };
+    }
+}
+
+/** `timings` do llama-server (llama.cpp): tempos que o servidor mediu. */
+interface Timings { prompt_n?: number; prompt_ms?: number; predicted_ms?: number }
+
+/** Um pedaço do streaming OpenAI-compatível (`chat.completion.chunk`). */
+interface OpenAIStreamChunk {
+    choices?: Array<{
+        delta?: { content?: string | null; reasoning_content?: string; reasoning?: string; thinking?: string; tool_calls?: RawToolCall[] };
+        finish_reason?: string | null;
+    }>;
+    usage?: OpenAIChatResponse['usage'];
+    timings?: Timings;
+    error?: unknown;
 }
 
 export class OpenRouterProvider extends OpenAIProvider {

@@ -35,8 +35,11 @@ function assert(cond: boolean, msg: string, detail?: unknown): void {
 }
 const ler = (...p: string[]) => fs.readFileSync(path.join(process.cwd(), ...p), 'utf-8');
 
-/** Servidor OpenAI-compatível: 'trava' nunca responde ao chat; 'ok' responde na hora. Registra os corpos. */
-function servidor(modo: 'trava' | 'ok'): Promise<{ url: string; corpos: any[]; pedidos: () => number; fechar: () => Promise<void> }> {
+/**
+ * Servidor OpenAI-compatível: 'trava' nunca responde ao chat; 'ok' responde na hora; 'gera-e-cala' manda um pedaço a cada
+ * 200 ms por 2,5 s e depois fica calado com a conexão aberta. Registra os corpos.
+ */
+function servidor(modo: 'trava' | 'ok' | 'gera-e-cala'): Promise<{ url: string; corpos: any[]; pedidos: () => number; fechar: () => Promise<void> }> {
     const corpos: any[] = [];
     const abertos: http.ServerResponse[] = [];
     const srv = http.createServer((req, res) => {
@@ -46,6 +49,17 @@ function servidor(modo: 'trava' | 'ok'): Promise<{ url: string; corpos: any[]; p
         req.on('end', () => {
             corpos.push(JSON.parse(b || '{}'));
             if (modo === 'trava') { abertos.push(res); return; }
+            if (modo === 'gera-e-cala') {
+                abertos.push(res);
+                res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+                const t0 = Date.now();
+                const t = setInterval(() => {
+                    if (Date.now() - t0 > 2500) { clearInterval(t); return; }   // calado daqui em diante
+                    res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: 'a' }, finish_reason: null }] })}\n\n`);
+                }, 200);
+                res.on('close', () => clearInterval(t));
+                return;
+            }
             const corpo = corpos[corpos.length - 1];
             if (corpo.stream) {
                 res.writeHead(200, { 'Content-Type': 'text/event-stream' });
@@ -78,9 +92,13 @@ function portaFechada(): Promise<number> {
 }
 
 async function main(): Promise<void> {
-    console.log('\n=== S366-1 — prazo de quem chamou vale para a chamada inteira ===');
+    // ADR-027 em todos os provedores (14/11/2026, S483): o servidor OpenAI-compatível agora faz streaming e só para por
+    // TRAVAMENTO. O prazo de quem chamou (1,5 s aqui) não corta o modelo gerando; o silêncio corta. Antes, este bloco provava
+    // o contrário — "o prazo de quem chamou vale para a chamada inteira" (ADR-024), que só vale para provedor sem streaming.
+    console.log('\n=== S366-1 — o prazo de quem chamou não corta quem gera; o silêncio corta; nenhuma reserva ===');
     {
-        const lento = await servidor('trava');
+        process.env.SILENCIO_DO_MODELO_S = '1';
+        const lento = await servidor('gera-e-cala');
         const reserva = await servidor('ok');
         const pf = new ProviderFactory({ defaultProvider: 'Lento', ollamaUrl: 'http://127.0.0.1:1', customProviders: [
             { label: 'Lento', baseUrl: lento.url, model: 'm' },
@@ -89,9 +107,10 @@ async function main(): Promise<void> {
         const t0 = Date.now();
         const r = await pf.chatWithFallback([{ role: 'user', content: 'oi' }], undefined, 'Lento', 1500);
         const ms = Date.now() - t0;
-        assert(r.status !== 'success', `prazo esgotado no primeiro: a chamada termina sem resposta (status ${r.status})`);
-        assert(reserva.pedidos() === 0, `a reserva não recebeu pedido depois do prazo (pedidos: ${reserva.pedidos()})`);
-        assert(ms < 4000, `terminou perto do prazo de 1,5 s, não com um prazo novo por tentativa (${ms} ms)`);
+        delete process.env.SILENCIO_DO_MODELO_S;
+        assert(ms >= 3000 && ms < 8000, `gerou por 2,5 s além do prazo de 1,5 s e foi cortado pelo silêncio de 1 s (${ms} ms)`);
+        assert(r.status === 'success' && /^a+$/.test(r.content) && r.interrupted === true, `o que gerou vem marcado como interrompido (status ${r.status}, ${r.content.length} chars)`, r);
+        assert(reserva.pedidos() === 0, `a reserva não recebeu pedido (pedidos: ${reserva.pedidos()})`);
         await lento.fechar(); await reserva.fechar();
 
         const porta = await portaFechada();

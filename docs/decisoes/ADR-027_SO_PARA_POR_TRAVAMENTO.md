@@ -98,3 +98,51 @@ a segunda agiu 77 vezes.
   `ARCHITECTURE.md`, "Gaps conhecidos").
 - **Classificação rápida** (`GoalExtractor`, `UnifiedIntentRouter`) desistia de propósito no prazo curto para cair na
   heurística. Agora ela espera o modelo terminar ou ficar em silêncio.
+
+## Revisão 1 — todos os provedores (14/11/2026)
+
+A exceção declarada na Fase 2 ("provedor sem streaming") saiu: `OpenAIProvider` (e os derivados OpenRouter, Groq e DeepSeek,
+mais todo servidor compatível cadastrado, como o modelo local), `AnthropicProvider` e `GeminiProvider` passaram a fazer
+streaming e declaram `vigiaSilencio`. O `ProviderFactory` não arma prazo de duração para nenhum deles.
+
+**Pesquisa (14/11/2026).** O padrão atual do mercado são dois relógios, e só pedaço com conteúdo conta:
+[Vercel AI SDK](https://ai-sdk.dev/v7/docs/ai-sdk-core/settings) (`timeout.firstChunkMs` e `chunkMs`; metadados, delta vazio
+e atividade de transporte não reiniciam), [LangChain](https://reference.langchain.com/python/langchain-openai/chat_models/base/BaseChatOpenAI/stream_chunk_timeout)
+(`stream_chunk_timeout`, 120 s; comentário de keepalive não reinicia), BAML (`idle_timeout_ms`) e o desenho de
+[stream inactivity timeout do Qwen Code](https://qwenlm.github.io/qwen-code-docs/pt-BR/design/2026-06-24-stream-inactivity-timeout-design/).
+Formatos conferidos nas fontes: o [OpenRouter](https://openrouter.ai/docs/api-reference/streaming) manda comentários SSE para
+manter a conexão; a [Anthropic](https://platform.claude.com/docs/en/api/messages-streaming) intercala eventos `ping`; o
+streaming OpenAI devolve `usage` num último pedaço sem `choices` com `stream_options.include_usage`.
+
+**Decisão.**
+1. Fonte única dos relógios: `src/core/streamVigiado.ts` (`VigiaDeSilencio`, `consumirStreamSSE`, `TelemetriaAoVivo`,
+   `isChunkActive`). O `OllamaProvider` usa o mesmo vigia; antes, os relógios viviam só nele.
+2. Só pedaço com conteúdo do modelo reinicia os relógios: texto, raciocínio, chamada de ferramenta, fim. Keepalive (comentário
+   SSE, `ping`) e delta vazio não reiniciam.
+3. Correção de `isChunkActive`: `candidates[0]` vazio (Gemini) e toda moldura de bloco (`content_block_start` de texto,
+   `content_block_stop` da Anthropic) contavam como atividade.
+4. Prazo do primeiro pedaço: a base de antes (150–300 s pelo tamanho do prompt). Quando o medidor tem a velocidade de leitura
+   medida pelo servidor para o modelo (ADR-024), vale o maior entre a base e `tokens ÷ leitura × 1,5`, sem teto. Motivo: o
+   modelo local lê a ~21 tokens/s (S440); com o OpenAI-compatível em streaming, um prompt grande passaria de 300 s calado.
+5. Transporte sem prazo próprio (`headersTimeout`/`bodyTimeout` 0) em todos os provedores com streaming: o vigia decide.
+6. A telemetria ao vivo (`pedacosAteAgora`, `ultimoPedacoEm`) passa a vir de todos os provedores — o juiz
+   (`ValidationEngine.decidirNoPrazo`) depende dela para não cortar quem ainda gera.
+
+**Riscos que ficam.**
+- Servidor compatível que ignora `stream: true` e responde o JSON inteiro: é lido como antes, mas sem sinal de progresso; o
+  único limite passa a ser o prazo do primeiro pedaço.
+- Primeira chamada de um modelo local lento com prompt muito grande, antes de qualquer medição: o prazo do primeiro pedaço é a
+  base (até 300 s). O `return_progress` do llama-server daria progresso da leitura do prompt, mas é parâmetro fora do contrato
+  OpenAI e não foi ligado.
+- Servidor compatível estrito que recuse `stream_options` (parâmetro oficial da OpenAI) responderia erro HTTP — o erro diz o que
+  o servidor respondeu.
+
+Testes: `S483` (novo: silêncio corta nos quatro formatos; keepalive e delta vazio não reiniciam; geração longa e ativa com prazo
+de 300 ms não é cortada; chamada de ferramenta em pedaços; telemetria ao vivo; `isChunkActive`; leitor SSE; prazo pela leitura
+medida). Reescritos para a regra nova: `S444` (o OpenAIProvider agora vigia), `S438` (o transporte nunca tem prazo próprio) e
+`S366-1` (o prazo de quem chamou não corta o servidor local gerando; o silêncio corta; nenhuma reserva). `S191`, `S192` e `S263`:
+os servidores falsos ganharam o `content-type` que um `fetch` real sempre tem. Mutação: sete versões erradas do código
+(ping como atividade, `candidates[0]` vazio como atividade, delta vazio como atividade, silêncio que não reinicia, Anthropic sem
+`vigiaSilencio`, elo do sinal desligado depois dos cabeçalhos, argumentos do Gemini perdidos) — o `S483` reprova todas.
+O próprio `S483` achou um defeito na primeira versão: o elo sinal → `fetch` era desligado depois dos cabeçalhos, e o corte do
+vigia não chegava à leitura do corpo.

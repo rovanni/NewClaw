@@ -149,6 +149,7 @@ export interface ILLMProvider {
      * ADR-027: o provedor detecta TRAVAMENTO sozinho (silêncio no streaming: nenhum pedaço por um tempo) e não corta por
      * duração. Com `true`, o `ProviderFactory` não arma relógio próprio para a chamada — quem chama não corta um modelo que
      * gera. Sem o campo (provedor sem streaming), não há sinal de progresso, e o prazo de quem chamou continua valendo.
+     * Desde 14/11/2026 todos os provedores do código fazem streaming e declaram `true` (relógios em streamVigiado.ts; S483).
      */
     readonly vigiaSilencio?: boolean;
 }
@@ -273,7 +274,7 @@ export interface AttemptTelemetry {
     status?: 'success' | 'timeout' | 'error' | 'empty' | 'cancelled';
     errorMessage?: string;
     durationMs?: number;
-    /** Preenchidos por quem consome o streaming (hoje: OllamaProvider). Ausentes = não observado. */
+    /** Preenchidos por quem consome o streaming (todos os provedores; streamVigiado.ts `TelemetriaAoVivo`). Ausentes = não observado. */
     chunks?: number;
     firstChunkMs?: number;
     firstChunkType?: string;
