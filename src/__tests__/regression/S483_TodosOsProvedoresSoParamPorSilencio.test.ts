@@ -44,7 +44,7 @@ const quiet = async <T>(fn: () => Promise<T>): Promise<T> => {
 };
 
 type Formato = 'openai' | 'anthropic' | 'gemini';
-type Cenario = 'longa' | 'silencio' | 'keepalive' | 'ferramenta';
+type Cenario = 'longa' | 'silencio' | 'keepalive' | 'ferramenta' | 'ferramenta-cortada';
 let cenario: Cenario = 'longa';
 const PEDACOS_DA_LONGA = 25;   // um a cada 100 ms: 2,5 s gerando, com a janela de silêncio de 1 s
 
@@ -110,6 +110,15 @@ function servidor(): Promise<{ base: string; fechar: () => void }> {
             const timers: NodeJS.Timeout[] = [];
             res.on('close', () => timers.forEach(t => clearInterval(t)));
             if (cenario === 'ferramenta') { ferramenta[f].forEach(e => res.write(e)); res.end(); return; }
+            if (cenario === 'ferramenta-cortada') {
+                // Texto, depois a chamada de ferramenta só até a metade dos argumentos — e silêncio (conexão aberta).
+                res.write(inicio[f]);
+                res.write(texto[f]('vou buscar'));
+                if (f === 'anthropic') res.write(sse({ type: 'content_block_stop', index: 0 }, 'content_block_stop'));
+                const parcial = f === 'anthropic' ? ferramenta.anthropic.slice(1, 3).map(e => e.replace(/"index":0/g, '"index":1')) : ferramenta.openai.slice(0, 2);
+                parcial.forEach(e => res.write(e));
+                return;
+            }
             res.write(inicio[f]);
             if (cenario === 'longa') {
                 let n = 0;
@@ -209,7 +218,7 @@ async function main(): Promise<void> {
         (medidorDoProcesso as any).velocidade = (modelo: string, modo: string) => modelo === 's483-local' ? { leitura: modo === 'livre' ? 21 : 40, amostras: 5 } : original(modelo, modo as never);
         try {
             const medido = prazoDoPrimeiroPedaco(prompt, 's483-local');
-            const esperado = Math.ceil((40_000 / 3.55) / 21 * 1.5 * 1000);
+            const esperado = Math.ceil(Math.ceil(40_000 / 3.55) / 21 * 1.5 * 1000);
             assert(medido.ms === esperado && medido.ms > 300_000, `modelo local medido a 21 tok/s: ${Math.round(medido.ms / 1000)} s, acima dos 300 s da base (a mais lenta entre os modos)`, medido);
         } finally { (medidorDoProcesso as any).velocidade = original; }
     }
@@ -281,6 +290,14 @@ async function main(): Promise<void> {
             const tc = r.r?.toolCalls?.[0];
             assert(r.r?.toolCalls?.length === 1 && tc?.name === 'buscar' && tc?.arguments?.q === 'x' && r.r?.interrupted === false,
                 `${p.nome}: uma chamada "buscar" com { q: "x" }, não interrompida`, r);
+        }
+
+        console.log('\n=== S483-9 — chamada de ferramenta cortada no meio dos argumentos: descartada, nunca executada pela metade ===');
+        cenario = 'ferramenta-cortada';
+        for (const p of provedores.filter(x => x.nome !== 'Gemini')) {   // o Gemini manda a chamada inteira num pedaço só
+            const r = await comTeto(sig => p.criar().chat([{ role: 'user', content: 'x' }], [{ name: 'buscar', description: 'd', parameters: {} }], { signal: sig }));
+            assert(!r.estourou && r.r?.content === 'vou buscar' && r.r?.interrupted === true && r.r?.toolCalls === undefined,
+                `${p.nome}: o texto vem interrompido e a chamada incompleta não vem`, r);
         }
     } finally {
         globalThis.fetch = fetchOriginal;

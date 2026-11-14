@@ -127,6 +127,11 @@ streaming OpenAI devolve `usage` num último pedaço sem `choices` com `stream_o
 5. Transporte sem prazo próprio (`headersTimeout`/`bodyTimeout` 0) em todos os provedores com streaming: o vigia decide.
 6. A telemetria ao vivo (`pedacosAteAgora`, `ultimoPedacoEm`) passa a vir de todos os provedores — o juiz
    (`ValidationEngine.decidirNoPrazo`) depende dela para não cortar quem ainda gera.
+7. Stream cortado: o texto já recebido vem marcado como interrompido (issue 060), mas a chamada de ferramenta incompleta é
+   descartada — sem `finish_reason` (OpenAI-compatível) ou sem `content_block_stop` (Anthropic) os argumentos podem estar pela
+   metade, e executá-la seria agir sobre um pedido que o modelo não terminou (achado do code-review; `S483-9`).
+8. O limite de tokens chega à telemetria como `length` em todos os provedores (Anthropic `max_tokens`, Gemini `MAX_TOKENS`),
+   o vocabulário que o medidor (`observacaoDaChamada`) já usa.
 
 **Riscos que ficam.**
 - Servidor compatível que ignora `stream: true` e responde o JSON inteiro: é lido como antes, mas sem sinal de progresso; o

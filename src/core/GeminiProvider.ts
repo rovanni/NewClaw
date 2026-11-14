@@ -81,7 +81,8 @@ export class GeminiProvider implements ILLMProvider {
                 if (!tele) return;
                 Object.assign(tele, {
                     chunks: aoVivo.pedacos, contentChars: content.length, thinkingChars: thinking.length, contentText: content, thinkingText: thinking,
-                    toolCalls: chamadas.length, doneReason: motivoDoFim, promptTokens: uso?.promptTokenCount, evalTokens: uso?.candidatesTokenCount,
+                    // `doneReason` no vocabulário comum da telemetria: o limite de tokens é `length` (como no Ollama e na OpenAI).
+                    toolCalls: chamadas.length, doneReason: motivoDoFim === 'MAX_TOKENS' ? 'length' : motivoDoFim, promptTokens: uso?.promptTokenCount, evalTokens: uso?.candidatesTokenCount,
                 });
             };
 

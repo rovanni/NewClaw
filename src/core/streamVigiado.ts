@@ -45,12 +45,13 @@ const MODOS: ModoDeRaciocinio[] = ['padrao', 'livre', 'desligado'];
  */
 export function prazoDoPrimeiroPedaco(messages: LLMMessage[], modelo: string): { ms: number; tokensDeEntrada: number; origem: string } {
     const chars = messages.reduce((soma, m) => soma + (m.content?.length || 0), 0);
-    const tokensDeEntrada = messages.reduce((soma, m) => soma + Math.ceil((m.content?.length || 0) / 4), 0);
+    // Uma conversão só de caracteres em tokens (a do medidor, medida em pt-BR) para a base e para o prazo medido.
+    const tokensDeEntrada = Math.ceil(chars / CHARS_POR_TOKEN_PTBR);
     const base = Math.max(150_000, Math.min(300_000, Math.ceil(tokensDeEntrada / 30) * 1000));
     const leituras = MODOS.map(modo => medidorDoProcesso.velocidade(modelo, modo).leitura).filter((v): v is number => typeof v === 'number' && v > 0);
     if (leituras.length === 0) return { ms: base, tokensDeEntrada, origem: 'base pelo tamanho do prompt' };
     const leitura = Math.min(...leituras);
-    const medido = Math.ceil((chars / CHARS_POR_TOKEN_PTBR) / leitura * FOLGA * 1000);
+    const medido = Math.ceil(tokensDeEntrada / leitura * FOLGA * 1000);
     return medido > base
         ? { ms: medido, tokensDeEntrada, origem: `leitura medida do modelo (${Math.round(leitura)} tok/s)` }
         : { ms: base, tokensDeEntrada, origem: 'base pelo tamanho do prompt (a leitura medida cabe nela)' };
@@ -198,6 +199,7 @@ export async function* lerEventosSSE(corpo: ReadableStream<Uint8Array>, aoInvali
     let pendente = '';
     let evento: string | undefined;
     let dados: string[] = [];
+    let lidoAteOFim = false;
     function* despachar(): Generator<EventoSSE | 'fim'> {
         if (dados.length === 0) { evento = undefined; return; }
         const bruto = dados.join('\n');
@@ -209,6 +211,7 @@ export async function* lerEventosSSE(corpo: ReadableStream<Uint8Array>, aoInvali
     try {
         while (true) {
             const { done, value } = await leitor.read();
+            if (done) lidoAteOFim = true;
             if (!done) pendente += decodificador.decode(value, { stream: true });
             else pendente += decodificador.decode();
             // Um `\r` no fim pode ser metade de um `\r\n` partido entre leituras: espera a próxima para não contar uma linha vazia a mais.
@@ -234,6 +237,9 @@ export async function* lerEventosSSE(corpo: ReadableStream<Uint8Array>, aoInvali
             }
         }
     } finally {
+        // Saída antes do fim do corpo ([DONE], erro no meio do stream, corte): cancela a leitura para a conexão não ficar presa
+        // com bytes que ninguém lê (servidor que segue mandando keepalive depois de um erro).
+        if (!lidoAteOFim) await leitor.cancel().catch(() => { /* já encerrado */ });
         leitor.releaseLock();
     }
 }

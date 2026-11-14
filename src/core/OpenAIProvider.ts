@@ -378,9 +378,13 @@ export class OpenAIProvider implements ILLMProvider {
             if (inteira) return this.respostaInteira(inteira, tele);
 
             this.preencherTelemetria(tele, aoVivo.pedacos, content, thinking, fim, usage, timings);
+            // Chamada de ferramenta só vale com o fim normal da geração: num stream cortado (ou sem `finish_reason`) os argumentos
+            // podem estar pela metade, e executar a ferramenta com eles (ou com `{}`) seria agir sobre um pedido que o modelo não fez.
+            const terminouNormal = !cortada && !!fim;
+            if (!terminouNormal && ferramentas.length > 0) log.warn(`[${id}] ${ferramentas.length} chamada(s) de ferramenta de um stream interrompido — descartadas (argumentos possivelmente incompletos)`);
             return {
                 content,
-                toolCalls: ferramentas.length > 0 ? ferramentas.map((f, i) => ({
+                toolCalls: terminouNormal && ferramentas.length > 0 ? ferramentas.map((f, i) => ({
                     id: f.id ?? `call_${Date.now()}_${i}`,
                     name: f.name,
                     arguments: (() => { try { return JSON.parse(f.args || '{}'); } catch { return {}; } })(),

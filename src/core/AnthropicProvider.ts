@@ -138,7 +138,7 @@ export class AnthropicProvider implements ILLMProvider {
             let content = '';
             let thinking = '';
             // Blocos por `index` do stream: `tool_use` chega com id e nome no início e os argumentos em pedaços de JSON.
-            const ferramentas = new Map<number, { id?: string; name: string; json: string }>();
+            const ferramentas = new Map<number, { id?: string; name: string; json: string; completa?: boolean }>();
             let entrada: number | undefined;
             let saida: number | undefined;
             let motivoDoFim: string | undefined;
@@ -148,7 +148,8 @@ export class AnthropicProvider implements ILLMProvider {
                 if (!tele) return;
                 Object.assign(tele, {
                     chunks: aoVivo.pedacos, contentChars: content.length, thinkingChars: thinking.length, contentText: content, thinkingText: thinking,
-                    toolCalls: ferramentas.size, doneReason: motivoDoFim, promptTokens: entrada, evalTokens: saida,
+                    // `doneReason` no vocabulário comum da telemetria: o limite de tokens é `length` (como no Ollama e na OpenAI).
+                    toolCalls: ferramentas.size, doneReason: motivoDoFim === 'max_tokens' ? 'length' : motivoDoFim, promptTokens: entrada, evalTokens: saida,
                 });
             };
 
@@ -198,6 +199,11 @@ export class AnthropicProvider implements ILLMProvider {
                                     if (f) f.json += e.delta.partial_json;
                                 }
                                 break;
+                            case 'content_block_stop': {
+                                const f = typeof e.index === 'number' ? ferramentas.get(e.index) : undefined;
+                                if (f) f.completa = true;
+                                break;
+                            }
                             case 'message_delta':
                                 motivoDoFim = e.delta?.stop_reason ?? motivoDoFim;
                                 saida = e.usage?.output_tokens ?? saida;
@@ -218,7 +224,10 @@ export class AnthropicProvider implements ILLMProvider {
             }
             preencher();
 
-            const toolCalls: ToolCall[] = [...ferramentas.entries()].sort((x, y) => x[0] - y[0]).map(([, f]) => ({
+            // Só o bloco `tool_use` fechado (`content_block_stop`) tem os argumentos inteiros: num corte, o incompleto é descartado.
+            const incompletas = [...ferramentas.values()].filter(f => !f.completa).length;
+            if (incompletas > 0) log.warn(`[${id}] ${incompletas} chamada(s) de ferramenta sem fim de bloco — descartadas (argumentos incompletos)`);
+            const toolCalls: ToolCall[] = [...ferramentas.entries()].filter(([, f]) => f.completa).sort((x, y) => x[0] - y[0]).map(([, f]) => ({
                 id: f.id ?? `call_${Date.now()}`,
                 name: f.name,
                 arguments: (() => { try { return JSON.parse(f.json || '{}') as Record<string, unknown>; } catch { return {}; } })(),
