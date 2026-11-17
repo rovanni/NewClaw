@@ -281,10 +281,16 @@ Corrigido no mesmo ramo, com cobertura no S488:
 - O script grava a prévia mesmo que uma skill lance exceção, e o `--aplicar` informa e sai com erro quando uma skill
   não é gravada.
 
-Fica registrado, fora deste ramo:
-- O planejador (`discoverSkills(...).all` em `GoalExecutionLoop` e `getSkillContextForQuery`) ainda inclui skills por
-  palavra de etiqueta e de descrição (`byCapability`). É a mesma classe de defeito, do lado do planejador; entra na
-  medição da Etapa 2 e na decisão D3.
-- `SkillLearner.scoreSkillMatch` (skills só no banco, `file_exported = 0`) usa o campo como regex de substring, sem a
-  fronteira nem o acento da regra do arquivo. Hoje só alcança os padrões antigos que nunca foram exportados.
-- O painel mostra o campo `trigger` cru: no formato novo aparecem `\.` e `|` no lugar da lista de frases.
+Os três pontos que ficariam para depois também foram resolvidos no ramo (a operadora: "nunca deixa erro para trás"):
+- **Planejador (D5, decidida pela operadora em 17/11):** `discoverSkills(...).all` também incluía skills por palavra
+  de etiqueta e de descrição (`byCapability`, Sprint 3.7A). Medido nas 443 mensagens: até 26 skills por mensagem (p90 6),
+  puxadas por "quando" (185 mensagens), "arquivo" (99), "para" (54). O planejador já recebe o catálogo inteiro (nome +
+  descrição). Decisão: só frase, como o agente. Saíram `inferCapabilities`, `expandSkillCapabilities`,
+  `matchSkillByCapabilities`, `normalizeToken` e as etiquetas derivadas do nome (`deriveTagsFromSkill`), que só serviam
+  a esse casamento; `discoverSkills` devolve as skills casadas por gatilho. O texto ao planejador virou fato ("Skills
+  cujos gatilhos aparecem no pedido: …") no lugar de ordem ("Priorize-as"). S383 reescrito: os casos de etiqueta da
+  Sprint 3.7A agora verificam que a skill não vem sem o gatilho.
+- **Caminho do banco:** `scoreSkillMatch` usa `campoCasa` — formato novo pela mesma regra de frase do arquivo; regex
+  escrita à mão (skills antigas só no banco) continua regex.
+- **Painel:** conferido que nenhuma tela lê o campo `trigger` (`SkillsView.js` mostra nome, descrição, prioridade,
+  ferramentas e situação; o `/skills` também não o mostra). O achado não se confirmou; nada a mudar.

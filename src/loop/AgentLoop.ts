@@ -1526,36 +1526,15 @@ export class AgentLoop {
     /**
      * Returns the skill context relevant to the given query text.
      * Used by GoalOrchestrator to inject skill instructions into GoalPlanner.
-     *
-     * Combina dois mecanismos (Sprint 3.7A):
-     *   1. Trigger match (original — mantido sem alteração)
-     *   2. Capability match (novo — usa tags normalizadas via SkillDiscovery)
+     * ADR-040: a mesma regra do turno do agente — gatilho em frase (`discoverSkills`). O casamento por palavra de etiqueta
+     * (Sprint 3.7A) saiu; o planejador já recebe o catálogo de todas as skills e escolhe por ele.
      */
     public getSkillContextForQuery(query: string): string {
         const { discoverSkills } = require('../skills/SkillDiscovery') as typeof import('../skills/SkillDiscovery');
-        const skills = this.skillLoader.loadAll();
-        const discovery = discoverSkills(skills, query);
-
-        // Log para observabilidade
-        if (discovery.byTrigger.length > 0) {
-            for (const s of discovery.byTrigger) {
-                log.info(`[SKILL-MATCH] query="${query.slice(0, 60)}" skill=${s.name} matched_by=trigger`);
-            }
-        }
-        if (discovery.byCapability.length > 0) {
-            for (const m of discovery.byCapability) {
-                log.info(
-                    `[SKILL-MATCH] query="${query.slice(0, 60)}"` +
-                    ` skill=${m.skillName}` +
-                    ` matched_by=tag` +
-                    ` score=${m.score.toFixed(2)}` +
-                    ` terms=${m.matchedTerms.join(',')}`
-                );
-            }
-        }
-
-        if (discovery.all.length === 0) return '';
-        return discovery.all
+        const casadas = discoverSkills(this.skillLoader.loadAll(), query);
+        for (const s of casadas) log.info(`[SKILL-MATCH] query="${query.slice(0, 60)}" skill=${s.name} matched_by=trigger`);
+        if (casadas.length === 0) return '';
+        return casadas
             .map(s => `### SKILL: ${s.name}\n${s.globalContent || s.content}`)
             .join('\n\n');
     }
@@ -3844,10 +3823,10 @@ export class AgentLoop {
 
         const manualSkills = this.skillLoader.loadAll();
         // S149: matching por trigger unificado com SkillDiscovery.matchSkillByTrigger() (mesma
-        // lógica que estava duplicada inline aqui). Usa só `.byTrigger`, nunca `.all` —
-        // `.all` incluiria matches por capacidade/tag que este call site nunca considerou.
+        // lógica que estava duplicada inline aqui). ADR-040: gatilho em frase; é a única regra (o
+        // casamento por capacidade/tag, que este call site nunca usou, saiu do SkillDiscovery).
         const { discoverSkills } = require('../skills/SkillDiscovery') as typeof import('../skills/SkillDiscovery');
-        const matchedManual = discoverSkills(manualSkills, userText).byTrigger;
+        const matchedManual = discoverSkills(manualSkills, userText);
         if (matchedManual.length > 0) {
             // Usa conteúdo completo (com seções TASK_ONLY) apenas quando a skill é a
             // tarefa primária do turno — alta confiança e intent diretamente relacionada.

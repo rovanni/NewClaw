@@ -30,7 +30,7 @@
 
 import { pastaDaSkill } from '../shared/pastaDaSkill';
 import { marcarCaminhos, pastasDaInstalacao, resumoDoCorpo } from '../skills/SkillLoader';
-import { campoDeGatilhos, comLinhaDeGatilhos, frasesDoCampoDeGatilhos } from '../skills/SkillDiscovery';
+import { campoCasa, campoDeGatilhos, comLinhaDeGatilhos, frasesDoCampoDeGatilhos } from '../skills/SkillDiscovery';
 import { configuracaoDoSync, idDaInstalacao, nomeDaSubpasta } from '../core/syncAgent';
 import { caminhosDaInstalacao } from '../core/backupDoConhecimento';
 import fs from 'fs';
@@ -674,12 +674,8 @@ export class SkillLearner {
     }
 
     private scoreSkillMatch(skill: Skill, lowerInput: string): SkillMatch | null {
-        try {
-            const regex = new RegExp(skill.trigger, 'i');
-            if (!regex.test(lowerInput)) return null;
-        } catch {
-            return null;
-        }
+        // ADR-040: a mesma regra do arquivo para o formato novo (frase inteira); regex antiga continua regex.
+        if (!campoCasa(skill.trigger, lowerInput)) return null;
 
         const priorityScore = Math.min(0.2, Math.max(0, skill.priority) / 10 * 0.2);
         const usageScore = Math.min(0.1, Math.log10(skill.hits + 1) * 0.08);
@@ -1007,22 +1003,17 @@ export class SkillLearner {
     }
 
     /**
-     * Generates the SKILL.md content for a skill.
-     * Includes triggers (extracted from regex) and tags (derived from source_pattern and tool)
-     * so SkillDiscovery's semantic matching can work on auto-skills without extra configuration.
+     * Generates the SKILL.md content for a skill: triggers (as frases — ADR-040) and tools.
+     * ADR-040: sem `tags` derivadas do nome/origem. Elas só alimentavam o casamento por palavra de etiqueta
+     * (`byCapability`), que saiu: "aprendida", "trajetoria", "consulta", "agenda" casavam por palavra solta.
      */
     private buildSkillMd(skill: Skill): string {
         const keywords = frasesDoCampoDeGatilhos(skill.trigger);
         const tools = this.parseToolSequence(skill.tool_sequence);
-        const tags = this.deriveTagsFromSkill(skill);
 
         const lines: string[] = ['---', `name: ${skill.name}`, `description: ${skill.description}`];
         if (keywords.length > 0) lines.push(`triggers: ${keywords.join(',')}`);
         if (tools.length > 0) lines.push(`tools: ${tools.join(',')}`);
-        if (tags.length > 0) {
-            lines.push('tags:');
-            tags.forEach(t => lines.push(`  - ${t}`));
-        }
         // ADR-035: linhas planas; campo vazio fica de fora (desconhecido). Só a skill com a origem conhecida declara o formato.
         if (skill.sistema_origem) {
             lines.push(`sistema_origem: ${skill.sistema_origem}`);
@@ -1060,24 +1051,6 @@ export class SkillLearner {
         this.db.prepare(`UPDATE auto_skills SET trigger = ?, updated_at = ? WHERE id = ?`).run(novo, new Date().toISOString(), id);
         log.info(`[SKILL-GATILHOS] "${skill.name}" gatilhos trocados: ${JSON.stringify(anterior)} → ${JSON.stringify(novo)}`);
         return anterior;
-    }
-
-    /**
-     * Derives semantic tags for a skill based on its source metadata.
-     * These tags enable SkillDiscovery's capability-based matching for auto-skills.
-     */
-    private deriveTagsFromSkill(skill: Skill): string[] {
-        const tags: string[] = [];
-        if (skill.source_pattern) tags.push(skill.source_pattern.replace(/_/g, '-'));
-        if (skill.source_tool) tags.push(skill.source_tool.replace(/_/g, '-'));
-        const nameWords = skill.name
-            .toLowerCase()
-            .normalize('NFD')
-            .replace(/[̀-ͯ]/g, '')
-            .split(/\s+/)
-            .filter(w => w.length >= 4);
-        tags.push(...nameWords.slice(0, 3));
-        return [...new Set(tags)];
     }
 
     /**

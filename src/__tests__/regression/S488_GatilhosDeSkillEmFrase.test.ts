@@ -21,7 +21,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import Database from 'better-sqlite3';
-import { gatilhoCasa, matchSkillByTrigger, campoDeGatilhos, frasesDoCampoDeGatilhos, comLinhaDeGatilhos } from '../../skills/SkillDiscovery';
+import { gatilhoCasa, matchSkillByTrigger, campoDeGatilhos, frasesDoCampoDeGatilhos, comLinhaDeGatilhos, campoCasa } from '../../skills/SkillDiscovery';
 import { SkillLoader, type Skill } from '../../skills/SkillLoader';
 import { SkillLearner } from '../../loop/SkillLearner';
 import { blocoDeSkillsNoLimite, estimateTokens, ContextBudget } from '../../loop/ContextBuilder';
@@ -59,6 +59,12 @@ async function main(): Promise<void> {
     assert(regexOk, 'o campo continua sendo regex válida e casa as frases (caminho do banco, scoreSkillMatch)', campo);
     const antiga = frasesDoCampoDeGatilhos('(clima|tempo|temperatura|previs[aã]o|chovendo)');
     assert(antiga.includes('clima') && antiga.includes('previs') && antiga.includes('tempo') && !antiga.some(p => /[()[\]]/.test(p)), 'regex escrita à mão (formato antigo): sai em palavras, sem metacaractere', antiga);
+    // Caminho do banco (SkillLearner.scoreSkillMatch): o formato novo segue a MESMA regra de frase; regex antiga segue regex.
+    assert(campoCasa(campoDeGatilhos(['o que tenho hoje', 'minha agenda']), 'oi, o que tenho hoje?') && !campoCasa(campoDeGatilhos(['rea']), 'qual a área?'),
+        'campo novo no banco: frase inteira, sem casar dentro de outra palavra (antes: new RegExp como substring)');
+    assert(campoCasa(campoDeGatilhos(['como está minha agenda']), 'como esta minha agenda'), 'campo novo no banco: sem diferença de acento');
+    assert(campoCasa('(pre[cç]o|cota[cç][aã]o).*(bitcoin|btc)', 'qual o preço do btc hoje') && !campoCasa('(abc', 'abc') && !campoCasa('', 'x'),
+        'regex escrita à mão continua regex; inválida ou vazia não casa');
     const misto = frasesDoCampoDeGatilhos('(bitcoin|ai|x1|ethereum)');
     assert(JSON.stringify(misto) === JSON.stringify(['bitcoin', 'ethereum']), 'regex antiga: o campo inteiro segue a regra de antes (3+ letras), também nos membros sem metacaractere', misto);
     const md = '---\r\nname: x\r\ndescription: d\r\ntriggers:\r\n  - a\r\n  - b\r\ntools: read\r\n---\r\ncorpo $1\r\n';

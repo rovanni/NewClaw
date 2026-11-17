@@ -1,156 +1,18 @@
 /**
- * SkillDiscovery — Inferência de capacidades e matching de skills por domínio.
+ * SkillDiscovery — quais skills servem a um pedido, pelos gatilhos delas (ADR-040).
  *
- * Propósito:
- *   Separar a linguagem do usuário (ex: "criar apresentação para aula")
- *   das capacidades do domínio (ex: "presentation", "slides", "education").
+ * Um gatilho é uma FRASE que a pessoa escreveria ("o que tenho hoje"); casa inteira, com fronteira de palavra e sem
+ * diferença de acento. É a única regra de escolha por texto: o agente (AgentLoop), o planejador (GoalOrchestrator →
+ * getSkillContextForQuery, GoalExecutionLoop) e o RiskAnalyzer usam esta mesma função.
  *
- * Abordagem:
- *   1. Normalizar os tokens do objetivo (sem acentos, stemming leve PT-BR)
- *   2. Normalizar os tokens das tags e descrição de cada skill
- *   3. Calcular interseção → match por capacidade
- *
- * Critérios de design:
- *   - Zero dependências externas
- *   - Zero embeddings ou vetores
- *   - Zero LLM calls
- *   - Zero regras hardcoded por domínio
- *   - Funciona para qualquer skill que tenha `tags` definidas
- *   - Skills sem `tags` continuam sendo descobertas apenas por triggers (comportamento anterior)
+ * Saiu em 17/11/2026 (ADR-040, decisão da operadora) o casamento por palavra de etiqueta e de descrição
+ * (`byCapability`, Sprint 3.7A): nas 443 mensagens reais medidas ele trazia até 26 skills (p90 6), puxadas por "quando",
+ * "arquivo", "para" — heurística escolhendo o que o LLM vê. O planejador já recebe o catálogo inteiro (nome + descrição
+ * de todas as skills) e escolhe por ele.
  */
 
 import type { Skill } from './SkillLoader';
 import { keywordBoundaryMatches } from '../shared/keywordBoundary';
-
-// ── Resultado de matching ─────────────────────────────────────────────────────
-
-export interface SkillMatch {
-    skillName: string;
-    score: number;          // 0..1 — fração das capacidades do objetivo cobertas pela skill
-    matchedTerms: string[]; // tokens normalizados que fizeram match
-    matchedBy: 'trigger' | 'tag' | 'description';
-}
-
-// ── Normalização ──────────────────────────────────────────────────────────────
-
-/**
- * Normaliza um único token:
- *   1. Remove diacríticos (é→e, ã→a, ç→c)
- *   2. Lowercase
- *   3. Stemming leve para PT-BR (remove sufixos comuns)
- *
- * Não usa bibliotecas externas — implementado explicitamente para evitar
- * dependências e manter comportamento previsível e testável.
- */
-export function normalizeToken(t: string): string {
-    const ascii = t
-        .normalize('NFD')
-        .replace(/[̀-ͯ]/g, '') // remove combining diacritics
-        .toLowerCase()
-        .replace(/[^a-z0-9]/g, '');      // mantém apenas alfanumérico
-
-    if (ascii.length < 3) return ascii;
-
-    // Stemming leve: sufixos PT-BR mais comuns
-    // Ordem importa: mais específico primeiro
-    return ascii
-        .replace(/coes$/, 'cao')       // apresentações → apresentacao (dedup com ões)
-        .replace(/oes$/, 'ao')         // aviões → aviao
-        .replace(/amento(s)?$/, 'ament') // tratamentos → tratament
-        .replace(/imento(s)?$/, 'iment') // documentos ficam como document se padrao
-        .replace(/mente$/, '')          // facilmente → facil
-        .replace(/cao(s)?$/, 'cao')    // criações → criacao (idempotente)
-        .replace(/([aeiou])s$/, '$1'); // slides → slide, tags → tag, aulas → aula
-}
-
-/**
- * Infere capacidades do objetivo do usuário.
- * Extrai tokens normalizados com comprimento mínimo de 4 chars.
- *
- * "criar slides html para aula" → {"criar", "slide", "html", "para", "aula"}
- *
- * Tokens com < 4 chars são excluídos (artigos, preposições, etc.)
- */
-export function inferCapabilities(text: string): Set<string> {
-    const tokens = text
-        .normalize('NFD')
-        .replace(/[̀-ͯ]/g, '')
-        .toLowerCase()
-        .split(/[\W_]+/)
-        .map(t => t.trim())
-        .filter(t => t.length >= 4)
-        .map(normalizeToken)
-        .filter(t => t.length >= 3); // após normalização, mínimo 3
-
-    return new Set(tokens);
-}
-
-/**
- * Expande as capacidades de uma skill: tags + tokens da descrição.
- * Tags têm peso primário; descrição serve como fallback mais rico.
- */
-export function expandSkillCapabilities(skill: Skill): Set<string> {
-    const terms = new Set<string>();
-
-    // Tags são o sinal primário de capacidade
-    for (const tag of skill.tags ?? []) {
-        for (const part of tag.split(/[-_\s]+/)) {
-            const n = normalizeToken(part);
-            if (n.length >= 3) terms.add(n);
-        }
-    }
-
-    // Descrição como fallback (menos estrito — só tokens longos)
-    const descTokens = skill.description
-        .normalize('NFD')
-        .replace(/[̀-ͯ]/g, '')
-        .toLowerCase()
-        .split(/\W+/)
-        .filter(t => t.length >= 5)
-        .map(normalizeToken)
-        .filter(t => t.length >= 4);
-
-    for (const t of descTokens) terms.add(t);
-
-    return terms;
-}
-
-// ── Matching ──────────────────────────────────────────────────────────────────
-
-/**
- * Calcula o match entre um objetivo e uma skill por capacidades.
- * Retorna null se não há interseção.
- */
-export function matchSkillByCapabilities(
-    skill: Skill,
-    goalCapabilities: Set<string>,
-): SkillMatch | null {
-    if (goalCapabilities.size === 0) return null;
-    if (!skill.tags || skill.tags.length === 0) return null; // sem tags = apenas trigger match
-
-    const skillTerms = expandSkillCapabilities(skill);
-    const matched: string[] = [];
-
-    for (const cap of goalCapabilities) {
-        if (skillTerms.has(cap)) {
-            matched.push(cap);
-        }
-    }
-
-    if (matched.length === 0) return null;
-
-    // Score: fração do vocabulário do objetivo coberta pela skill
-    // Normalizado por max(capabilities, 6) para evitar que objetivos longos
-    // penalizem skills (um objetivo de 20 tokens não precisa ter 20 matches)
-    const score = matched.length / Math.min(goalCapabilities.size, 6);
-
-    return {
-        skillName: skill.name,
-        score: Math.min(score, 1),
-        matchedTerms: matched,
-        matchedBy: (skill.tags ?? []).length > 0 ? 'tag' : 'description',
-    };
-}
 
 // ── Gatilhos (ADR-040) ────────────────────────────────────────────────────────
 
@@ -199,6 +61,44 @@ export function campoDeGatilhos(frases: string[]): string {
     return frases.map(f => f.trim()).filter(Boolean).map(f => f.replace(METACARACTERES, '\\$&')).join('|');
 }
 
+/** As partes de um campo `trigger`, separadas pelos `|` sem escape (o escape fica na parte). */
+function partesDoCampo(campo: string): string[] {
+    const partes: string[] = [];
+    let atual = '';
+    for (let i = 0; i < campo.length; i++) {
+        const c = campo[i];
+        if (c === '\\' && i + 1 < campo.length) { atual += c + campo[++i]; continue; }
+        if (c === '|') { partes.push(atual); atual = ''; continue; }
+        atual += c;
+    }
+    partes.push(atual);
+    return partes;
+}
+
+/** Forma do campo: tem metacaractere de regex sem escape → regex escrita à mão (formato antigo). O formato novo nunca tem. */
+function ehRegexAntiga(campo: string): boolean {
+    for (let i = 0; i < campo.length; i++) {
+        if (campo[i] === '\\') { i++; continue; }
+        if (METACARACTER_DE_REGEX.includes(campo[i])) return true;
+    }
+    return false;
+}
+
+/**
+ * ADR-040 — um campo `trigger` do banco casa com o texto? Formato novo: as frases, pela MESMA regra do SKILL.md
+ * (`gatilhoCasa`: frase inteira, fronteira de palavra, sem diferença de acento). Regex escrita à mão (formato antigo, das
+ * skills que só vivem no banco, como `(pre[cç]o).*(btc)`): continua avaliada como regex, porque é o que ela é.
+ * Regex inválida: não casa.
+ */
+export function campoCasa(campo: string, texto: string): boolean {
+    if (!campo.trim()) return false;
+    if (ehRegexAntiga(campo)) {
+        try { return new RegExp(campo, 'i').test(texto); } catch { return false; }
+    }
+    const t = textoSemAcento(texto);
+    return frasesDoCampoDeGatilhos(campo).some(f => casaNormalizado(t, f));
+}
+
 /**
  * ADR-040 (D2): o mesmo SKILL.md com a linha `triggers:` do cabeçalho trocada pelas frases (lista plana separada por
  * vírgula, ADR-035). Sem a linha, ela entra logo depois de `description:`. O resto do arquivo (corpo, outros campos,
@@ -221,32 +121,16 @@ export function comLinhaDeGatilhos(skillMd: string, frases: string[]): string {
 }
 
 /**
- * As frases de um campo `trigger`. Partes com metacaractere de regex sem escape são do formato antigo (regex escrita à mão,
- * como `(clima|tempo)` ou `(pre[cç]o).*(btc)`): dessas saem as palavras, como antes (`extractTriggerKeywords`), porque não
+ * As frases de um campo `trigger`. Campo com metacaractere de regex sem escape é do formato antigo (regex escrita à mão,
+ * como `(clima|tempo)` ou `(pre[cç]o).*(btc)`): dele saem as palavras, como antes (`extractTriggerKeywords`), porque não
  * há frase a recuperar. Um campo antigo de palavras separadas por espaço (ADR-017 até 17/11/2026) não tem como ser
  * separado sem adivinhar: volta como UMA frase, e a migração da ADR-040 (D2) regenera os gatilhos dessas skills.
  */
 export function frasesDoCampoDeGatilhos(campo: string): string[] {
-    const partes: string[] = [];
-    let atual = '';
-    for (let i = 0; i < campo.length; i++) {
-        const c = campo[i];
-        if (c === '\\' && i + 1 < campo.length) { atual += c + campo[++i]; continue; }
-        if (c === '|') { partes.push(atual); atual = ''; continue; }
-        atual += c;
-    }
-    partes.push(atual);
-
-    const temMetacaracterSemEscape = (parte: string): boolean => {
-        for (let i = 0; i < parte.length; i++) {
-            if (parte[i] === '\\') { i++; continue; }
-            if (METACARACTER_DE_REGEX.includes(parte[i])) return true;
-        }
-        return false;
-    };
+    const partes = partesDoCampo(campo);
     // O formato novo nunca tem metacaractere sem escape. Basta uma parte com um para o campo inteiro ser regex antiga:
     // aí vale a extração de antes, no campo todo (palavras com 3+ letras, sem número, até 10).
-    if (partes.some(temMetacaracterSemEscape)) {
+    if (ehRegexAntiga(campo)) {
         return [...new Set(campo
             .replace(/\[[^\]]*\]/g, ' ')
             .replace(/[().*+?^${}|\\[\]]/g, ' ')
@@ -257,58 +141,8 @@ export function frasesDoCampoDeGatilhos(campo: string): string[] {
 }
 
 /**
- * Ponto de entrada principal: descobre skills relevantes para um objetivo.
- *
- * Combina dois mecanismos:
- *   1. Trigger match (comportamento original — mantido sem alteração)
- *   2. Capability match (novo — baseado em tags normalizadas)
- *
- * Skills são deduplicadas (trigger match + capability match = um único resultado).
+ * As skills cujos gatilhos (frases) aparecem no texto, na ordem em que vieram. Mesma regra para o agente e o planejador.
  */
-export function discoverSkills(
-    skills: Skill[],
-    query: string,
-    options: { minScore?: number } = {},
-): {
-    byTrigger: Skill[];
-    byCapability: SkillMatch[];
-    all: Skill[];
-} {
-    const minScore = options.minScore ?? 0.15;
-    const byTrigger: Skill[] = [];
-    const byCapability: SkillMatch[] = [];
-    const triggerNames = new Set<string>();
-
-    // Passo 1: trigger match (original)
-    for (const skill of skills) {
-        if (matchSkillByTrigger(skill, query)) {
-            byTrigger.push(skill);
-            triggerNames.add(skill.name);
-        }
-    }
-
-    // Passo 2: capability match (novo)
-    const capabilities = inferCapabilities(query);
-    for (const skill of skills) {
-        if (triggerNames.has(skill.name)) continue; // já matched por trigger
-        const match = matchSkillByCapabilities(skill, capabilities);
-        if (match && match.score >= minScore) {
-            byCapability.push(match);
-        }
-    }
-
-    // Ordenar capability matches por score desc
-    byCapability.sort((a, b) => b.score - a.score);
-
-    // Skills por capability (para montar lista unificada)
-    const capabilitySkillMap = new Map<string, Skill>(
-        byCapability.map(m => [m.skillName, skills.find(s => s.name === m.skillName)!])
-    );
-
-    const all = [
-        ...byTrigger,
-        ...byCapability.map(m => capabilitySkillMap.get(m.skillName)!).filter(Boolean),
-    ];
-
-    return { byTrigger, byCapability, all };
+export function discoverSkills(skills: Skill[], query: string): Skill[] {
+    return skills.filter(skill => matchSkillByTrigger(skill, query));
 }
