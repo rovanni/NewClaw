@@ -51,6 +51,8 @@ async function main(): Promise<void> {
 
     const comBom = Buffer.from('﻿olá', 'utf8');
     assert(exec.decodificarSaidaDoConsole(comBom, pagina) === comBom.toString('utf8'), 'atalho UTF-8 válido: mesmo texto do toString, BOM incluído');
+    // Limite conhecido, preso aqui para não virar surpresa: bytes da página que por acaso formam UTF-8 válido são lidos como UTF-8.
+    assert(exec.decodificarSaidaDoConsole(Buffer.from([0xE4, 0x88, 0x81]), pagina) === '䈁', 'limite documentado: E4 88 81 (em 850, "õêü" colados) é UTF-8 válido e fica "䈁"');
     const fonte = fs.readFileSync(path.join(__dirname, '../../tools/exec_command.ts'), 'utf-8');
     assert(/const pagina = isSsh \? undefined : fatosDoAmbiente\(\)\.paginaDoConsole/.test(fonte), 'ssh://: a saída de outra máquina não passa pela página do console local');
 
@@ -65,25 +67,36 @@ async function main(): Promise<void> {
         if (medida && medida.codigo !== 65001) assert(medida.altos?.length === 128, 'página de 1 byte: a tradução dos 128 bytes altos foi pedida ao sistema', medida);
 
         console.log('\n=== S484-3 — execução real no cmd.exe ===');
-        const tool = new exec.ExecCommandTool();
-        amb.registrarAmbiente({ ...amb.fatosBasicos(), paginaDoConsole: medida });
-        const pasta = path.join(WS, 'Computação');
-        fs.mkdirSync(pasta);
-        fs.writeFileSync(path.join(pasta, 'ação.txt'), 'x');
-        const eco = await tool.execute({ command: 'echo não ação — Informática', shell: 'cmd' });
-        assert(eco.success && eco.output.includes('não ação') && eco.output.includes('Informática') && !eco.output.includes('�'), 'echo do cmd: acentos corretos, sem "�"', eco.output);
-        const dir = await tool.execute({ command: `dir /b "${pasta}"`, shell: 'cmd' });
-        assert(dir.success && dir.output.trim() === 'ação.txt', 'dir do cmd: nome de arquivo acentuado correto', dir.output);
-        const erro = await tool.execute({ command: `dir "${path.join(WS, 'não-existe')}"`, shell: 'cmd' });
-        assert(!erro.success && !(erro.output + (erro.error ?? '')).includes('�'), 'mensagem de erro do cmd (em português) sem "�"', erro.output || erro.error);
-        const py = await tool.execute({ command: 'python -c "print(\'Computação ✓\')" & echo não', shell: 'cmd' });
-        if (py.success) assert(py.output.includes('Computação ✓') && py.output.includes('não'), 'Python (UTF-8) e cmd (página) no mesmo comando: os dois corretos', py.output);
-        else console.log('  (python não disponível nesta máquina — caso misto real não rodado)');
+        // Os acentos do teste saem da PÁGINA MEDIDA: o cmd.exe só consegue escrever o que a página dele tem (CI 17/11/2026, página
+        // 437 em inglês: não existe "ã", e o próprio cmd escreve "nao" — fato do sistema, não da leitura).
+        const candidatos = ['ç', 'é', 'á', 'ã', 'õ', 'ê', 'ü', 'ñ'];
+        // Separados por espaço, como em palavras: colados, alguns bytes da página formam UTF-8 válido por acaso (em 850, "õêü" =
+        // E4 88 81 = "䈁") — o limite documentado em decodificarSaidaDoConsole, coberto no caso abaixo.
+        const acentos = medida?.altos ? candidatos.filter(c => medida.altos!.includes(c)).join(' ') : '';
+        console.log(`  (acentos que a página ${medida?.codigo} tem, entre os do teste: "${acentos}")`);
+        if (acentos.replace(/ /g, '').length < 2) {
+            assert(medida?.codigo === 65001 || !medida?.altos, 'sem acentos comuns na página medida: só aceitável se a página for UTF-8 ou não tiver tabela', medida);
+        } else {
+            const tool = new exec.ExecCommandTool();
+            amb.registrarAmbiente({ ...amb.fatosBasicos(), paginaDoConsole: medida });
+            const pasta = path.join(WS, `pasta${acentos}`);
+            fs.mkdirSync(pasta);
+            fs.writeFileSync(path.join(pasta, `arquivo${acentos}.txt`), 'x');
+            const eco = await tool.execute({ command: `echo texto ${acentos} fim`, shell: 'cmd' });
+            assert(eco.success && eco.output.includes(`texto ${acentos} fim`) && !eco.output.includes('�'), 'echo do cmd: acentos corretos, sem "�"', eco.output);
+            const dir = await tool.execute({ command: `dir /b "${pasta}"`, shell: 'cmd' });
+            assert(dir.success && dir.output.trim() === `arquivo${acentos}.txt`, 'dir do cmd: nome de arquivo acentuado correto', dir.output);
+            const erro = await tool.execute({ command: `dir "${path.join(WS, 'nao-existe')}"`, shell: 'cmd' });
+            assert(!erro.success && !(erro.output + (erro.error ?? '')).includes('�'), 'mensagem de erro do cmd (no idioma do sistema) sem "�"', erro.output || erro.error);
+            const py = await tool.execute({ command: `python -c "print('Computação ✓')" & echo ${acentos}`, shell: 'cmd' });
+            if (py.success) assert(py.output.includes('Computação ✓') && py.output.includes(acentos), 'Python (UTF-8) e cmd (página) no mesmo comando: os dois corretos', py.output);
+            else console.log('  (python não disponível nesta máquina — caso misto real não rodado)');
 
-        // Controle: sem a medição, a MESMA saída volta quebrada — o teste detecta o defeito antigo.
-        amb.registrarAmbiente({ ...amb.fatosBasicos() });
-        const semMedida = await tool.execute({ command: 'echo não', shell: 'cmd' });
-        if (medida?.altos) assert(semMedida.output.includes('�'), 'controle: sem a página medida, "não" volta como "n�o" (o defeito que este teste pega)', semMedida.output);
+            // Controle: sem a medição, a MESMA saída volta quebrada — o teste detecta o defeito antigo.
+            amb.registrarAmbiente({ ...amb.fatosBasicos() });
+            const semMedida = await tool.execute({ command: `echo ${acentos}`, shell: 'cmd' });
+            assert(semMedida.output.includes('�'), 'controle: sem a página medida, os acentos voltam como "�" (o defeito que este teste pega)', semMedida.output);
+        }
     }
 
     fs.rmSync(WS, { recursive: true, force: true });
