@@ -49,6 +49,11 @@ async function main(): Promise<void> {
     const cortado = Buffer.from([0x61, 0xE2, 0x80]);   // começo de "—" sem o último byte
     assert(exec.decodificarSaidaDoConsole(cortado, pagina) === 'a??', 'sequência UTF-8 incompleta no fim não vira caractere inventado (cada byte pela tabela)', exec.decodificarSaidaDoConsole(cortado, pagina));
 
+    const comBom = Buffer.from('﻿olá', 'utf8');
+    assert(exec.decodificarSaidaDoConsole(comBom, pagina) === comBom.toString('utf8'), 'atalho UTF-8 válido: mesmo texto do toString, BOM incluído');
+    const fonte = fs.readFileSync(path.join(__dirname, '../../tools/exec_command.ts'), 'utf-8');
+    assert(/const pagina = isSsh \? undefined : fatosDoAmbiente\(\)\.paginaDoConsole/.test(fonte), 'ssh://: a saída de outra máquina não passa pela página do console local');
+
     console.log('\n=== S484-2 — medição real da página ===');
     const medida = await amb.medirPaginaDoConsole();
     assert(await amb.medirPaginaDoConsole('linux') === undefined, 'fora do Windows: não medida (undefined)');

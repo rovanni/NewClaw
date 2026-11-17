@@ -297,6 +297,9 @@ export function translateWcForPowerShell(command: string): string {
     return out;
 }
 
+/** Atalho: a saída inteira já é UTF-8 (o caso comum) não precisa do laço byte a byte. `ignoreBOM`: o BOM fica, como no toString. */
+const UTF8_ESTRITO = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
+
 /** Tamanho da sequência UTF-8 bem formada que começa em `i` (1–4), ou 0 se ali não começa uma (regras do padrão WHATWG). */
 function sequenciaUtf8(b: Buffer, i: number): number {
     const c = b[i];
@@ -324,6 +327,7 @@ function sequenciaUtf8(b: Buffer, i: number): number {
 export function decodificarSaidaDoConsole(bytes: Buffer, pagina: PaginaDoConsole | undefined = fatosDoAmbiente().paginaDoConsole): string {
     const altos = pagina?.altos;
     if (!altos || altos.length !== 128) return bytes.toString('utf8');
+    try { return UTF8_ESTRITO.decode(bytes); } catch { /* há byte que não forma UTF-8: segue byte a byte */ }
     let texto = '';
     let inicio = 0;
     let i = 0;
@@ -822,7 +826,9 @@ export class ExecCommandTool implements ToolExecutor {
                 filho.stderr?.on('data', guardar(saidaDeErro));
                 // Mesma composição de antes: a saída padrão e, depois, a de erro (é nela que vem o CLIXML do PowerShell).
                 // Cada fluxo é lido inteiro (um caractere de vários bytes pode chegar partido entre dois pedaços).
-                const saidaAteAgora = () => decodeClixmlError(decodificarSaidaDoConsole(Buffer.concat(saidaPadrao)) + decodificarSaidaDoConsole(Buffer.concat(saidaDeErro)));
+                // ssh://: a saída vem de OUTRA máquina — a página medida é a do console local, não vale para ela.
+                const pagina = isSsh ? undefined : fatosDoAmbiente().paginaDoConsole;
+                const saidaAteAgora = () => decodeClixmlError(decodificarSaidaDoConsole(Buffer.concat(saidaPadrao), pagina) + decodificarSaidaDoConsole(Buffer.concat(saidaDeErro), pagina));
 
                 let encerrado = false;
                 let estourouPrazo = false;
