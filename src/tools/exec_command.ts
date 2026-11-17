@@ -18,7 +18,7 @@ import { extractVerifiedArtifacts } from '../loop/planning/artifactContract';
 import { amostradorDaPlataforma, AmostraDeAtividade } from './atividadeDoProcesso';
 import { sinalDoTurno, aguardarComandos } from '../shared/turnCancellation';
 import { registroDeProcessos, ProcessoRegistrado } from './registroDeProcessos';
-import { fatosDoAmbiente, shellsDisponiveis, type ShellDeclaravel } from '../shared/ambienteDeExecucao';
+import { fatosDoAmbiente, shellsDisponiveis, type ShellDeclaravel, type PaginaDoConsole } from '../shared/ambienteDeExecucao';
 
 const log = createLogger('ExecCommandTool');
 
@@ -295,6 +295,50 @@ export function translateWcForPowerShell(command: string): string {
     let out = command.replace(/\bwc\s+-l\s+([^\s;&|]+)/gi, '(Get-Content $1 | Measure-Object -Line).Lines');
     out = out.replace(/\bwc\s+-l\b/gi, 'Measure-Object -Line | Select-Object -ExpandProperty Lines');
     return out;
+}
+
+/** Atalho: a saída inteira já é UTF-8 (o caso comum) não precisa do laço byte a byte. `ignoreBOM`: o BOM fica, como no toString. */
+const UTF8_ESTRITO = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
+
+/** Tamanho da sequência UTF-8 bem formada que começa em `i` (1–4), ou 0 se ali não começa uma (regras do padrão WHATWG). */
+function sequenciaUtf8(b: Buffer, i: number): number {
+    const c = b[i];
+    if (c < 0x80) return 1;
+    let extras: number, min = 0x80, max = 0xBF;
+    if (c >= 0xC2 && c <= 0xDF) extras = 1;
+    else if (c >= 0xE0 && c <= 0xEF) { extras = 2; if (c === 0xE0) min = 0xA0; if (c === 0xED) max = 0x9F; }
+    else if (c >= 0xF0 && c <= 0xF4) { extras = 3; if (c === 0xF0) min = 0x90; if (c === 0xF4) max = 0x8F; }
+    else return 0;
+    if (i + extras >= b.length || b[i + 1] < min || b[i + 1] > max) return 0;
+    for (let k = 2; k <= extras; k++) if (b[i + k] < 0x80 || b[i + k] > 0xBF) return 0;
+    return extras + 1;
+}
+
+/**
+ * Lê a saída de um programa de console. No Windows, o cmd.exe e os programas que ele chama escrevem no pipe na página de código do
+ * console (850 numa máquina pt-BR), não em UTF-8 — e a saída era lida sempre como UTF-8: "não" virava "n�o" para o agente e para
+ * os juízes (produção, 03–16/11/2026: 52 de 104 julgamentos do juiz contra a evidência com "�"; 15 das 20 citações que não
+ * conferiram). Python e o PowerShell encaminhado já escrevem UTF-8, e um mesmo comando pode misturar as duas coisas
+ * (`dir & python script.py`). Por isso, byte a byte: o que é UTF-8 bem formado fica como está; um byte que não forma UTF-8 é lido
+ * pela página MEDIDA (`medirPaginaDoConsole`). Sem tabela medida (outro sistema, página UTF-8 ou de vários bytes, medição que
+ * falhou), a leitura continua sendo UTF-8, como antes — ninguém adivinha a página.
+ * Limite conhecido: dois bytes da página que por acaso formem UTF-8 válido (ex.: "├º" em 850) seriam lidos como UTF-8.
+ */
+export function decodificarSaidaDoConsole(bytes: Buffer, pagina: PaginaDoConsole | undefined = fatosDoAmbiente().paginaDoConsole): string {
+    const altos = pagina?.altos;
+    if (!altos || altos.length !== 128) return bytes.toString('utf8');
+    try { return UTF8_ESTRITO.decode(bytes); } catch { /* há byte que não forma UTF-8: segue byte a byte */ }
+    let texto = '';
+    let inicio = 0;
+    let i = 0;
+    while (i < bytes.length) {
+        const n = sequenciaUtf8(bytes, i);
+        if (n > 0) { i += n; continue; }
+        texto += bytes.subarray(inicio, i).toString('utf8') + altos[bytes[i] - 0x80];
+        i += 1;
+        inicio = i;
+    }
+    return texto + bytes.subarray(inicio).toString('utf8');
 }
 
 /**
@@ -781,7 +825,10 @@ export class ExecCommandTool implements ToolExecutor {
                 filho.stdout?.on('data', guardar(saidaPadrao));
                 filho.stderr?.on('data', guardar(saidaDeErro));
                 // Mesma composição de antes: a saída padrão e, depois, a de erro (é nela que vem o CLIXML do PowerShell).
-                const saidaAteAgora = () => decodeClixmlError(Buffer.concat(saidaPadrao).toString('utf8') + Buffer.concat(saidaDeErro).toString('utf8'));
+                // Cada fluxo é lido inteiro (um caractere de vários bytes pode chegar partido entre dois pedaços).
+                // ssh://: a saída vem de OUTRA máquina — a página medida é a do console local, não vale para ela.
+                const pagina = isSsh ? undefined : fatosDoAmbiente().paginaDoConsole;
+                const saidaAteAgora = () => decodeClixmlError(decodificarSaidaDoConsole(Buffer.concat(saidaPadrao), pagina) + decodificarSaidaDoConsole(Buffer.concat(saidaDeErro), pagina));
 
                 let encerrado = false;
                 let estourouPrazo = false;

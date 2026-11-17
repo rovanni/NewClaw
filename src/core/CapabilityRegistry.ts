@@ -27,7 +27,7 @@ import dns from 'dns';
 import os from 'os';
 import { promisify } from 'util';
 import { createLogger } from '../shared/AppLogger';
-import { fatosBasicos, registrarAmbiente, medirSondas } from '../shared/ambienteDeExecucao';
+import { fatosBasicos, registrarAmbiente, medirSondas, medirPaginaDoConsole } from '../shared/ambienteDeExecucao';
 import { EnvironmentProbe } from './EnvironmentProbe';
 import { which, probeCommand, CommandProbe, isWindows, linuxDistro, resolvePython3Runtime, defaultPython3Candidates, Python3Runtime } from '../utils/crossPlatform';
 
@@ -593,9 +593,12 @@ export class CapabilityRegistry {
         try {
             const data = this.probe.probeOS();
             // As consultas de sondasDoAmbiente.json (versão do PowerShell, distribuição, Python…) — executor genérico, sem LLM.
-            data.medidos = await medirSondas();
+            const [medidos, paginaDoConsole] = await Promise.all([medirSondas(), medirPaginaDoConsole()]);
+            data.medidos = medidos;
+            // Página de código do console (Windows): o exec_command lê a saída dos programas com ela.
+            if (process.platform === 'win32') log.info(`[Registry] página do console: ${paginaDoConsole ? `${paginaDoConsole.codigo}${paginaDoConsole.altos ? ' (tabela medida)' : paginaDoConsole.codigo === 65001 ? ' (UTF-8)' : ' (tabela não obtida — saída lida como UTF-8)'}` : 'não medida — saída lida como UTF-8'}`);
             // Agente (describeEnvironment) e juízes (motor único) leem a MESMA medição.
-            registrarAmbiente({ plataforma: process.platform, versao: data.versao, arquitetura: data.architecture, shell: data.shell, medidos: data.medidos, gerenciadorDePacotes: data.packageManager });
+            registrarAmbiente({ plataforma: process.platform, versao: data.versao, arquitetura: data.architecture, shell: data.shell, medidos: data.medidos, gerenciadorDePacotes: data.packageManager, paginaDoConsole });
             this.cache.os = { data, ts: Date.now() };
             log.debug(`[Registry] os refreshed: ${data.platform} ${data.architecture}`);
         } catch (err) {
