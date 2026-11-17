@@ -1036,6 +1036,28 @@ export class SkillLearner {
     }
 
     /**
+     * ADR-040: as skills ativas que NÃO vieram de trajetória — os padrões antigos (`SKILL_DEFS` e "Padrão aprendido
+     * automaticamente"), com gatilho de regex ou de palavra solta ("check|emails"). Também entram na regeração.
+     */
+    skillsAntigasAtivas(): Skill[] {
+        return this.db.prepare(`SELECT * FROM auto_skills WHERE status = 'active' AND (source_tool IS NULL OR source_tool <> 'trajetoria') ORDER BY created_at`).all() as Skill[];
+    }
+
+    /**
+     * ADR-040: os gatilhos novos das skills antigas, pela MESMA regra de `createSkillFromPattern` (uma fonte só, sem modelo):
+     * padrão com definição curada (`SKILL_DEFS`) → as frases de lá; padrão sem definição (o modelo genérico "Quando detectar
+     * este padrão, use X…", sem procedimento) → sem gatilho de texto. Testado com o Bonsai em 17/11: pedir frases ao modelo para
+     * essas genéricas deu "exec_command", "36 usos bem-sucedidos" e "o que tenho hoje" (colidindo com a agenda).
+     */
+    gatilhosDasSkillsAntigas(): Array<{ id: string; nome: string; antes: string[]; propostos: string[] }> {
+        return this.skillsAntigasAtivas().map(s => {
+            const p = s.source_pattern ?? '';
+            const propostos = SkillLearner.isKnownTopic(p) ? frasesDoCampoDeGatilhos(SkillLearner.SKILL_DEFS[p].trigger) : [];
+            return { id: s.id, nome: s.name, antes: frasesDoCampoDeGatilhos(s.trigger), propostos };
+        });
+    }
+
+    /**
      * ADR-040 (D2): troca os gatilhos de uma skill (banco + SKILL.md, se exportada). Devolve o valor anterior do campo, para
      * reversão; null se a skill não existe. No SKILL.md muda SÓ a linha `triggers:` — não regera o arquivo do banco (que
      * apagaria uma edição feita no disco e o SKILL.md.revisar de uma importação pendente). Falha ao gravar o arquivo LANÇA,

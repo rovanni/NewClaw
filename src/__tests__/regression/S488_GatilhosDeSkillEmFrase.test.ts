@@ -77,6 +77,17 @@ async function main(): Promise<void> {
     assert(md2 === '---\r\nname: x\r\ndescription: d\r\ntriggers: custa $5,outra\r\ntools: read\r\n---\r\ncorpo $1\r\n', 'linha triggers: trocada (lista em bloco sai inteira; CRLF, "$" e corpo intactos)', JSON.stringify(md2));
     assert(comLinhaDeGatilhos('---\nname: x\ndescription: d\n---\nc', ['f']) === '---\nname: x\ndescription: d\ntriggers: f\n---\nc' && comLinhaDeGatilhos('sem cabeçalho', ['f']) === 'sem cabeçalho',
         'sem triggers: entra depois de description:; sem cabeçalho, nada muda');
+    assert(comLinhaDeGatilhos('---\r\nname: x\r\ntriggers: a,b\r\ntools: read\r\n---\r\nc', []) === '---\r\nname: x\r\ntools: read\r\n---\r\nc'
+        && comLinhaDeGatilhos('---\nname: x\ntriggers: a\n---\nc', []) === '---\nname: x\n---\nc',
+        'sem frases: a linha triggers: sai (no meio ou no fim do cabeçalho), o resto fica');
+
+    // Skills oficiais do repositório (casos reais de 17/11): palavra comum sozinha não chama mais.
+    const oficiais = new SkillLoader(path.join(__dirname, '..', '..', '..', 'skills')).loadAll();
+    const oficial = (n: string) => oficiais.find(s => s.name === n)!;
+    assert(!matchSkillByTrigger(oficial('content-validator'), 'deu erro no envio, pode verificar?') && matchSkillByTrigger(oficial('content-validator'), 'o diagrama mermaid não renderiza'),
+        'content-validator: "erro"/"verificar" sozinhos não chamam; a frase do problema chama');
+    assert(!matchSkillByTrigger(oficial('system-provisioner'), 'quero instalar o jogo no pc') && matchSkillByTrigger(oficial('system-provisioner'), 'roda um pip install pandas'),
+        'system-provisioner: "instalar" sozinho não chama; "pip install" chama');
     const espaco = frasesDoCampoDeGatilhos('agenda compromissos como está minha agenda o que tenho hoje');
     assert(espaco.length === 1, 'campo antigo de palavras com espaço (ADR-017 até 17/11) volta como UMA frase — sem adivinhar onde cortava', espaco);
     assert(JSON.stringify(gatilhosValidos(['  Minha   Agenda ', 'minha agenda', 'a, b', 'x', 'linha\nquebrada', 'ok'])) === JSON.stringify(['minha agenda', 'ok']),
@@ -133,6 +144,18 @@ async function main(): Promise<void> {
         // Origem dos gatilhos de palavra solta (modo proposta): o slug virava "check|emails"; agora fica sem gatilho de texto.
         const deTopico = (learner as any).createSkillFromPattern('check_emails', 'exec_command', 4);
         assert(deTopico.trigger === '' && !campoCasa(deTopico.trigger, 'check emails agora'), 'padrão sem definição curada: sem gatilho de texto (antes "check|emails")', deTopico.trigger);
+        // Skills antigas na base: a mesma regra, sem modelo (curada → frases do código; genérica → sem gatilho de texto).
+        db.prepare(`INSERT INTO auto_skills (id, name, trigger, description, prompt, status, source_pattern, source_tool, file_exported) VALUES
+            ('a1', 'Consulta Cripto', '(bitcoin|btc|ada)', 'd', 'p', 'active', 'crypto_query', 'exec_command', 0),
+            ('a2', 'Newclaw Fixes', 'newclaw|fixes', 'Padrão aprendido automaticamente', 'Quando detectar este padrão…', 'active', 'newclaw_fixes', 'exec_command', 0)`).run();
+        const antigas = learner.gatilhosDasSkillsAntigas();
+        const cripto = antigas.find(a => a.nome === 'Consulta Cripto');
+        const generica = antigas.find(a => a.nome === 'Newclaw Fixes');
+        assert(!!cripto && cripto.propostos.includes('bitcoin') && !cripto.propostos.includes('ada') && !!generica && generica.propostos.length === 0 && generica.antes.join() === 'newclaw,fixes',
+            'antigas: curada recebe as frases do código, genérica fica sem gatilho (antes "newclaw|fixes")', antigas);
+        learner.trocarGatilhos('a2', []);
+        assert(!campoCasa((db.prepare(`SELECT trigger FROM auto_skills WHERE id = 'a2'`).get() as { trigger: string }).trigger, 'newclaw fixes agora'), 'genérica trocada: nenhum texto a chama mais');
+
         const curada = (learner as any).createSkillFromPattern('crypto_price', 'web_search', 4);
         assert(campoCasa(curada.trigger, 'Qual o valor da cripto River?') && !campoCasa(curada.trigger, 'mas não recebi nada!') && !campoCasa(curada.trigger, 'quanto tempo falta?'),
             'definição curada em frases: casa o pedido real, não "nada" nem "quanto tempo"', curada.trigger);

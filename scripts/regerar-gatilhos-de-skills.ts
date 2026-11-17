@@ -31,10 +31,15 @@ interface ItemDaReversao { id: string; nome: string; campoAntes: string; skillMd
 
 function falhar(msg: string): never { console.error(`ERRO: ${msg}`); process.exit(1); }
 
-const [modo, arquivo] = process.argv.slice(2);
+const [modo, arquivo, ...extras] = process.argv.slice(2);
 if (!['--previa', '--aplicar', '--reverter'].includes(modo ?? '') || !arquivo) {
-    falhar('uso: --previa <arquivo.json> | --aplicar <arquivo.json> | --reverter <reversao.json>');
+    falhar('uso: --previa <arquivo.json> [--antigas] [--skills nome1,nome2] | --aplicar <arquivo.json> | --reverter <reversao.json>');
 }
+// --antigas: as skills ativas que não vieram de trajetória (padrões antigos, regex/palavra solta).
+// --skills a,b: só estas (pelo nome), de qualquer origem — para refazer as que saíram ruins numa prévia.
+const comAntigas = extras.includes('--antigas');
+const iSkills = extras.indexOf('--skills');
+const soEstas = iSkills >= 0 ? (extras[iSkills + 1] ?? '').split(',').map(s => s.trim()).filter(Boolean) : [];
 
 const raiz = process.cwd();
 const dbPath = path.join(raiz, 'data', 'newclaw.db');
@@ -49,6 +54,15 @@ function arquivoDaSkill(s: { name: string; source_pattern?: string | null }): st
 }
 
 async function previa(): Promise<void> {
+    if (comAntigas && !soEstas.length) {
+        // Skills antigas: sem modelo. Definição curada → as frases do código; modelo genérico → sem gatilho de texto
+        // (SkillLearner.gatilhosDasSkillsAntigas — a mesma regra de quando a skill nasce).
+        const itens: ItemDaPrevia[] = learner.gatilhosDasSkillsAntigas();
+        for (const i of itens) console.log(`- ${i.nome}\n    antes:     ${i.antes.join(' | ')}\n    propostos: ${i.propostos!.length ? i.propostos!.join(' | ') : '(sem gatilho de texto — só no catálogo)'}`);
+        fs.writeFileSync(arquivo, JSON.stringify({ geradoEm: new Date().toISOString(), modelo: null, origem: 'SKILL_DEFS / sem gatilho', itens }, null, 2), 'utf8');
+        console.log(`\nPrévia gravada em ${path.resolve(arquivo)}. Nada foi alterado nas skills.`);
+        return;
+    }
     const modelo = (process.env.PLANNER_MODEL || '').trim();
     if (!modelo) falhar('PLANNER_MODEL não está configurado nesta instalação — o aprendizado usa esse modelo; nada foi chamado');
     const factory = new ProviderFactory({
@@ -60,8 +74,13 @@ async function previa(): Promise<void> {
         modelosNativos: modelosNativosDoAmbiente(),
     });
     const idioma = buildLanguageDirective(process.env.APP_LANG || 'pt-BR');
-    const skills = learner.skillsAprendidasPorTrajetoria();
-    console.log(`${skills.length} skill(s) aprendidas por trajetória; modelo: ${modelo}`);
+    const todas = [...learner.skillsAprendidasPorTrajetoria(), ...learner.skillsAntigasAtivas()];
+    const skills = soEstas.length
+        ? todas.filter(s => soEstas.includes(s.name))
+        : comAntigas ? learner.skillsAntigasAtivas() : learner.skillsAprendidasPorTrajetoria();
+    const naoAchadas = soEstas.filter(n => !todas.some(s => s.name === n));
+    if (naoAchadas.length) falhar(`skill(s) não encontrada(s): ${naoAchadas.join(', ')} — nada foi chamado`);
+    console.log(`${skills.length} skill(s); modelo: ${modelo}`);
     const itens: ItemDaPrevia[] = [];
     for (const s of skills) {
         const pedido = montarPedidoDeGatilhos({ nome: s.name, descricao: s.description, corpo: s.prompt }, idioma);
@@ -90,7 +109,8 @@ async function previa(): Promise<void> {
 function aplicar(): void {
     const { itens } = JSON.parse(fs.readFileSync(arquivo, 'utf8')) as { itens: ItemDaPrevia[] };
     const reversao: ItemDaReversao[] = [];
-    const comProposta = itens.filter(i => i.propostos && i.propostos.length);
+    // `propostos: []` é proposta (skill sem gatilho de texto); `null` é falha da prévia (nada muda).
+    const comProposta = itens.filter(i => Array.isArray(i.propostos));
     for (const i of comProposta) {
         const s = db.prepare('SELECT * FROM auto_skills WHERE id = ?').get(i.id) as { id: string; name: string; trigger: string; source_pattern?: string } | undefined;
         if (!s) { console.log(`- ${i.nome}: não existe mais no banco — pulada`); continue; }
@@ -111,7 +131,7 @@ function aplicar(): void {
             process.exitCode = 1;
         }
     }
-    const semProposta = itens.filter(i => !i.propostos || !i.propostos.length);
+    const semProposta = itens.filter(i => !Array.isArray(i.propostos));
     if (semProposta.length) console.log(`Sem proposta (nada mudou): ${semProposta.map(i => `${i.nome} (${i.erro ?? 'vazia'})`).join(', ')}`);
 }
 

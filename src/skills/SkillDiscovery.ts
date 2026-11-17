@@ -113,6 +113,11 @@ export function comLinhaDeGatilhos(skillMd: string, frases: string[]): string {
     if (!cab) return skillMd;
     const quebra = cab[2].includes('\r\n') ? '\r\n' : '\n';
     const linha = `triggers: ${frases.join(',')}`;
+    // Sem frases: a linha sai (skill sem gatilho de texto — só no catálogo).
+    if (frases.length === 0) {
+        const semLinha = cab[2].replace(/^triggers:[^\r\n]*(\r?\n[ \t]+-[^\r\n]*)*(\r?\n)?/m, '');
+        return skillMd.slice(0, cab.index) + cab[1] + semLinha.replace(/\r?\n$/, '') + cab[3] + skillMd.slice(cab.index + cab[0].length);
+    }
     // Uma lista em bloco (`triggers:` seguida de linhas `  - x`) sai inteira.
     const semAntiga = cab[2].replace(/^triggers:[^\r\n]*(\r?\n[ \t]+-[^\r\n]*)*/m, '\u0000');
     // Substituição por função: uma frase com "$" não vira padrão de substituição.
