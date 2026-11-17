@@ -10,7 +10,6 @@
  * Só retorna `recovered: false` depois que todas as estratégias se esgotaram.
  */
 
-import { createHash } from 'crypto';
 import { ToolResult } from './AgentLoop';
 import { createLogger } from '../shared/AppLogger';
 import { computeToolInputKey } from './planning/computeToolInputKey';
@@ -189,14 +188,11 @@ const RECOVERY: Record<string, ToolRecoveryConfig> = {
  * própria, e os dois formatos conviviam no MESMO `Set` de inputs usados: uma chamada registrada
  * por um caminho era invisível para o dedup do outro. Duas chaves para o mesmo conceito.
  *
- * O hash para argumentos longos é preservado aqui (a chave canônica não trunca) — só o formato
- * base passa a ser compartilhado.
+ * O resumo dos argumentos longos também vive lá (S487): resumido só aqui, a chave gravada no Set não batia com a que o
+ * AgentLoop procura, e o bloqueio de chamada repetida não funcionava acima de 256 caracteres.
  */
 function makeKey(toolName: string, args: Record<string, unknown>): string {
-    const canonica = computeToolInputKey(toolName, args);
-    if (canonica.length <= 256) return canonica;
-    const hash = createHash('sha1').update(canonica).digest('hex').slice(0, 16);
-    return `${toolName}:h:${hash}`;
+    return computeToolInputKey(toolName, args);
 }
 
 /** Marca de "esta chamada exata já falhou neste turno" dentro do mesmo Set de inputs usados. */
