@@ -21,10 +21,10 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import Database from 'better-sqlite3';
-import { gatilhoCasa, matchSkillByTrigger, campoDeGatilhos, frasesDoCampoDeGatilhos } from '../../skills/SkillDiscovery';
+import { gatilhoCasa, matchSkillByTrigger, campoDeGatilhos, frasesDoCampoDeGatilhos, comLinhaDeGatilhos } from '../../skills/SkillDiscovery';
 import { SkillLoader, type Skill } from '../../skills/SkillLoader';
 import { SkillLearner } from '../../loop/SkillLearner';
-import { blocoDeSkillsNoLimite, estimateTokens } from '../../loop/ContextBuilder';
+import { blocoDeSkillsNoLimite, estimateTokens, ContextBudget } from '../../loop/ContextBuilder';
 import {
     gatilhosValidos, interpretarGatilhos, interpretarResposta, montarPedidoDeAprendizado, montarPedidoDeGatilhos, REGRA_DOS_GATILHOS,
 } from '../../loop/aprendizadoDeSkills';
@@ -59,6 +59,13 @@ async function main(): Promise<void> {
     assert(regexOk, 'o campo continua sendo regex válida e casa as frases (caminho do banco, scoreSkillMatch)', campo);
     const antiga = frasesDoCampoDeGatilhos('(clima|tempo|temperatura|previs[aã]o|chovendo)');
     assert(antiga.includes('clima') && antiga.includes('previs') && antiga.includes('tempo') && !antiga.some(p => /[()[\]]/.test(p)), 'regex escrita à mão (formato antigo): sai em palavras, sem metacaractere', antiga);
+    const misto = frasesDoCampoDeGatilhos('(bitcoin|ai|x1|ethereum)');
+    assert(JSON.stringify(misto) === JSON.stringify(['bitcoin', 'ethereum']), 'regex antiga: o campo inteiro segue a regra de antes (3+ letras), também nos membros sem metacaractere', misto);
+    const md = '---\r\nname: x\r\ndescription: d\r\ntriggers:\r\n  - a\r\n  - b\r\ntools: read\r\n---\r\ncorpo $1\r\n';
+    const md2 = comLinhaDeGatilhos(md, ['custa $5', 'outra']);
+    assert(md2 === '---\r\nname: x\r\ndescription: d\r\ntriggers: custa $5,outra\r\ntools: read\r\n---\r\ncorpo $1\r\n', 'linha triggers: trocada (lista em bloco sai inteira; CRLF, "$" e corpo intactos)', JSON.stringify(md2));
+    assert(comLinhaDeGatilhos('---\nname: x\ndescription: d\n---\nc', ['f']) === '---\nname: x\ndescription: d\ntriggers: f\n---\nc' && comLinhaDeGatilhos('sem cabeçalho', ['f']) === 'sem cabeçalho',
+        'sem triggers: entra depois de description:; sem cabeçalho, nada muda');
     const espaco = frasesDoCampoDeGatilhos('agenda compromissos como está minha agenda o que tenho hoje');
     assert(espaco.length === 1, 'campo antigo de palavras com espaço (ADR-017 até 17/11) volta como UMA frase — sem adivinhar onde cortava', espaco);
     assert(JSON.stringify(gatilhosValidos(['  Minha   Agenda ', 'minha agenda', 'a, b', 'x', 'linha\nquebrada', 'ok'])) === JSON.stringify(['minha agenda', 'ok']),
@@ -91,11 +98,25 @@ async function main(): Promise<void> {
         console.log('\n=== S488-4 — trocarGatilhos (migração D2): banco e arquivo, com o valor anterior devolvido ===');
         const linha = db.prepare(`SELECT id, trigger FROM auto_skills WHERE name = 'consulta-agenda-teste'`).get() as { id: string; trigger: string };
         db.prepare('UPDATE auto_skills SET trigger = ? WHERE id = ?').run('agenda compromissos como está minha agenda', linha.id);
+        // Uma edição feita só no disco e uma proposta de importação pendente não podem se perder com a troca.
+        const editado = fs.readFileSync(arquivo, 'utf8').replace('## Procedimento', '## Procedimento\n\nNota escrita à mão no disco.');
+        fs.writeFileSync(arquivo, editado);
+        const revisar = path.join(path.dirname(arquivo), 'SKILL.md.revisar');
+        fs.writeFileSync(revisar, 'proposta importada');
         const anterior = learner.trocarGatilhos(linha.id, ['como está minha agenda', 'agenda da semana']);
         assert(anterior === 'agenda compromissos como está minha agenda', 'devolve o valor anterior, para a reversão', anterior);
         const depois = fs.readFileSync(arquivo, 'utf8');
-        assert(/^triggers: como está minha agenda,agenda da semana$/m.test(depois) && depois.includes('## Procedimento'), 'SKILL.md regerado com os gatilhos novos e o mesmo corpo', depois.match(/^triggers:.*$/m)?.[0]);
+        assert(/^triggers: como está minha agenda,agenda da semana$/m.test(depois), 'SKILL.md com os gatilhos novos', depois.match(/^triggers:.*$/m)?.[0]);
+        assert(depois === editado.replace(/^triggers:.*$/m, 'triggers: como está minha agenda,agenda da semana'), 'só a linha triggers: mudou (a nota escrita no disco ficou)');
+        assert(fs.existsSync(revisar), 'o SKILL.md.revisar da importação pendente continua lá');
+        const campoNoBanco = (db.prepare('SELECT trigger FROM auto_skills WHERE id = ?').get(linha.id) as { trigger: string }).trigger;
+        assert(campoNoBanco === campoDeGatilhos(['como está minha agenda', 'agenda da semana']), 'banco com o campo novo', campoNoBanco);
         assert(learner.trocarGatilhos('nao-existe', ['x y']) === null, 'skill inexistente: null, nada gravado');
+        fs.rmSync(arquivo);
+        let lancou = false;
+        try { learner.trocarGatilhos(linha.id, ['outra frase']); } catch { lancou = true; }
+        const campoDepoisDaFalha = (db.prepare('SELECT trigger FROM auto_skills WHERE id = ?').get(linha.id) as { trigger: string }).trigger;
+        assert(lancou && campoDepoisDaFalha === campoNoBanco, 'arquivo que não pode ser gravado: lança e o banco não muda (sem divergência silenciosa)', { lancou, campoDepoisDaFalha });
         assert(learner.skillsAprendidasPorTrajetoria().length === 1, 'a lista das aprendidas por trajetória acha a skill');
         db.close();
     } finally {
@@ -112,6 +133,12 @@ async function main(): Promise<void> {
     assert(cortado.includes('Cortada no meio: skill-1.') && nomes.slice(1).every(n => cortado.includes(n)), 'nomeia a skill cortada no meio e todas as que não couberam');
     assert(cortado.length <= Math.floor(500 * 3.5), 'o bloco com a declaração cabe no teto', cortado.length);
     assert(blocoDeSkillsNoLimite('### SKILL: curta\nok', 500) === '### SKILL: curta\nok' && estimateTokens('### SKILL: curta\nok') < 500, 'dentro do teto: igual');
+    // Estouro do contexto inteiro: o corte que sobra para o bloco de skills também é declarado (antes: [...truncated]).
+    const orcamento = new ContextBudget({ maxCtx: 1500, reservedForResponse: 0, skillsMaxTokens: 100000 });
+    const blocos = orcamento.buildMessages({ systemPrompt: 'Você é um assistente.', skillsBlock: bloco, recentMessages: [], currentUserMessage: 'oi' });
+    const doBloco = blocos.find(b => b.content.includes('### SKILL MANUAL: skill-1'));
+    assert(!!doBloco && /\[corte do sistema: bloco de skills limitado a \d+ tokens/.test(doBloco.content) && doBloco.content.includes('skill-18') && !doBloco.content.includes('[...truncated]'),
+        'estouro do contexto: o bloco de skills declara o corte e nomeia as que saíram', doBloco?.content.slice(-200));
 
     console.log('\n=== S488-6 — o pedido ao modelo ensina frases ===');
     const pedido = montarPedidoDeAprendizado({ pedido: 'p', objetivo: 'o', plataforma: 'win32', trajetoria: [], skillsExistentes: [], segredos: [] });

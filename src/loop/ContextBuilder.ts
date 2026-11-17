@@ -193,9 +193,11 @@ export class ContextBudget {
             totalTokens += estimateTokens(memory);
         }
 
+        let blocoDeSkills: ContextBlock | undefined;
         if (params.skillsBlock) {
             const skills = blocoDeSkillsNoLimite(params.skillsBlock, this.config.skillsMaxTokens);
-            blocks.push({ role: 'system', content: skills, priority: 5 });
+            blocoDeSkills = { role: 'system', content: skills, priority: 5 };
+            blocks.push(blocoDeSkills);
             totalTokens += estimateTokens(skills);
         }
 
@@ -222,7 +224,10 @@ export class ContextBudget {
                     kept += estimateTokens(block.content);
                 } else {
                     const remaining = this.maxInputTokens - kept;
-                    block.content = truncateToTokens(block.content, remaining);
+                    // ADR-040: o bloco de skills também declara este corte (com o nome das skills que saíram).
+                    block.content = block === blocoDeSkills
+                        ? blocoDeSkillsNoLimite(block.content, remaining)
+                        : truncateToTokens(block.content, remaining);
                     break;
                 }
             }

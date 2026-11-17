@@ -160,8 +160,12 @@ export function matchSkillByCapabilities(
  * casavam em quase toda mensagem e "rea" casava dentro de "área".
  */
 export function gatilhoCasa(texto: string, gatilho: string): boolean {
+    return casaNormalizado(textoSemAcento(texto), gatilho);
+}
+
+function casaNormalizado(textoNormalizado: string, gatilho: string): boolean {
     const g = semAcento(gatilho.trim());
-    return g.length > 0 && keywordBoundaryMatches(semAcento(texto), g);
+    return g.length > 0 && keywordBoundaryMatches(textoNormalizado, g);
 }
 
 /** Forma, não significado: "como está" e "como esta" são a mesma frase escrita com e sem acento (o modelo e a pessoa variam). */
@@ -169,9 +173,18 @@ function semAcento(s: string): string {
     return s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
 }
 
+// O mesmo texto (mensagem ou passo de goal, às vezes de milhares de caracteres) é comparado com todas as skills em
+// sequência: normaliza uma vez só, não uma por gatilho.
+let ultimoTexto: { de: string; para: string } = { de: '', para: '' };
+function textoSemAcento(texto: string): string {
+    if (ultimoTexto.de !== texto) ultimoTexto = { de: texto, para: semAcento(texto) };
+    return ultimoTexto.para;
+}
+
 /** Verifica se uma query faz match com uma skill por trigger (frase inteira — ADR-040). */
 export function matchSkillByTrigger(skill: Skill, query: string): boolean {
-    return (skill.triggers ?? []).some(t => gatilhoCasa(query, t));
+    const texto = textoSemAcento(query);
+    return (skill.triggers ?? []).some(t => casaNormalizado(texto, t));
 }
 
 const METACARACTERES = /[.*+?^${}()|[\]\\]/g;
@@ -184,6 +197,27 @@ const METACARACTER_DE_REGEX = '.*+?^${}()[]';
  */
 export function campoDeGatilhos(frases: string[]): string {
     return frases.map(f => f.trim()).filter(Boolean).map(f => f.replace(METACARACTERES, '\\$&')).join('|');
+}
+
+/**
+ * ADR-040 (D2): o mesmo SKILL.md com a linha `triggers:` do cabeçalho trocada pelas frases (lista plana separada por
+ * vírgula, ADR-035). Sem a linha, ela entra logo depois de `description:`. O resto do arquivo (corpo, outros campos,
+ * quebras de linha) fica como estava. Sem cabeçalho, o texto volta igual.
+ */
+export function comLinhaDeGatilhos(skillMd: string, frases: string[]): string {
+    const cab = /^(﻿?---\r?\n)([\s\S]*?)(\r?\n---)/.exec(skillMd);
+    if (!cab) return skillMd;
+    const quebra = cab[2].includes('\r\n') ? '\r\n' : '\n';
+    const linha = `triggers: ${frases.join(',')}`;
+    // Uma lista em bloco (`triggers:` seguida de linhas `  - x`) sai inteira.
+    const semAntiga = cab[2].replace(/^triggers:[^\r\n]*(\r?\n[ \t]+-[^\r\n]*)*/m, '\u0000');
+    // Substituição por função: uma frase com "$" não vira padrão de substituição.
+    const novoCab = semAntiga.includes('\u0000')
+        ? semAntiga.replace('\u0000', () => linha)
+        : /^description:[^\r\n]*/m.test(semAntiga)
+            ? semAntiga.replace(/^(description:[^\r\n]*)/m, (d) => `${d}${quebra}${linha}`)
+            : `${semAntiga}${quebra}${linha}`;
+    return skillMd.slice(0, cab.index) + cab[1] + novoCab + cab[3] + skillMd.slice(cab.index + cab[0].length);
 }
 
 /**
@@ -203,26 +237,23 @@ export function frasesDoCampoDeGatilhos(campo: string): string[] {
     }
     partes.push(atual);
 
-    const frases: string[] = [];
-    const palavrasAntigas: string[] = [];
-    for (const parte of partes) {
-        let regexAntiga = false;
+    const temMetacaracterSemEscape = (parte: string): boolean => {
         for (let i = 0; i < parte.length; i++) {
             if (parte[i] === '\\') { i++; continue; }
-            if (METACARACTER_DE_REGEX.includes(parte[i])) { regexAntiga = true; break; }
+            if (METACARACTER_DE_REGEX.includes(parte[i])) return true;
         }
-        if (regexAntiga) {
-            palavrasAntigas.push(...parte
-                .replace(/\[[^\]]*\]/g, ' ')
-                .replace(/[().*+?^${}|\\[\]]/g, ' ')
-                .split(/\s+/)
-                .filter(s => s.length >= 3 && !/^\d+$/.test(s)));
-        } else {
-            const frase = parte.replace(/\\(.)/g, '$1').trim();
-            if (frase) frases.push(frase);
-        }
+        return false;
+    };
+    // O formato novo nunca tem metacaractere sem escape. Basta uma parte com um para o campo inteiro ser regex antiga:
+    // aí vale a extração de antes, no campo todo (palavras com 3+ letras, sem número, até 10).
+    if (partes.some(temMetacaracterSemEscape)) {
+        return [...new Set(campo
+            .replace(/\[[^\]]*\]/g, ' ')
+            .replace(/[().*+?^${}|\\[\]]/g, ' ')
+            .split(/\s+/)
+            .filter(s => s.length >= 3 && !/^\d+$/.test(s)))].slice(0, 10);
     }
-    return [...new Set([...frases, ...palavrasAntigas.slice(0, 10)])];
+    return [...new Set(partes.map(p => p.replace(/\\(.)/g, '$1').trim()).filter(Boolean))];
 }
 
 /**

@@ -30,7 +30,7 @@
 
 import { pastaDaSkill } from '../shared/pastaDaSkill';
 import { marcarCaminhos, pastasDaInstalacao, resumoDoCorpo } from '../skills/SkillLoader';
-import { campoDeGatilhos, frasesDoCampoDeGatilhos } from '../skills/SkillDiscovery';
+import { campoDeGatilhos, comLinhaDeGatilhos, frasesDoCampoDeGatilhos } from '../skills/SkillDiscovery';
 import { configuracaoDoSync, idDaInstalacao, nomeDaSubpasta } from '../core/syncAgent';
 import { caminhosDaInstalacao } from '../core/backupDoConhecimento';
 import fs from 'fs';
@@ -1043,15 +1043,21 @@ export class SkillLearner {
 
     /**
      * ADR-040 (D2): troca os gatilhos de uma skill (banco + SKILL.md, se exportada). Devolve o valor anterior do campo, para
-     * reversão; null se a skill não existe. Não mexe no corpo: `validada_em` (ADR-035) continua valendo.
+     * reversão; null se a skill não existe. No SKILL.md muda SÓ a linha `triggers:` — não regera o arquivo do banco (que
+     * apagaria uma edição feita no disco e o SKILL.md.revisar de uma importação pendente). Falha ao gravar o arquivo LANÇA,
+     * antes de mexer no banco: banco e arquivo não divergem em silêncio.
      */
     trocarGatilhos(id: string, frases: string[]): string | null {
         const skill = this.db.prepare('SELECT * FROM auto_skills WHERE id = ?').get(id) as Skill | undefined;
         if (!skill) return null;
         const anterior = skill.trigger;
         const novo = campoDeGatilhos(frases);
+        if (skill.file_exported) {
+            const arquivo = path.resolve(this.skillsDir, this.sanitizeSkillFolderName(skill), 'SKILL.md');
+            if (!fs.existsSync(arquivo)) throw new Error(`SKILL.md de "${skill.name}" não existe em ${arquivo}`);
+            fs.writeFileSync(arquivo, comLinhaDeGatilhos(fs.readFileSync(arquivo, 'utf-8'), frasesDoCampoDeGatilhos(novo)), 'utf-8');
+        }
         this.db.prepare(`UPDATE auto_skills SET trigger = ?, updated_at = ? WHERE id = ?`).run(novo, new Date().toISOString(), id);
-        if (skill.file_exported) this.exportSkillFile({ ...skill, trigger: novo });
         log.info(`[SKILL-GATILHOS] "${skill.name}" gatilhos trocados: ${JSON.stringify(anterior)} → ${JSON.stringify(novo)}`);
         return anterior;
     }

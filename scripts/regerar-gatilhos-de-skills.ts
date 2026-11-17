@@ -65,15 +65,20 @@ async function previa(): Promise<void> {
     const itens: ItemDaPrevia[] = [];
     for (const s of skills) {
         const pedido = montarPedidoDeGatilhos({ nome: s.name, descricao: s.description, corpo: s.prompt }, idioma);
-        const { timeoutMs } = factory.getBudgetAuxiliar('validacao', pedido.length);
-        const r = await factory.chatWithFallback([{ role: 'user', content: pedido }], undefined, undefined, timeoutMs, undefined, modelo,
-            { reasoningIntensive: true, diag: { component: 'SkillLearner', role: 'skill_writer', phase: 'regerar_gatilhos' } });
         const antes = frasesDoCampoDeGatilhos(s.trigger);
-        if (r.status !== 'success' || !r.content) {
-            itens.push({ id: s.id, nome: s.name, antes, propostos: null, erro: `modelo: ${r.status}` });
-        } else {
-            const g = interpretarGatilhos(r.content);
-            itens.push('erro' in g ? { id: s.id, nome: s.name, antes, propostos: null, erro: g.erro } : { id: s.id, nome: s.name, antes, propostos: g.gatilhos });
+        try {
+            const { timeoutMs } = factory.getBudgetAuxiliar('validacao', pedido.length);
+            const r = await factory.chatWithFallback([{ role: 'user', content: pedido }], undefined, undefined, timeoutMs, undefined, modelo,
+                { reasoningIntensive: true, diag: { component: 'SkillLearner', role: 'skill_writer', phase: 'regerar_gatilhos' } });
+            if (r.status !== 'success' || !r.content) {
+                itens.push({ id: s.id, nome: s.name, antes, propostos: null, erro: `modelo: ${r.status}` });
+            } else {
+                const g = interpretarGatilhos(r.content);
+                itens.push('erro' in g ? { id: s.id, nome: s.name, antes, propostos: null, erro: g.erro } : { id: s.id, nome: s.name, antes, propostos: g.gatilhos });
+            }
+        } catch (e) {
+            // Uma skill que falha não perde as respostas já pagas das outras: a prévia é gravada no fim, com o erro desta.
+            itens.push({ id: s.id, nome: s.name, antes, propostos: null, erro: `exceção: ${e instanceof Error ? e.message : String(e)}` });
         }
         const ultimo = itens[itens.length - 1];
         console.log(`- ${s.name}\n    antes:     ${antes.join(' | ')}\n    propostos: ${ultimo.propostos?.join(' | ') ?? `(nenhum — ${ultimo.erro})`}`);
@@ -97,8 +102,14 @@ function aplicar(): void {
     console.log(`Reversão gravada em ${path.resolve(arqReversao)} (antes de qualquer mudança).`);
     for (const i of comProposta) {
         if (!reversao.some(r => r.id === i.id)) continue;
-        const anterior = learner.trocarGatilhos(i.id, i.propostos!);
-        console.log(`- ${i.nome}: ${anterior === null ? 'não encontrada' : `gravada (${i.propostos!.join(' | ')})`}`);
+        try {
+            const anterior = learner.trocarGatilhos(i.id, i.propostos!);
+            console.log(`- ${i.nome}: ${anterior === null ? 'não encontrada' : `gravada (${i.propostos!.join(' | ')})`}`);
+        } catch (e) {
+            // trocarGatilhos grava o arquivo antes do banco: se o arquivo falhou, nada desta skill mudou.
+            console.log(`- ${i.nome}: NÃO gravada — ${e instanceof Error ? e.message : String(e)}`);
+            process.exitCode = 1;
+        }
     }
     const semProposta = itens.filter(i => !i.propostos || !i.propostos.length);
     if (semProposta.length) console.log(`Sem proposta (nada mudou): ${semProposta.map(i => `${i.nome} (${i.erro ?? 'vazia'})`).join(', ')}`);
@@ -121,5 +132,5 @@ function reverter(): void {
     } finally {
         db.close();
     }
-    process.exit(0);
+    process.exit(process.exitCode ?? 0);
 })().catch(e => { console.error(e); process.exit(1); });

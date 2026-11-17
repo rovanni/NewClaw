@@ -265,3 +265,26 @@ Três mensagens pela API do painel:
 
 Limitação: o corte declarado do bloco de skills é coberto pelo S488; o texto do prompt não sai no log, então não foi
 conferido na execução real.
+
+### Revisão de código (17/11/2026)
+
+Corrigido no mesmo ramo, com cobertura no S488:
+- `trocarGatilhos` regerava o `SKILL.md` inteiro a partir do banco: perdia edição feita no disco e apagava o
+  `SKILL.md.revisar` de uma importação pendente; e uma falha ao gravar o arquivo era só registrada no log, com o banco
+  já trocado. Agora muda só a linha `triggers:` (`comLinhaDeGatilhos`) e grava o arquivo ANTES do banco; falha lança.
+  Na cópia: 19 de 19 arquivos com só essa linha mudada; depois de reverter, 19 de 19 idênticos ao original.
+- O estouro do contexto inteiro (`ContextBudget`, prioridade) ainda cortava o bloco de skills com `[...truncated]`:
+  agora também declara.
+- Regex antiga: os membros sem metacaractere escapavam do filtro de antes (3+ letras, até 10); agora o campo inteiro
+  segue a regra antiga.
+- A mensagem passa a ser normalizada uma vez para todas as skills, não uma vez por gatilho.
+- O script grava a prévia mesmo que uma skill lance exceção, e o `--aplicar` informa e sai com erro quando uma skill
+  não é gravada.
+
+Fica registrado, fora deste ramo:
+- O planejador (`discoverSkills(...).all` em `GoalExecutionLoop` e `getSkillContextForQuery`) ainda inclui skills por
+  palavra de etiqueta e de descrição (`byCapability`). É a mesma classe de defeito, do lado do planejador; entra na
+  medição da Etapa 2 e na decisão D3.
+- `SkillLearner.scoreSkillMatch` (skills só no banco, `file_exported = 0`) usa o campo como regex de substring, sem a
+  fronteira nem o acento da regra do arquivo. Hoje só alcança os padrões antigos que nunca foram exportados.
+- O painel mostra o campo `trigger` cru: no formato novo aparecem `\.` e `|` no lugar da lista de frases.

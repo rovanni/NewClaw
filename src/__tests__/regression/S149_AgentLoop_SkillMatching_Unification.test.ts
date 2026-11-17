@@ -39,8 +39,9 @@ function check(ok: boolean, label: string, detail = ''): void {
  * exatamente essa regra, e `.all` é outra coisa.
  */
 function oldInlineMatch(skills: Skill[], userText: string): Skill[] {
+  const semAcento = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
   return skills.filter(s =>
-    s.triggers?.some(t => keywordBoundaryMatches(userText.toLowerCase(), t.toLowerCase()))
+    s.triggers?.some(t => keywordBoundaryMatches(semAcento(userText), semAcento(t)))
   );
 }
 
