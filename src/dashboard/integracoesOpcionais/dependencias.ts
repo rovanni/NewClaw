@@ -6,6 +6,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { Dependencias, Resultado } from './gerenciador';
+import { leitorDeSaidaDoConsole } from '../../shared/ambienteDeExecucao';
 
 /**
  * Variáveis de ambiente que os comandos de uma integração podem ver. As do NewClaw (senha do painel, tokens, chaves de
@@ -59,24 +60,29 @@ export function localizarTar(plataforma: NodeJS.Platform = process.platform, env
 
 function rodar(programa: string, args: string[], pasta: string | undefined, aoLer?: (linha: string) => void): Promise<Resultado> {
     return new Promise((resolve) => {
-        let saida = '';
-        let erro = '';
-        let resto = '';
+        // Cada fluxo com o seu leitor na página medida do console (S486): no Windows, tar.exe, git e scripts .cmd escrevem na
+        // página do console, não em UTF-8. E cada um com a sua linha pela metade — antes, stdout e stderr dividiam o mesmo resto.
+        const novoFluxo = () => ({ leitor: leitorDeSaidaDoConsole(), texto: '', resto: '' });
+        const fluxos = { saida: novoFluxo(), erro: novoFluxo() };
         const filho = spawn(programa, args, { cwd: pasta, env: ambienteDaIntegracao(), windowsHide: true });
-        const linhas = (pedaco: Buffer, ehErro: boolean) => {
-            const texto = pedaco.toString('utf-8');
-            if (ehErro) erro += texto; else saida += texto;
-            if (!aoLer) return;
-            const partes = (resto + texto).split(/\r?\n/);
-            resto = partes.pop() ?? '';
+        const receber = (f: ReturnType<typeof novoFluxo>, texto: string) => {
+            f.texto += texto;
+            if (!aoLer || !texto) return;
+            const partes = (f.resto + texto).split(/\r?\n/);
+            f.resto = partes.pop() ?? '';
             partes.forEach(aoLer);
         };
-        filho.stdout.on('data', (p: Buffer) => linhas(p, false));
-        filho.stderr.on('data', (p: Buffer) => linhas(p, true));
-        filho.on('error', (e) => resolve({ codigo: 127, saida, erro: `${erro}${e.message}` }));
+        filho.stdout.on('data', (p: Buffer) => receber(fluxos.saida, fluxos.saida.leitor.ler(p)));
+        filho.stderr.on('data', (p: Buffer) => receber(fluxos.erro, fluxos.erro.leitor.ler(p)));
+        const terminar = () => { for (const f of [fluxos.saida, fluxos.erro]) receber(f, f.leitor.terminar()); };
+        filho.on('error', (e) => {
+            terminar();
+            resolve({ codigo: 127, saida: fluxos.saida.texto, erro: `${fluxos.erro.texto}${e.message}` });
+        });
         filho.on('close', (codigo) => {
-            if (aoLer && resto) aoLer(resto);
-            resolve({ codigo: codigo ?? 1, saida, erro });
+            terminar();
+            if (aoLer) for (const f of [fluxos.saida, fluxos.erro]) if (f.resto) aoLer(f.resto);
+            resolve({ codigo: codigo ?? 1, saida: fluxos.saida.texto, erro: fluxos.erro.texto });
         });
     });
 }

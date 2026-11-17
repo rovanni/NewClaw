@@ -38,21 +38,21 @@ async function main(): Promise<void> {
     const altos = Array.from({ length: 128 }, (_, k) => ({ 0x07: 'ç', 0x46: 'ã', 0x20: 'á' } as Record<number, string>)[k] ?? '?').join('');
     const pagina = { codigo: 850, altos };
     const legado = Buffer.from([0x6E, 0xC6, 0x6F, 0x20, 0x61, 0x87, 0xC6, 0x6F]);   // "não ação" em 850
-    assert(exec.decodificarSaidaDoConsole(legado, pagina) === 'não ação', 'bytes da página viram os caracteres da tabela', exec.decodificarSaidaDoConsole(legado, pagina));
+    assert(amb.decodificarSaidaDoConsole(legado, pagina) === 'não ação', 'bytes da página viram os caracteres da tabela', amb.decodificarSaidaDoConsole(legado, pagina));
     const utf8 = Buffer.from('Computação — ok 🙂', 'utf8');
-    assert(exec.decodificarSaidaDoConsole(utf8, pagina) === 'Computação — ok 🙂', 'UTF-8 bem formado fica intacto (inclusive 3 e 4 bytes)');
+    assert(amb.decodificarSaidaDoConsole(utf8, pagina) === 'Computação — ok 🙂', 'UTF-8 bem formado fica intacto (inclusive 3 e 4 bytes)');
     const misto = Buffer.concat([legado, Buffer.from(' | ', 'utf8'), utf8]);
-    assert(exec.decodificarSaidaDoConsole(misto, pagina) === 'não ação | Computação — ok 🙂', 'saída mista (cmd + Python) no mesmo fluxo: cada parte do seu jeito', exec.decodificarSaidaDoConsole(misto, pagina));
-    assert(exec.decodificarSaidaDoConsole(legado, undefined) === legado.toString('utf8') && exec.decodificarSaidaDoConsole(legado, { codigo: 65001 }) === legado.toString('utf8'),
+    assert(amb.decodificarSaidaDoConsole(misto, pagina) === 'não ação | Computação — ok 🙂', 'saída mista (cmd + Python) no mesmo fluxo: cada parte do seu jeito', amb.decodificarSaidaDoConsole(misto, pagina));
+    assert(amb.decodificarSaidaDoConsole(legado, undefined) === legado.toString('utf8') && amb.decodificarSaidaDoConsole(legado, { codigo: 65001 }) === legado.toString('utf8'),
         'sem tabela medida (não medida, ou página UTF-8): leitura UTF-8 de sempre — nenhuma tabela adivinhada');
-    assert(exec.decodificarSaidaDoConsole(legado, { codigo: 850, altos: 'curta' }) === legado.toString('utf8'), 'tabela com tamanho errado é ignorada');
+    assert(amb.decodificarSaidaDoConsole(legado, { codigo: 850, altos: 'curta' }) === legado.toString('utf8'), 'tabela com tamanho errado é ignorada');
     const cortado = Buffer.from([0x61, 0xE2, 0x80]);   // começo de "—" sem o último byte
-    assert(exec.decodificarSaidaDoConsole(cortado, pagina) === 'a??', 'sequência UTF-8 incompleta no fim não vira caractere inventado (cada byte pela tabela)', exec.decodificarSaidaDoConsole(cortado, pagina));
+    assert(amb.decodificarSaidaDoConsole(cortado, pagina) === 'a??', 'sequência UTF-8 incompleta no fim não vira caractere inventado (cada byte pela tabela)', amb.decodificarSaidaDoConsole(cortado, pagina));
 
     const comBom = Buffer.from('﻿olá', 'utf8');
-    assert(exec.decodificarSaidaDoConsole(comBom, pagina) === comBom.toString('utf8'), 'atalho UTF-8 válido: mesmo texto do toString, BOM incluído');
+    assert(amb.decodificarSaidaDoConsole(comBom, pagina) === comBom.toString('utf8'), 'atalho UTF-8 válido: mesmo texto do toString, BOM incluído');
     // Limite conhecido, preso aqui para não virar surpresa: bytes da página que por acaso formam UTF-8 válido são lidos como UTF-8.
-    assert(exec.decodificarSaidaDoConsole(Buffer.from([0xE4, 0x88, 0x81]), pagina) === '䈁', 'limite documentado: E4 88 81 (em 850, "õêü" colados) é UTF-8 válido e fica "䈁"');
+    assert(amb.decodificarSaidaDoConsole(Buffer.from([0xE4, 0x88, 0x81]), pagina) === '䈁', 'limite documentado: E4 88 81 (em 850, "õêü" colados) é UTF-8 válido e fica "䈁"');
     const fonte = fs.readFileSync(path.join(__dirname, '../../tools/exec_command.ts'), 'utf-8');
     assert(/const pagina = isSsh \? undefined : fatosDoAmbiente\(\)\.paginaDoConsole/.test(fonte), 'ssh://: a saída de outra máquina não passa pela página do console local');
 

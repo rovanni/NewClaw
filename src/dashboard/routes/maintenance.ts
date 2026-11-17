@@ -9,6 +9,7 @@ import { criarPacote, lerPacote, restaurarPacote, importarPacote, comTravaDeSync
 import { rateLimit } from 'express-rate-limit';
 import { configuracaoDoSync, nomeDaSubpasta, lerManifesto, ultimoRelatorio } from '../../core/syncAgent';
 import { applyEnvUpdates } from '../../shared/envSerializer';
+import { decodificarSaidaDoConsole, leitorDeSaidaDoConsole } from '../../shared/ambienteDeExecucao';
 
 const log = createLogger('Maintenance');
 
@@ -220,12 +221,14 @@ function runNewclawCli(args: string[]): Promise<{ code: number | null; stdout: s
         const node = process.execPath;
         const cli = path.join(DIR, 'bin', 'newclaw');
         const child = spawn(node, [cli, ...args], { cwd: DIR, windowsHide: true });
-        let stdout = '';
-        let stderr = '';
-        child.stdout.on('data', (d: Buffer) => { stdout += d.toString(); });
-        child.stderr.on('data', (d: Buffer) => { stderr += d.toString(); });
-        child.on('close', (code) => resolve({ code, stdout, stderr }));
-        child.on('error', (err) => resolve({ code: -1, stdout, stderr: errorMessage(err) }));
+        // Bytes inteiros, decodificados no fim na página medida do console (S486): o CLI repassa a saída de git/npm/PowerShell.
+        const saida: Buffer[] = [];
+        const erro: Buffer[] = [];
+        child.stdout.on('data', (d: Buffer) => saida.push(d));
+        child.stderr.on('data', (d: Buffer) => erro.push(d));
+        const texto = (partes: Buffer[]) => decodificarSaidaDoConsole(Buffer.concat(partes));
+        child.on('close', (code) => resolve({ code, stdout: texto(saida), stderr: texto(erro) }));
+        child.on('error', (err) => resolve({ code: -1, stdout: texto(saida), stderr: errorMessage(err) }));
     });
 }
 
@@ -281,9 +284,15 @@ export function createMaintenanceRouter(ctx: { controller?: unknown } = {}): Rou
         const cli = path.join(DIR, 'bin', 'newclaw');
         const child = spawn(node, [cli, 'update', 'restart', ...args], { cwd: DIR, windowsHide: true });
 
-        child.stdout.on('data', (d: Buffer) => buildLog.push(d.toString()));
-        child.stderr.on('data', (d: Buffer) => buildLog.push(d.toString()));
+        // O `update restart` repassa (stdio: inherit) a saída de git, npm e, no Windows, do update.ps1 — este na página do
+        // console. Lida linha a linha na página medida (S486): um pedaço do pipe não corta mais caractere nem linha ao meio.
+        const leitorSaida = leitorDeSaidaDoConsole();
+        const leitorErro = leitorDeSaidaDoConsole();
+        child.stdout.on('data', (d: Buffer) => buildLog.push(leitorSaida.ler(d)));
+        child.stderr.on('data', (d: Buffer) => buildLog.push(leitorErro.ler(d)));
         child.on('close', (code) => {
+            buildLog.push(leitorSaida.terminar());
+            buildLog.push(leitorErro.terminar());
             log.info(`Update process exited with code ${code}`);
             buildLog.finish(code === 0);
         });
