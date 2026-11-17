@@ -46,7 +46,7 @@ import { SkillLoader } from '../skills/SkillLoader';
 import { ModelProfile } from './ModelProfileRegistry';
 import { errorMessage } from '../shared/errors';
 import type { SemanticStatusEvent } from '../shared/SemanticStatus';
-import { ObserverValidator, ResponseCommit, EvidenceItem, GroundingState, GroundedClaim } from './ObserverValidator';
+import { ObserverValidator, ResponseCommit, EvidenceItem, GroundingState, GroundedClaim, type GroundingTraceContext } from './ObserverValidator';
 import { ReflectionMemory } from '../memory/ReflectionMemory';
 import { ProactiveRecovery } from './ProactiveRecovery';
 import type { WorkflowEngine } from './WorkflowEngine';
@@ -1320,7 +1320,8 @@ export class AgentLoop {
                     const supportedClaims = g.claims.filter(c => c.verdict === 'SUPPORTED');
                     if (supportedClaims.length > 0) {
                         const naoConfirmadas = g.claims.filter((c): c is GroundedClaim & { verdict: 'NOT_SUPPORTED' | 'NOT_EVALUABLE' } => c.verdict !== 'SUPPORTED');
-                        const partial = await this.trySynthesizePartialResponse(userText, supportedClaims, evidences, signal, channelContext?.recentMessages, naoConfirmadas);
+                        const partial = await this.trySynthesizePartialResponse(userText, supportedClaims, evidences, signal, channelContext?.recentMessages, naoConfirmadas,
+                            { traceId: trace.id, conversationId, ...channelContext?.goalTrace });
                         if (partial) {
                             log.info(`[${this.ts()}] [GROUNDING] resposta parcial (${supportedClaims.length}/${g.claims.length} afirmações sustentadas) revalidada e entregue`);
                             efeitoDoJuiz('resposta_parcial_entregue', { estado: g.state, sustentadas: supportedClaims.length, total: g.claims.length, parcialChars: partial.length, comAviso: partial.includes(MARCA_DO_AVISO_PARCIAL) });
@@ -1411,6 +1412,11 @@ export class AgentLoop {
         recentMessages?: Array<{ role: string; content: string }>,
         /** S5: o que a resposta recusada afirmava e as fontes NÃO sustentaram — o usuário precisa saber que ficou de fora. */
         unconfirmedClaims: Array<{ claim: string; verdict: 'NOT_SUPPORTED' | 'NOT_EVALUABLE'; trecho?: string }> = [],
+        /**
+         * De onde veio o julgamento que pediu esta síntese (mesmo traceId, conversa e goal/passo). Sem ele, o 2º julgamento ia ao
+         * gravador de voo sem conversa nem traceId e não dava para ligá-lo ao 1º (medição de 17/11/2026: 43 revalidações órfãs).
+         */
+        contextoDoJulgamento?: Pick<GroundingTraceContext, 'traceId' | 'conversationId' | 'goalId' | 'stepId' | 'stepDescription' | 'planGeneration'>,
     ): Promise<string | null> {
         try {
             const factsList = supportedClaims.map(c => `- ${c.claim}`).join('\n');
@@ -1465,7 +1471,7 @@ export class AgentLoop {
             if (!text || text.length < 10 || isInsufficientSentinel) return null;
 
             // Sprint V3: a revalidação também julga com o pedido do usuário como contexto.
-            const revalidated = await this.observer.validateGrounding(text, evidences, signal, { phase: 'partial-revalidation', userRequest: userText, recentMessages });
+            const revalidated = await this.observer.validateGrounding(text, evidences, signal, { ...contextoDoJulgamento, phase: 'partial-revalidation', userRequest: userText, recentMessages });
             if (revalidated.state !== 'VALIDATED' && revalidated.state !== 'NOT_APPLICABLE') {
                 log.warn(`[${this.ts()}] [GROUNDING] resposta parcial também não passou (estado=${revalidated.state}) — descartando`);
                 return null;
