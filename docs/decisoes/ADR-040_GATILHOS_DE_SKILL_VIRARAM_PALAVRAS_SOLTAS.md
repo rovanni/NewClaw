@@ -250,3 +250,18 @@ O corte de 500 tokens continua (teto constante; ADR-038 alternativa D), agora de
 
 `--aplicar` e `--reverter` foram rodados na mesma cópia: 19 de 19 `SKILL.md` com os gatilhos da prévia; depois da
 reversão, o arquivo de `consulta-agenda` ficou idêntico ao original (mesmo hash).
+
+### Execução real (etapa 4, 17/11/2026)
+
+Instância isolada: cópia do banco e das skills da produção Windows com os gatilhos da prévia aplicados, porta 3190, sem
+nenhum canal externo, todos os modelos no Bonsai 27B local (`llama-server`, raciocínio desligado; escolha da operadora).
+Três mensagens pela API do painel:
+
+| Mensagem | Antes (regra de hoje) | Com a ADR-040 |
+|---|---|---|
+| "qual a capital da França?" | 1 skill (`status-watchlist-criptomoedas`, por "cap") | nenhuma skill; 11 ferramentas pela categoria; entrada do agente 5.054 tokens |
+| "o que tenho hoje na agenda?" | — | `consulta-agenda` pela frase; a ferramenta dela (`schedule`) ficou no catálogo com o aviso no bloco de skills; o agente pediu `carregar_ferramenta schedule` e seguiu (D4 de ponta a ponta) |
+| "como está a semana? não sei para que lado ir, tenho que criar a aula de hoje" | 16 skills e 10 ferramentas (medido com a mesma regra) | 1 skill e 1 ferramenta citada; no uso real o juiz de suficiência perguntou disciplina e tema antes do agente (ADR-015), então o agente não rodou |
+
+Limitação: o corte declarado do bloco de skills é coberto pelo S488; o texto do prompt não sai no log, então não foi
+conferido na execução real.
