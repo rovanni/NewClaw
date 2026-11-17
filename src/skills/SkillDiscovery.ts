@@ -20,6 +20,7 @@
  */
 
 import type { Skill } from './SkillLoader';
+import { keywordBoundaryMatches } from '../shared/keywordBoundary';
 
 // ── Resultado de matching ─────────────────────────────────────────────────────
 
@@ -151,12 +152,77 @@ export function matchSkillByCapabilities(
     };
 }
 
+// ── Gatilhos (ADR-040) ────────────────────────────────────────────────────────
+
 /**
- * Verifica se uma query faz match com uma skill por trigger (comportamento atual).
+ * ADR-040: um gatilho é uma FRASE que o usuário escreveria ("o que tenho hoje"), e casa inteira, com fronteira de palavra
+ * (mesmo helper de DomainRegistry/ModelProfileRegistry). Antes era `includes` de cada palavra solta: "que", "para", "como"
+ * casavam em quase toda mensagem e "rea" casava dentro de "área".
  */
+export function gatilhoCasa(texto: string, gatilho: string): boolean {
+    const g = semAcento(gatilho.trim());
+    return g.length > 0 && keywordBoundaryMatches(semAcento(texto), g);
+}
+
+/** Forma, não significado: "como está" e "como esta" são a mesma frase escrita com e sem acento (o modelo e a pessoa variam). */
+function semAcento(s: string): string {
+    return s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+}
+
+/** Verifica se uma query faz match com uma skill por trigger (frase inteira — ADR-040). */
 export function matchSkillByTrigger(skill: Skill, query: string): boolean {
-    const lowerQuery = query.toLowerCase();
-    return (skill.triggers ?? []).some(t => lowerQuery.includes(t.toLowerCase()));
+    return (skill.triggers ?? []).some(t => gatilhoCasa(query, t));
+}
+
+const METACARACTERES = /[.*+?^${}()|[\]\\]/g;
+const METACARACTER_DE_REGEX = '.*+?^${}()[]';
+
+/**
+ * ADR-040 — formato do campo `trigger` de `auto_skills`: as frases ESCAPADAS e separadas por `|`. Continua sendo uma regex
+ * válida (o caminho do banco, `SkillLearner.scoreSkillMatch`, a usa assim) e volta às mesmas frases em
+ * `frasesDoCampoDeGatilhos`. Antes era `frases.join(' ')`, que apagava onde cada frase começava.
+ */
+export function campoDeGatilhos(frases: string[]): string {
+    return frases.map(f => f.trim()).filter(Boolean).map(f => f.replace(METACARACTERES, '\\$&')).join('|');
+}
+
+/**
+ * As frases de um campo `trigger`. Partes com metacaractere de regex sem escape são do formato antigo (regex escrita à mão,
+ * como `(clima|tempo)` ou `(pre[cç]o).*(btc)`): dessas saem as palavras, como antes (`extractTriggerKeywords`), porque não
+ * há frase a recuperar. Um campo antigo de palavras separadas por espaço (ADR-017 até 17/11/2026) não tem como ser
+ * separado sem adivinhar: volta como UMA frase, e a migração da ADR-040 (D2) regenera os gatilhos dessas skills.
+ */
+export function frasesDoCampoDeGatilhos(campo: string): string[] {
+    const partes: string[] = [];
+    let atual = '';
+    for (let i = 0; i < campo.length; i++) {
+        const c = campo[i];
+        if (c === '\\' && i + 1 < campo.length) { atual += c + campo[++i]; continue; }
+        if (c === '|') { partes.push(atual); atual = ''; continue; }
+        atual += c;
+    }
+    partes.push(atual);
+
+    const frases: string[] = [];
+    const palavrasAntigas: string[] = [];
+    for (const parte of partes) {
+        let regexAntiga = false;
+        for (let i = 0; i < parte.length; i++) {
+            if (parte[i] === '\\') { i++; continue; }
+            if (METACARACTER_DE_REGEX.includes(parte[i])) { regexAntiga = true; break; }
+        }
+        if (regexAntiga) {
+            palavrasAntigas.push(...parte
+                .replace(/\[[^\]]*\]/g, ' ')
+                .replace(/[().*+?^${}|\\[\]]/g, ' ')
+                .split(/\s+/)
+                .filter(s => s.length >= 3 && !/^\d+$/.test(s)));
+        } else {
+            const frase = parte.replace(/\\(.)/g, '$1').trim();
+            if (frase) frases.push(frase);
+        }
+    }
+    return [...new Set([...frases, ...palavrasAntigas.slice(0, 10)])];
 }
 
 /**

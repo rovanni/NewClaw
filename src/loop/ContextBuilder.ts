@@ -103,6 +103,29 @@ export function mensagemNoLimite(text: string, maxChars: number): string {
 }
 
 /**
+ * ADR-040 — o bloco de skills no teto `skillsMaxTokens`, com o corte DECLARADO (Informação Completa para Decidir, proibição 2).
+ * Antes `truncateToTokens` cortava e escrevia só `[...truncated]`: com 18 skills casadas chegava o começo da primeira e o
+ * modelo não sabia que as outras existiam. Agora o fim do bloco diz quanto foi mostrado e o nome de cada skill cortada.
+ * Os nomes saem dos títulos que o próprio sistema escreve (`### SKILL: nome`, `### SKILL MANUAL: nome`), não do texto delas.
+ */
+export function blocoDeSkillsNoLimite(text: string, maxTokens: number): string {
+    if (!text || estimateTokens(text) <= maxTokens) return text || '';
+    const titulos = [...text.matchAll(/^### SKILL(?: MANUAL)?: (.+)$/gm)].map(m => ({ nome: m[1].trim(), inicio: m.index ?? 0 }));
+    const declaracao = (mostrados: number): string => {
+        const cortadaNoMeio = titulos.filter((t, i) => t.inicio < mostrados && (titulos[i + 1]?.inicio ?? text.length) > mostrados).map(t => t.nome);
+        const fora = titulos.filter(t => t.inicio >= mostrados).map(t => t.nome);
+        return `\n[corte do sistema: bloco de skills limitado a ${maxTokens} tokens — ${mostrados} de ${text.length} caracteres mostrados.` +
+            (cortadaNoMeio.length ? ` Cortada no meio: ${cortadaNoMeio.join(', ')}.` : '') +
+            (fora.length ? ` Não couberam: ${fora.join(', ')}.` : '') +
+            ' O corte é do sistema, não das skills.]';
+    };
+    const maxChars = Math.floor(maxTokens * 3.5);
+    let mostrados = Math.max(0, maxChars - declaracao(maxChars).length);
+    mostrados = Math.max(0, maxChars - declaracao(mostrados).length);
+    return text.slice(0, mostrados) + declaracao(mostrados);
+}
+
+/**
  * As mensagens recentes da conversa que cabem no orçamento, das MAIS NOVAS para trás, devolvidas em ordem cronológica.
  * Antes o laço ia da mais antiga para a mais nova e parava quando o orçamento acabava — quem ficava de fora eram as
  * mensagens mais recentes, justamente as que dão sentido a "isso", "gera em PowerPoint", "e me envia" (S468).
@@ -171,7 +194,7 @@ export class ContextBudget {
         }
 
         if (params.skillsBlock) {
-            const skills = truncateToTokens(params.skillsBlock, this.config.skillsMaxTokens);
+            const skills = blocoDeSkillsNoLimite(params.skillsBlock, this.config.skillsMaxTokens);
             blocks.push({ role: 'system', content: skills, priority: 5 });
             totalTokens += estimateTokens(skills);
         }

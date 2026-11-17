@@ -21,6 +21,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { discoverSkills } from '../../skills/SkillDiscovery';
 import type { Skill } from '../../skills/SkillLoader';
+import { keywordBoundaryMatches } from '../../shared/keywordBoundary';
 
 let failures = 0;
 function check(ok: boolean, label: string, detail = ''): void {
@@ -32,10 +33,14 @@ function check(ok: boolean, label: string, detail = ''): void {
   }
 }
 
-/** Réplica exata do filtro inline que existia em AgentLoop.ts antes da unificação (S149). */
+/**
+ * A regra do AgentLoop para gatilho. Era a réplica do filtro inline antigo (substring); desde a ADR-040 (S488) é a frase
+ * inteira com fronteira de palavra (`keywordBoundaryMatches`). O que este teste trava continua igual: `byTrigger` segue
+ * exatamente essa regra, e `.all` é outra coisa.
+ */
 function oldInlineMatch(skills: Skill[], userText: string): Skill[] {
   return skills.filter(s =>
-    s.triggers?.some(t => userText.toLowerCase().includes(t.toLowerCase()))
+    s.triggers?.some(t => keywordBoundaryMatches(userText.toLowerCase(), t.toLowerCase()))
   );
 }
 

@@ -30,6 +30,7 @@
 
 import { pastaDaSkill } from '../shared/pastaDaSkill';
 import { marcarCaminhos, pastasDaInstalacao, resumoDoCorpo } from '../skills/SkillLoader';
+import { campoDeGatilhos, frasesDoCampoDeGatilhos } from '../skills/SkillDiscovery';
 import { configuracaoDoSync, idDaInstalacao, nomeDaSubpasta } from '../core/syncAgent';
 import { caminhosDaInstalacao } from '../core/backupDoConhecimento';
 import fs from 'fs';
@@ -856,7 +857,8 @@ export class SkillLearner {
             const skill: Skill = {
                 id: `skill_aprendida_${p.nome.replace(/-/g, '_')}_${Date.now()}`,
                 name: p.nome,
-                trigger: p.gatilhos.join(' '),
+                // ADR-040: a lista de frases, sem perder onde cada uma começa (antes: join(' ')).
+                trigger: campoDeGatilhos(p.gatilhos),
                 description: p.descricao,
                 // ADR-035: os caminhos desta instalação viram marcadores ({NEWCLAW}, {WORKSPACE}, {SKILLS}, {PASTA:nome}).
                 prompt: marcarCaminhos(montarCorpoDaSkill(p, { pedido: entrada.pedido, plataforma: entrada.plataforma, data: agora.slice(0, 10), segredos: entrada.segredos }),
@@ -1010,7 +1012,7 @@ export class SkillLearner {
      * so SkillDiscovery's semantic matching can work on auto-skills without extra configuration.
      */
     private buildSkillMd(skill: Skill): string {
-        const keywords = this.extractTriggerKeywords(skill.trigger);
+        const keywords = frasesDoCampoDeGatilhos(skill.trigger);
         const tools = this.parseToolSequence(skill.tool_sequence);
         const tags = this.deriveTagsFromSkill(skill);
 
@@ -1034,18 +1036,24 @@ export class SkillLearner {
         return lines.join('\n');
     }
 
+    /** ADR-040 (D2): as skills aprendidas por trajetória (ADR-017), para a regeração dos gatilhos. */
+    skillsAprendidasPorTrajetoria(): Skill[] {
+        return this.db.prepare(`SELECT * FROM auto_skills WHERE source_tool = 'trajetoria' ORDER BY created_at`).all() as Skill[];
+    }
+
     /**
-     * Extracts plain-text keywords from a regex trigger string.
-     * Used to populate the `triggers:` field in SKILL.md for SkillLoader's simple includes-match.
+     * ADR-040 (D2): troca os gatilhos de uma skill (banco + SKILL.md, se exportada). Devolve o valor anterior do campo, para
+     * reversão; null se a skill não existe. Não mexe no corpo: `validada_em` (ADR-035) continua valendo.
      */
-    private extractTriggerKeywords(trigger: string): string[] {
-        return trigger
-            .replace(/\[[^\]]*\]/g, ' ')          // remove char classes [...]
-            .replace(/[().*+?^${}|\\[\]]/g, ' ')  // remove regex metacharacters
-            .split(/\s+/)
-            .map(s => s.trim())
-            .filter(s => s.length >= 3 && !/^\d+$/.test(s))
-            .slice(0, 10);
+    trocarGatilhos(id: string, frases: string[]): string | null {
+        const skill = this.db.prepare('SELECT * FROM auto_skills WHERE id = ?').get(id) as Skill | undefined;
+        if (!skill) return null;
+        const anterior = skill.trigger;
+        const novo = campoDeGatilhos(frases);
+        this.db.prepare(`UPDATE auto_skills SET trigger = ?, updated_at = ? WHERE id = ?`).run(novo, new Date().toISOString(), id);
+        if (skill.file_exported) this.exportSkillFile({ ...skill, trigger: novo });
+        log.info(`[SKILL-GATILHOS] "${skill.name}" gatilhos trocados: ${JSON.stringify(anterior)} → ${JSON.stringify(novo)}`);
+        return anterior;
     }
 
     /**

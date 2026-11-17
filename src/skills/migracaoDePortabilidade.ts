@@ -17,6 +17,7 @@ import path from 'path';
 import Database from 'better-sqlite3';
 import { marcarCaminhos, resumoDoCorpo, gravarTabelaDePastas, lerTabelaDePastas, NOME_DE_PASTA, type PastasDaInstalacao } from './SkillLoader';
 import { pastaDaSkill } from '../shared/pastaDaSkill';
+import { campoDeGatilhos } from './SkillDiscovery';
 import { criarPacote, type Caminhos } from '../core/backupDoConhecimento';
 
 export interface ItemDaMigracao {
@@ -236,7 +237,8 @@ export async function aplicarAdocao(c: Caminhos, soltas: SkillSolta[]): Promise<
             if (!fs.existsSync(de) || fs.existsSync(para)) continue;
             const texto = fs.readFileSync(path.join(de, 'SKILL.md'), 'utf8');
             const descricao = texto.match(/^description:\s*(.+)$/m)?.[1]?.trim() ?? s.nome;
-            const gatilhos = texto.match(/^triggers:\s*(.+)$/m)?.[1]?.trim() ?? s.nome;
+            // ADR-040: no banco, as frases do `triggers:` (lista separada por vírgula) no formato do campo; antes ia a linha crua.
+            const gatilhos = campoDeGatilhos((texto.match(/^triggers:\s*(.+)$/m)?.[1] ?? s.nome).split(','));
             const corpo = texto.replace(/^﻿/, '').replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, '').trim();
             const agora = new Date().toISOString();
             // Só as colunas que esta tabela tem (instalações antigas não têm todas), como a importação da ADR-020.

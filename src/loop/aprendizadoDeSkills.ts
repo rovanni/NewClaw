@@ -131,6 +131,43 @@ export function motivoDeSegredo(texto: string, segredos: string[]): string | nul
 
 // ── Pedido ao LLM ────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
+/** ADR-040: o mesmo texto no aprendizado e na regeração dos gatilhos (uma regra só). */
+export const REGRA_DOS_GATILHOS =
+    'Gatilhos: de 3 a 8 FRASES CURTAS, do jeito que a pessoa pediria esta tarefa (ex.: "o que tenho hoje", "abrir a agenda"). ' +
+    'Cada gatilho é procurado como frase inteira na mensagem: uma palavra comum sozinha ("que", "como", "para", "hoje") casaria com ' +
+    'quase qualquer conversa e não serve; um termo próprio e raro sozinho serve (ex.: "pptx", "kahoot").';
+
+/**
+ * ADR-040 (D2): as skills aprendidas antes de 17/11/2026 perderam as frases dos gatilhos (`join(' ')`). Este pedido regenera só
+ * os gatilhos, a partir do que a skill é. Nada além da skill vai ao LLM.
+ */
+export function montarPedidoDeGatilhos(s: { nome: string; descricao: string; corpo: string }, diretivaDeIdioma?: string): string {
+    return [
+        'Esta é uma skill do assistente NewClaw (um procedimento que já funcionou). Escreva os gatilhos dela: as frases que, na',
+        'mensagem do usuário, indicam que ela serve.',
+        '',
+        `NOME: ${s.nome}`,
+        `DESCRIÇÃO: ${s.descricao}`,
+        'CONTEÚDO DA SKILL:',
+        '"""',
+        s.corpo,
+        '"""',
+        '',
+        `- ${REGRA_DOS_GATILHOS}`,
+        ...(diretivaDeIdioma ? [`- ${diretivaDeIdioma.trim()}`] : []),
+        '',
+        'Responda SOMENTE com um objeto JSON: {"gatilhos": ["frase 1", "frase 2"]}',
+    ].join('\n');
+}
+
+/** Forma da resposta do pedido de gatilhos; nada aqui julga o conteúdo. */
+export function interpretarGatilhos(bruta: string): { gatilhos: string[] } | { erro: string } {
+    const o = primeiroObjeto(bruta);
+    if (!o) return { erro: 'resposta sem JSON' };
+    const gatilhos = gatilhosValidos(o.gatilhos);
+    return gatilhos.length ? { gatilhos } : { erro: 'nenhum gatilho na forma (2–40 caracteres, sem vírgula)' };
+}
+
 export interface EntradaDoAprendizado {
     pedido: string;
     objetivo: string;
@@ -172,11 +209,12 @@ export function montarPedidoDeAprendizado(e: EntradaDoAprendizado): string {
         '- Nunca escreva senhas, tokens, chaves ou dados pessoais; onde a tarefa usou um, escreva <SEGREDO> e diga onde ele fica configurado.',
         `- A skill vale para ${e.plataforma}; diga isso na descrição se os comandos forem específicos do sistema.`,
         '- Escreva como conhecimento (o que funcionou e por quê), não como ordem absoluta.',
+        `- ${REGRA_DOS_GATILHOS}`,
         ...(e.diretivaDeIdioma ? [`- ${e.diretivaDeIdioma.trim()} (vale para todos os textos do JSON)`] : []),
         '',
         'Responda SOMENTE com um objeto JSON:',
         '{"aprender": true|false, "motivo": "por que sim ou por que não", "nome": "nome-curto-em-kebab-case", "titulo": "título",',
-        ' "descricao": "uma frase: quando usar", "gatilhos": ["palavras", "que", "indicam", "o pedido"], "ferramentas": ["exec_command"],',
+        ' "descricao": "uma frase: quando usar", "gatilhos": ["frase curta como a pessoa pediria", "outra frase"], "ferramentas": ["exec_command"],',
         ' "procedimento": "markdown com os passos e comandos", "cuidados": "markdown com armadilhas e como evitar (pode ser vazio)",',
         ' "aviso": "uma frase curta, para o usuário, dizendo o que você aprendeu"}',
         'Se "aprender" for false, preencha só "aprender" e "motivo".',
@@ -220,6 +258,14 @@ export function normalizarNome(s: string): string {
 const texto = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
 const lista = (v: unknown): string[] => (Array.isArray(v) ? v.map((x) => texto(x)).filter(Boolean) : []);
 
+/**
+ * ADR-040: cada gatilho é procurado como FRASE INTEIRA no pedido. Forma (determinística): 2–40 caracteres, até 12, sem
+ * vírgula nem quebra de linha (no SKILL.md a lista é separada por vírgula — ADR-035).
+ */
+export function gatilhosValidos(v: unknown): string[] {
+    return [...new Set(lista(v).filter((g) => !/[,\r\n]/.test(g)).map((g) => g.toLowerCase().replace(/\s+/g, ' ')).filter((g) => g.length >= 2 && g.length <= 40))].slice(0, 12);
+}
+
 /** Forma e tamanho; nada aqui julga o conteúdo. */
 export function interpretarResposta(bruta: string): RespostaInterpretada {
     const o = primeiroObjeto(bruta);
@@ -231,7 +277,7 @@ export function interpretarResposta(bruta: string): RespostaInterpretada {
         nome: normalizarNome(texto(o.nome)),
         titulo: texto(o.titulo),
         descricao: texto(o.descricao),
-        gatilhos: lista(o.gatilhos).map((g) => g.toLowerCase()).filter((g) => g.length >= 2 && g.length <= 40).slice(0, 12),
+        gatilhos: gatilhosValidos(o.gatilhos),
         ferramentas: lista(o.ferramentas).filter((f) => /^[a-z][a-z0-9_]{1,40}$/.test(f)).slice(0, 12),
         procedimento: texto(o.procedimento),
         cuidados: texto(o.cuidados),

@@ -3871,14 +3871,21 @@ export class AgentLoop {
             log.info(`[SKILL] Injetando ${matchedManual.length} skill(s) manual(ais): ${matchedManual.map(s => s.name).join(', ')}`);
         }
 
-        const manualTools = matchedManual.flatMap(s => s.tools ?? []);
-        if (manualTools.length > 0) {
-            intentDecision.preferredTools = Array.from(new Set([...(intentDecision.preferredTools ?? []), ...manualTools]));
-        }
-
         const toolDefs: ToolDefinition[] = this.buildToolDefs(intentDecision, channelContext?.ferramentasCarregadas);
         // ADR-021: a lista do turno, para `carregar_ferramenta` poder acrescentar ferramentas no meio do turno.
         this.ferramentasDoTurno.set(conversationId, toolDefs);
+
+        // ADR-040 (D4): as ferramentas do `tools:` das skills casadas NÃO entram mais completas (antes viravam preferredTools e
+        // levavam o turno de 7 para ~14 definições, em toda volta do laço). Ficam no catálogo da ADR-021; o fato vai no topo do
+        // bloco de skills (o topo nunca é cortado), para o agente saber que existem e carregar as que usar.
+        const naLista = new Set(toolDefs.map(d => d.name));
+        const ferramentasDasSkills = [...new Set(matchedManual.flatMap(s => s.tools ?? []))].filter(t => this.tools.has(t) && !naLista.has(t));
+        if (ferramentasDasSkills.length > 0) {
+            const aviso = `[Ferramentas citadas pelas skills deste turno que não vieram completas: ${ferramentasDasSkills.join(', ')} — ` +
+                `carregue com ${AgentLoop.CARREGAR_FERRAMENTA} as que for usar.]`;
+            skillContext = skillContext ? `${aviso}\n\n${skillContext}` : aviso;
+            log.info(`[SKILL] ferramentas das skills no catálogo (ADR-040): ${ferramentasDasSkills.join(', ')}`);
+        }
 
         // O override do roteador vale só para ESTE turno. Antes, `resolveProfile()` devolvia a
         // referência do perfil guardado no registry e estas linhas escreviam nele: quando o perfil
