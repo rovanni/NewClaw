@@ -12,10 +12,18 @@
  * utilitário Unix — tools/exec_command.ts, needsPowerShellWrap): o modelo não tem como medir isso. O S409 prende os dois.
  */
 import os from 'os';
-import { execFile } from 'child_process';
+import { execFile, spawn } from 'child_process';
 import SONDAS from './sondasDoAmbiente.json';
 
 export interface Sonda { fato: string; comando: string; argumentos: string[] }
+
+/**
+ * A página de código em que os programas de console escrevem quando a saída vai para um pipe — o caso do exec_command. Medida
+ * nas MESMAS condições do exec_command (shell do spawn, janela oculta). `altos`: os 128 caracteres dos bytes 0x80–0xFF, na
+ * ordem, como o próprio sistema os traduz; ausente quando a página é UTF-8 (65001), tem mais de um byte por caractere, ou a
+ * tradução não pôde ser pedida — aí ninguém adivinha a tabela.
+ */
+export interface PaginaDoConsole { codigo: number; altos?: string }
 
 export interface FatosDoAmbiente {
     plataforma: NodeJS.Platform;
@@ -27,6 +35,8 @@ export interface FatosDoAmbiente {
     /** Respostas das consultas de sondasDoAmbiente.json: fato → primeira linha da resposta, ou "não disponível". */
     medidos?: Record<string, string>;
     gerenciadorDePacotes?: string;
+    /** Só Windows, depois da medição (medirPaginaDoConsole). Ausente = não medida: a saída é lida como UTF-8, como sempre. */
+    paginaDoConsole?: PaginaDoConsole;
 }
 
 const PRAZO_POR_SONDA_MS = 5000;
@@ -53,6 +63,44 @@ function rodarSonda(s: Sonda): Promise<string> {
 export async function medirSondas(sondas: Sonda[] = sondasPara()): Promise<Record<string, string>> {
     const respostas = await Promise.all(sondas.map(async s => [s.fato, await rodarSonda(s)] as const));
     return Object.fromEntries(respostas);
+}
+
+/** Roda um comando como o exec_command roda (shell do spawn, janela oculta, entrada fechada) e devolve os bytes da saída. */
+function bytesNoShellDoExec(comando: string): Promise<Buffer | undefined> {
+    return new Promise(resolve => {
+        let filho;
+        try { filho = spawn(comando, { shell: true, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }); } catch { return resolve(undefined); }
+        const partes: Buffer[] = [];
+        const prazo = setTimeout(() => { filho.kill(); resolve(undefined); }, PRAZO_POR_SONDA_MS);
+        filho.stdout?.on('data', (b: Buffer) => partes.push(b));
+        filho.on('error', () => { clearTimeout(prazo); resolve(undefined); });
+        filho.on('close', code => { clearTimeout(prazo); resolve(code === 0 ? Buffer.concat(partes) : undefined); });
+    });
+}
+
+/**
+ * Mede a página de código da saída do exec_command no Windows (produção, 03–16/11/2026: em 52 de 104 julgamentos do juiz contra
+ * a evidência a saída do exec_command tinha "�" — o cmd.exe escreve no pipe na página do console, 850 nesta máquina, e o Node lia
+ * como UTF-8). Duas perguntas ao sistema, nenhuma tabela no código: (1) o `chcp`, nas condições do exec_command, diz o número;
+ * (2) o .NET do próprio Windows traduz os bytes 0x80–0xFF dessa página. Fora do Windows, ou sem resposta: undefined.
+ */
+export async function medirPaginaDoConsole(plataforma: NodeJS.Platform = process.platform): Promise<PaginaDoConsole | undefined> {
+    if (plataforma !== 'win32') return undefined;
+    const chcp = await bytesNoShellDoExec('chcp');
+    // O número é a única parte em ASCII da resposta ("Página de código ativa: 850") — o resto está na própria página.
+    const numeros = chcp ? chcp.toString('latin1').match(/\d{3,5}/g) ?? [] : [];
+    const codigo = numeros.length === 1 ? Number(numeros[0]) : NaN;   // mais de um número: resposta que não se sabe ler — não escolhe
+    if (!Number.isInteger(codigo)) return undefined;
+    if (codigo === 65001) return { codigo };
+    const pergunta = `[Console]::OutputEncoding=[Text.Encoding]::UTF8; $e=[Text.Encoding]::GetEncoding(${codigo}); ` +
+        `if (-not $e.IsSingleByte) { 'varios-bytes'; exit }; ($e.GetString([byte[]](128..255)).ToCharArray() | ForEach-Object { [int]$_ }) -join ','`;
+    const resposta = await new Promise<string>(resolve => {
+        execFile('powershell', ['-NoProfile', '-NonInteractive', '-Command', pergunta], { timeout: PRAZO_POR_SONDA_MS, windowsHide: true, encoding: 'utf8' },
+            (erro, stdout) => resolve(erro ? '' : (stdout ?? '').trim()));
+    });
+    const codigos = resposta.split(',').map(Number);
+    if (codigos.length !== 128 || !codigos.every(c => Number.isInteger(c) && c > 0)) return { codigo };
+    return { codigo, altos: String.fromCharCode(...codigos) };
 }
 
 let registrados: FatosDoAmbiente | undefined;
