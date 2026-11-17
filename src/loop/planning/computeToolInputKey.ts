@@ -1,3 +1,5 @@
+import { createHash } from 'crypto';
+
 /**
  * computeToolInputKey — chave de deduplicação de chamadas de ferramenta repetidas
  * (usedToolInputs/blockedKeyCount em AgentLoop.ts, caminhos nativo e json_action).
@@ -15,7 +17,14 @@
  * ferramenta (exec_command) cortar por acidente. Chaveando por file_path para esta ferramenta
  * especificamente, a 2ª tentativa já cai no dedup duro existente, sem precisar de nenhum
  * mecanismo novo.
+ *
+ * Argumentos longos viram um resumo (sha1, 16 hex) AQUI, e não em quem grava (S487). O ProactiveRecovery resumia a chave
+ * acima de 256 caracteres e o AgentLoop procurava a chave inteira no mesmo Set: com argumentos longos as duas nunca batiam, e o
+ * bloqueio de chamada repetida não funcionava para nenhuma ferramenta. Caso real (VPS, 16/11/2026 23:28): o mesmo áudio de
+ * 1639 caracteres saiu duas vezes no mesmo turno — a 2ª chamada idêntica deveria ter sido barrada.
  */
+const LIMITE_DA_CHAVE = 256;
+
 export function computeToolInputKey(toolName: string, args: unknown): string {
     if (toolName === 'send_document') {
         const a = args as Record<string, unknown> | undefined;
@@ -24,5 +33,7 @@ export function computeToolInputKey(toolName: string, args: unknown): string {
             return `send_document:${filePath}`;
         }
     }
-    return `${toolName}:${JSON.stringify(args)}`;
+    const chave = `${toolName}:${JSON.stringify(args)}`;
+    if (chave.length <= LIMITE_DA_CHAVE) return chave;
+    return `${toolName}:h:${createHash('sha1').update(chave).digest('hex').slice(0, 16)}`;
 }
