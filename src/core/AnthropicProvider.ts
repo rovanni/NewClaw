@@ -6,11 +6,29 @@ import { guessCapabilities } from './modelCapabilityHeuristics';
 
 const log = createLogger('AnthropicProvider');
 
-// A Messages API exige max_tokens explícito (diferente de Gemini/DeepSeek/Groq/OpenAI, que usam
-// um default do servidor quando omitido). 8192 é um teto seguro para respostas de agente sem
-// truncar prematuramente em nenhum modelo Claude atual.
-const DEFAULT_MAX_TOKENS = 8192;
+// A Messages API exige max_tokens explícito (diferente de Gemini/DeepSeek/Groq/OpenAI, que usam um default do servidor
+// quando omitido). ADR-027/ADR-040: a chamada só para por silêncio — nenhum teto do NewClaw. O valor enviado é o TETO DO
+// PRÓPRIO MODELO, informado pela API (`GET /v1/models/{id}` → `max_tokens`) e guardado por modelo. Antes era 8192 fixo,
+// que cortava respostas longas (os modelos atuais vão até 128 mil) e contrariava a regra do silêncio.
 const ANTHROPIC_VERSION = '2023-06-01';
+
+/** O teto de saída de cada modelo, como a API informou (medido uma vez por processo). */
+const tetoDeSaidaPorModelo = new Map<string, number>();
+
+/** Busca o teto de saída do modelo na Models API. Sem o número, lança com o que foi tentado (Nunca Adivinhar). */
+export async function tetoDeSaidaDoModelo(apiKey: string, modelo: string, buscar: typeof fetch = fetch): Promise<number> {
+    const guardado = tetoDeSaidaPorModelo.get(modelo);
+    if (guardado) return guardado;
+    const resp = await buscar(`https://api.anthropic.com/v1/models/${encodeURIComponent(modelo)}`, {
+        headers: { 'x-api-key': apiKey, 'anthropic-version': ANTHROPIC_VERSION },
+    });
+    if (!resp.ok) throw new Error(`Anthropic: não foi possível ler o teto de saída do modelo "${modelo}" (GET /v1/models/${modelo} → HTTP ${resp.status}); a chamada não foi feita`);
+    const info = await resp.json() as { max_tokens?: unknown };
+    const teto = typeof info.max_tokens === 'number' && info.max_tokens > 0 ? info.max_tokens : undefined;
+    if (!teto) throw new Error(`Anthropic: a Models API não informou max_tokens para o modelo "${modelo}"; a chamada não foi feita`);
+    tetoDeSaidaPorModelo.set(modelo, teto);
+    return teto;
+}
 const ANTHROPIC_MESSAGES_URL = 'https://api.anthropic.com/v1/messages';
 
 interface AnthropicMessage {
@@ -122,7 +140,7 @@ export class AnthropicProvider implements ILLMProvider {
             const { system, anthropicMessages } = convertMessages(messages);
             const body: Record<string, unknown> = {
                 model: this.model,
-                max_tokens: DEFAULT_MAX_TOKENS,
+                max_tokens: await tetoDeSaidaDoModelo(this.apiKey, this.model),
                 messages: anthropicMessages,
                 stream: true,
             };

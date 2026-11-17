@@ -25,7 +25,9 @@ import { AnthropicProvider } from '../../core/AnthropicProvider';
 import { GeminiProvider } from '../../core/GeminiProvider';
 import { GroqProvider } from '../../core/GroqProvider';
 import { DeepSeekProvider } from '../../core/DeepSeekProvider';
-import { OllamaProvider } from '../../core/OllamaProvider';
+import { OllamaProvider, extractChunkText } from '../../core/OllamaProvider';
+import { converterParaGemini } from '../../core/GeminiProvider';
+import { tetoDeSaidaDoModelo } from '../../core/AnthropicProvider';
 import { ProviderFactory } from '../../core/ProviderFactory';
 import { isChunkActive, lerEventosSSE, prazoDoPrimeiroPedaco, VigiaDeSilencio } from '../../core/streamVigiado';
 import { medidorDoProcesso } from '../../core/medidorDeTrabalho';
@@ -99,12 +101,21 @@ function formatoDa(url: string): Formato {
     return 'openai';
 }
 
+/** A última requisição de geração que o servidor recebeu (ADR-040: conferir teto enviado, onde vai a chave, o corpo). */
+let ultima: { url: string; headers: http.IncomingHttpHeaders; corpo: string } | undefined;
+/** Quantas vezes a Anthropic perguntou o teto de saída de um modelo (`GET /v1/models/{id}`). */
+let consultasDoTeto = 0;
+
 function servidor(): Promise<{ base: string; fechar: () => void }> {
     const srv = http.createServer((req, res) => {
         const url = req.url ?? '';
         if (url.endsWith('/models')) { res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"data":[]}'); return; }
-        req.resume();
+        // Anthropic Models API: o teto de saída do modelo (ADR-040: a chamada usa este número, não um fixo).
+        if (req.method === 'GET' && /\/v1\/models\/[^/]+$/.test(url)) { consultasDoTeto++; res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"id":"m","max_tokens":128000}'); return; }
+        const partes: Buffer[] = [];
+        req.on('data', (c: Buffer) => partes.push(c));
         req.on('end', () => {
+            ultima = { url, headers: req.headers, corpo: Buffer.concat(partes).toString('utf8') };
             const f = formatoDa(url);
             res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
             const timers: NodeJS.Timeout[] = [];
@@ -223,6 +234,18 @@ async function main(): Promise<void> {
         } finally { (medidorDoProcesso as any).velocidade = original; }
     }
 
+    console.log('\n=== S483-11 — ADR-040: pedaço só de espaço é texto; teto ausente não vira número inventado; Gemini sem nome inventado ===');
+    {
+        const pedacos = ['Olá', ' ', 'mundo', '\n\n', 'fim'].map(t => extractChunkText({ message: { content: t } } as RawApiChunk).text);
+        assert(pedacos.join('') === 'Olá mundo\n\nfim', 'Ollama: espaço e parágrafo entre pedaços chegam à resposta (antes: "Olámundofim")', pedacos);
+        assert(extractChunkText({ message: { content: ' ', thinking: 'pensando' } } as RawApiChunk).type === 'thinking', 'pedaço com espaço + raciocínio: o raciocínio vale');
+        const semTeto = (async () => { try { await tetoDeSaidaDoModelo('k', 'sem-teto-s483', (async () => new Response('{"id":"x"}', { status: 200 })) as typeof fetch); return 'sem erro'; } catch (e) { return String(e); } })();
+        const http500 = (async () => { try { await tetoDeSaidaDoModelo('k', 'erro-s483', (async () => new Response('', { status: 500 })) as typeof fetch); return 'sem erro'; } catch (e) { return String(e); } })();
+        assert(/não informou max_tokens/.test(await semTeto) && /HTTP 500/.test(await http500), 'Anthropic: sem o teto informado, a chamada não é feita e o erro diz o que foi tentado (nada de 8192)');
+        const g = converterParaGemini([{ role: 'tool', content: 'órfão', tool_call_id: 'x' }]);
+        assert(g.contents[0].role === 'user' && 'text' in g.contents[0].parts[0], 'Gemini: resultado de ferramenta sem a chamada vai como texto declarado, não com nome inventado', g);
+    }
+
     console.log('\n=== S483-4 — todo provedor com streaming declara que vigia o silêncio ===');
     for (const p of [new OllamaProvider('http://x.invalid', 'm'), new OpenAIProvider('', 'm', 'http://x.invalid', 'local'), new OpenRouterProvider('k', 'm'),
         new GroqProvider('k', 'm'), new DeepSeekProvider('k', 'm'), new AnthropicProvider('k', 'm'), new GeminiProvider('k', 'm')]) {
@@ -299,6 +322,27 @@ async function main(): Promise<void> {
             assert(!r.estourou && r.r?.content === 'vou buscar' && r.r?.interrupted === true && r.r?.toolCalls === undefined,
                 `${p.nome}: o texto vem interrompido e a chamada incompleta não vem`, r);
         }
+
+        console.log('\n=== S483-10 — ADR-040: teto da Anthropic medido, chave do Gemini fora da URL, papéis do Gemini ===');
+        cenario = 'ferramenta';
+        consultasDoTeto = 0;
+        const anthropic = new AnthropicProvider('k', 'teto-s483');
+        await comTeto(sig => anthropic.chat([{ role: 'user', content: 'x' }], undefined, { signal: sig }));
+        await comTeto(sig => anthropic.chat([{ role: 'user', content: 'x' }], undefined, { signal: sig }));
+        assert(JSON.parse(ultima?.corpo ?? '{}').max_tokens === 128000 && consultasDoTeto === 1,
+            'Anthropic: max_tokens é o teto que a Models API informou (128 mil, antes 8192 fixo), consultado uma vez por modelo', { corpo: ultima?.corpo.slice(0, 120), consultasDoTeto });
+        await comTeto(sig => new GeminiProvider('chave-s483', 'm').chat([
+            { role: 'system', content: 'regras' }, { role: 'user', content: 'oi' },
+            { role: 'assistant', content: '', toolCalls: [{ id: 't1', name: 'buscar', arguments: { q: 'x' } }] },
+            { role: 'tool', content: 'achei', tool_call_id: 't1' },
+        ], undefined, { signal: sig }));
+        const corpoG = JSON.parse(ultima?.corpo ?? '{}');
+        assert(!!ultima && !ultima.url.includes('chave-s483') && !ultima.url.includes('key=') && ultima.headers['x-goog-api-key'] === 'chave-s483',
+            'Gemini: a chave vai no cabeçalho x-goog-api-key, não na URL (antes ?key=…)', { url: ultima?.url });
+        const papeis = (corpoG.contents ?? []).map((c: { role: string }) => c.role);
+        assert(corpoG.systemInstruction?.parts?.[0]?.text === 'regras' && papeis.every((r: string) => r === 'user' || r === 'model')
+            && corpoG.contents?.[1]?.parts?.[0]?.functionCall?.name === 'buscar' && corpoG.contents?.[2]?.parts?.[0]?.functionResponse?.name === 'buscar',
+            'Gemini: system vira systemInstruction; só user/model; chamada e resultado de ferramenta como functionCall/functionResponse', corpoG);
     } finally {
         globalThis.fetch = fetchOriginal;
         delete process.env.SILENCIO_DO_MODELO_S;

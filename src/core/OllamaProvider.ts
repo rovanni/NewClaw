@@ -27,18 +27,21 @@ function parseToolArgs(args: unknown): Record<string, unknown> {
  * Supports: Ollama (content, thinking, reasoning), OpenAI (delta.content),
  * DeepSeek (reasoning_content), Anthropic (thinking blocks), Gemini (parts).
  */
-function extractChunkText(chunk: RawApiChunk): { text: string; type: 'content' | 'thinking' | 'reasoning' | 'delta' | 'unknown' } {
+export function extractChunkText(chunk: RawApiChunk): { text: string; type: 'content' | 'thinking' | 'reasoning' | 'delta' | 'unknown' } {
+    // ADR-040: pedaço só de espaço/quebra de linha ("\n\n" entre parágrafos, o espaço entre palavras) é texto do modelo — antes o
+    // teste com trim() o descartava. Só cede a vez quando o mesmo pedaço traz raciocínio (o espaço ali não é resposta).
     if (chunk.message) {
-        if (chunk.message.content && chunk.message.content.trim()) return { text: chunk.message.content, type: 'content' };
-        if (chunk.message.thinking && chunk.message.thinking.trim()) return { text: chunk.message.thinking, type: 'thinking' };
-        if (chunk.message.reasoning && chunk.message.reasoning.trim()) return { text: chunk.message.reasoning, type: 'reasoning' };
+        const m = chunk.message;
+        if (m.content && (m.content.trim() || !(m.thinking || m.reasoning))) return { text: m.content, type: 'content' };
+        if (chunk.message.thinking) return { text: chunk.message.thinking, type: 'thinking' };
+        if (chunk.message.reasoning) return { text: chunk.message.reasoning, type: 'reasoning' };
         if (chunk.message.tool_calls) return { text: '', type: 'content' };
     }
     if (chunk.choices?.[0]?.delta) {
         const delta = chunk.choices[0].delta;
-        if (delta.content && delta.content.trim()) return { text: delta.content, type: 'delta' };
-        if (delta.reasoning_content && delta.reasoning_content.trim()) return { text: delta.reasoning_content, type: 'reasoning' };
-        if (delta.thinking && delta.thinking.trim()) return { text: delta.thinking, type: 'thinking' };
+        if (delta.content && (delta.content.trim() || !(delta.reasoning_content || delta.thinking))) return { text: delta.content, type: 'delta' };
+        if (delta.reasoning_content) return { text: delta.reasoning_content, type: 'reasoning' };
+        if (delta.thinking) return { text: delta.thinking, type: 'thinking' };
     }
     if (chunk.type === 'content_block_delta' && chunk.delta) {
         if (chunk.delta.type === 'thinking_delta' && chunk.delta.thinking) return { text: chunk.delta.thinking, type: 'thinking' };
@@ -46,8 +49,8 @@ function extractChunkText(chunk: RawApiChunk): { text: string; type: 'content' |
     }
     if (chunk.candidates?.[0]?.content?.parts) {
         for (const part of chunk.candidates[0].content.parts) {
-            if (part.text && part.text.trim()) return { text: part.text, type: 'content' };
-            if (part.thought && part.thought.trim()) return { text: part.thought, type: 'thinking' };
+            if (part.text && (part.text.trim() || !part.thought)) return { text: part.text, type: 'content' };
+            if (part.thought) return { text: part.thought, type: 'thinking' };
         }
     }
     return { text: '', type: 'unknown' };
