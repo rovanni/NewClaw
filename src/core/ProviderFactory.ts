@@ -3,7 +3,7 @@
  * Suporta: Gemini, DeepSeek, Groq, OpenAI, OpenRouter, Anthropic, Ollama
  */
 
-import { combinarSinais, sinalDoTurno, conversaDoTurno } from '../shared/turnCancellation';
+import { combinarSinais, sinalDoTurno, conversaDoTurno, passoDoTurno } from '../shared/turnCancellation';
 import { registrarModeloQueRespondeu, esquecerModeloQueRespondeu } from '../shared/contratoDoTurno';
 import { createLogger } from '../shared/AppLogger';
 import { errorMessage } from '../shared/errors';
@@ -69,6 +69,16 @@ const log = createLogger('Providerfactory');
  * da mensagem do PRÓPRIO aborto por orçamento de raciocínio ("... after N chars"), a única
  * medida do raciocínio descartado — o texto dele nunca chega ao resultado.
  */
+/**
+ * ADR-040: dentro de um passo de objetivo (`executarNoPasso`), a chamada que não informou o goal herda o do passo — o sub-turno
+ * do agente passa a sair no `[LLM-CALL]` com `goal=`/`step=`. O que o chamador informou nunca é trocado.
+ */
+export function diagComPasso(diag: LlmCallDiag | undefined): LlmCallDiag | undefined {
+    const passo = passoDoTurno();
+    if (!diag || !passo || diag.goalId) return diag;
+    return { ...diag, goalId: passo.goalId, step: diag.step ?? passo.stepId };
+}
+
 export function buildLlmCallSummary(
     diag: LlmCallDiag | undefined,
     messages: LLMMessage[],
@@ -408,7 +418,7 @@ export class ProviderFactory {
         const optsObservadas = telemetriaInterna ? { ...opts, telemetry: telemetriaInterna } : opts;
         const result = await this.chatWithFallbackImpl(messages, tools, preferredProvider, timeoutMs, externalSignal, modelOverride, optsObservadas);
         try {
-            log.info(`[LLM-CALL] ${buildLlmCallSummary(opts?.diag, messages, result, Date.now() - t0)}`);
+            log.info(`[LLM-CALL] ${buildLlmCallSummary(diagComPasso(opts?.diag), messages, result, Date.now() - t0)}`);
         } catch { /* diagnóstico nunca derruba a chamada */ }
         try {
             const tentativas = (optsObservadas?.telemetry?.attempts ?? []).filter(a => a.model !== 'non-streaming-fallback');

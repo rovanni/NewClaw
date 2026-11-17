@@ -65,25 +65,37 @@ export function estimateTokens(text: string): number {
     return Math.ceil(text.length / charsPerToken);
 }
 
+/**
+ * A declaração de um corte (Informação Completa para Decidir, proibição 2): quanto foi mostrado do total e que o corte é do
+ * sistema. Antes os dois cortes abaixo escreviam só `[...truncated]` — o modelo não distinguia "o dado acaba aqui" de "o
+ * prompt cortou aqui" (o prompt-mestre de `execution`, ~2,7 mil tokens, era cortado em 1.500 em toda chamada).
+ */
+export function declaracaoDeCorte(mostrados: number, total: number): string {
+    return `\n[corte do sistema: ${mostrados} de ${total} caracteres mostrados — o resto foi omitido pelo limite do contexto; o corte é do sistema, não do dado]`;
+}
+
+/** Corta no fim de frase/linha mais próximo, sem passar de `maxChars` contando a declaração. */
+function cortarDeclarando(text: string, maxChars: number): string {
+    const reserva = declaracaoDeCorte(text.length, text.length).length;
+    const util = Math.max(0, maxChars - reserva);
+    const truncated = text.slice(0, util);
+    const lastPeriod = truncated.lastIndexOf('.');
+    const lastNewline = truncated.lastIndexOf('\n');
+    const cutPoint = Math.max(lastPeriod + 1, lastNewline, util - 100);
+    const mostrado = truncated.slice(0, cutPoint > 0 ? cutPoint : util);
+    return mostrado + declaracaoDeCorte(mostrado.length, text.length);
+}
+
 export function truncateToTokens(text: string, maxTokens: number): string {
     if (!text) return '';
     const estimated = estimateTokens(text);
     if (estimated <= maxTokens) return text;
-    const maxChars = Math.floor(maxTokens * 3.5);
-    const truncated = text.slice(0, maxChars);
-    const lastPeriod = truncated.lastIndexOf('.');
-    const lastNewline = truncated.lastIndexOf('\n');
-    const cutPoint = Math.max(lastPeriod, lastNewline, maxChars - 100);
-    return truncated.slice(0, cutPoint > 0 ? cutPoint : maxChars) + '\n[...truncated]';
+    return cortarDeclarando(text, Math.floor(maxTokens * 3.5));
 }
 
 export function truncateToChars(text: string, maxChars: number): string {
     if (!text || text.length <= maxChars) return text || '';
-    const truncated = text.slice(0, maxChars);
-    const lastPeriod = truncated.lastIndexOf('.');
-    const lastNewline = truncated.lastIndexOf('\n');
-    const cutPoint = Math.max(lastPeriod, lastNewline, maxChars - 100);
-    return truncated.slice(0, cutPoint > 0 ? cutPoint : maxChars) + '\n[...truncated]';
+    return cortarDeclarando(text, maxChars);
 }
 
 /**
@@ -217,28 +229,56 @@ export class ContextBudget {
 
         if (totalTokens > this.maxInputTokens) {
             log.warn(`Context overflow: ${totalTokens} tokens > ${this.maxInputTokens} max. Truncating low-priority blocks.`);
-            blocks.sort((a, b) => b.priority - a.priority);
-            let kept = 0;
-            for (const block of blocks) {
-                if (kept + estimateTokens(block.content) <= this.maxInputTokens) {
-                    kept += estimateTokens(block.content);
-                } else {
-                    const remaining = this.maxInputTokens - kept;
-                    // ADR-040: o bloco de skills também declara este corte (com o nome das skills que saíram).
-                    block.content = block === blocoDeSkills
-                        ? blocoDeSkillsNoLimite(block.content, remaining)
-                        : truncateToTokens(block.content, remaining);
-                    break;
-                }
-            }
-            blocks.sort((a, b) => {
-                const roleOrder: Record<string, number> = { system: 0, user: 1, assistant: 2 };
-                return (roleOrder[a.role] || 0) - (roleOrder[b.role] || 0);
-            });
+            const ajustados = ContextBudget.caberNoLimite(blocks, this.maxInputTokens, blocoDeSkills);
+            const depois = ajustados.reduce((n, b) => n + estimateTokens(b.content), 0);
+            log.info(`ContextBudget: ${depois} tokens across ${ajustados.length} blocks after overflow (max: ${this.maxInputTokens}, before: ${totalTokens})`);
+            return ajustados;
         }
 
         log.info(`ContextBudget: ${totalTokens} tokens across ${blocks.length} blocks (max: ${this.maxInputTokens})`);
         return blocks;
+    }
+
+    /**
+     * ADR-040 — estouro do contexto. Mantém os blocos por prioridade até o limite; o primeiro que não cabe inteiro é cortado
+     * (corte declarado) e os seguintes que não cabem saem, com UMA linha declarando quantos saíram. A ordem original volta no
+     * fim. Antes: cortava só o primeiro bloco que não cabia e parava (`break`) — os de prioridade menor ficavam inteiros e o
+     * contexto seguia acima do limite —, e reordenava por papel (todos os `user` antes de todos os `assistant`), embaralhando
+     * a conversa e tirando a mensagem atual do fim.
+     */
+    static caberNoLimite(blocks: ContextBlock[], limite: number, blocoDeSkills?: ContextBlock): ContextBlock[] {
+        const MINIMO_PARA_CORTAR = 50;          // abaixo disto, um pedaço do bloco não informa nada: ele sai inteiro
+        const RESERVA_DA_DECLARACAO = 60;       // a linha que declara os blocos que saíram
+        const posicao = new Map(blocks.map((b, i) => [b, i]));
+        const porPrioridade = [...blocks].sort((a, b) => b.priority - a.priority || posicao.get(a)! - posicao.get(b)!);
+        const orcamento = Math.max(0, limite - RESERVA_DA_DECLARACAO);
+        const ficam = new Set<ContextBlock>();
+        const sairam: ContextBlock[] = [];
+        let usados = 0;
+        for (const block of porPrioridade) {
+            const t = estimateTokens(block.content);
+            const resta = orcamento - usados;
+            if (t <= resta) { ficam.add(block); usados += t; continue; }
+            if (resta >= MINIMO_PARA_CORTAR) {
+                // ADR-040: o bloco de skills declara o corte com o nome das skills que saíram.
+                block.content = block === blocoDeSkills ? blocoDeSkillsNoLimite(block.content, resta) : truncateToTokens(block.content, resta);
+                ficam.add(block);
+                usados += estimateTokens(block.content);
+            } else {
+                sairam.push(block);
+            }
+        }
+        const resultado = blocks.filter(b => ficam.has(b));
+        if (sairam.length) {
+            const chars = sairam.reduce((n, b) => n + b.content.length, 0);
+            const declaracao: ContextBlock = {
+                role: 'system', priority: 0,
+                content: `[corte do sistema: ${sairam.length} bloco(s) do contexto (${chars} caracteres: ${[...new Set(sairam.map(b => b.role))].join(', ')}) ficaram de fora pelo limite do contexto; o corte é do sistema, não da conversa]`,
+            };
+            const ultimoSystem = resultado.map(b => b.role).lastIndexOf('system');
+            resultado.splice(ultimoSystem + 1, 0, declaracao);
+        }
+        return resultado;
     }
 
     toLLMMessages(blocks: ContextBlock[]): Array<{ role: string; content: string }> {

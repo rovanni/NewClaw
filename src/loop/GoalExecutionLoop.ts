@@ -18,7 +18,7 @@
  *   - Nenhum ciclo roda sem trigger explícito (user message ou auth callback)
  */
 
-import { executarAguardandoComandos } from '../shared/turnCancellation';
+import { executarAguardandoComandos, executarNoPasso } from '../shared/turnCancellation';
 import { intervaloDoRelatoMs, montarRelatoDeProgresso } from './relatoDeProgresso';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -2913,12 +2913,13 @@ export class GoalExecutionLoop {
         // cleanup no seu PRÓPRIO finally, sempre, antes mesmo deste await resolver (sucesso ou
         // exceção). Nada aqui lê activeTurns depois da chamada (ver S229_AgentLoop_
         // RunFinallyClearsActiveTurn.test.ts e S223, reescrito para validar isto).
-        const response: Awaited<ReturnType<AgentLoop['process']>> = await this.agentLoop.process(
+        // ADR-040: as chamadas do sub-turno saem no [LLM-CALL] com goal=/step= (medição de tokens por objetivo).
+        const response: Awaited<ReturnType<AgentLoop['process']>> = await executarNoPasso({ goalId: goal.id, stepId: step.id }, () => this.agentLoop.process(
             goal.conversationId,
             stepPrompt,
             sessionUserId ?? goal.conversationId,
             goalChannelContext
-        );
+        ));
         const text = typeof response === 'string' ? response : response.text;
         const respOptions = typeof response === 'string' ? undefined : response.options;
 

@@ -50,6 +50,8 @@ export function matchSkillByTrigger(skill: Skill, query: string): boolean {
 }
 
 const METACARACTERES = /[.*+?^${}()|[\]\\]/g;
+/** Letras do português (as de `shared/keywordBoundary`) e dígitos: o que conta como "dentro de uma palavra" na regex antiga. */
+const LETRA = 'a-z0-9áàãâéêíóõôúç';
 const METACARACTER_DE_REGEX = '.*+?^${}()[]';
 
 /**
@@ -93,7 +95,9 @@ function ehRegexAntiga(campo: string): boolean {
 export function campoCasa(campo: string, texto: string): boolean {
     if (!campo.trim()) return false;
     if (ehRegexAntiga(campo)) {
-        try { return new RegExp(campo, 'i').test(texto); } catch { return false; }
+        // A regex antiga casava pedaço de palavra: "(…|ada|…)" casava "nada" (95 de 443 mensagens reais na "Consulta Cripto",
+        // 17/11/2026). Com a fronteira nas pontas, o que ela casa tem de começar e terminar em palavra inteira.
+        try { return new RegExp(`(?:^|[^${LETRA}])(?:${campo})(?:$|[^${LETRA}])`, 'i').test(texto.toLowerCase()); } catch { return false; }
     }
     const t = textoSemAcento(texto);
     return frasesDoCampoDeGatilhos(campo).some(f => casaNormalizado(t, f));

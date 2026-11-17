@@ -1738,10 +1738,13 @@ export class AgentLoop {
         }
 
         const extras = AgentLoop.CATEGORY_TOOLS[intent.category] ?? null;
-        // Unknown category, low confidence, or conversation with specific topicSlug (indicates a concrete operational capability) → send all tools to be safe.
+        // Categoria sem lista, confiança baixa ou conversa com topicSlug: o roteador não sabe o que o turno precisa. Antes iam as
+        // 22 definições completas (o "oi" de 17/10: ~69% da entrada; 24 de 695 turnos medidos em 17/11). ADR-040: o núcleo
+        // completo e TODO o resto no catálogo da ADR-021 — o agente vê que cada ferramenta existe e carrega a que usar.
         if (extras === null || intent.confidence < 0.65 || (intent.category === 'conversation' && intent.topicSlug)) {
-            log.info(`[TOOLS] Sending all tools (category=${intent.category}, confidence=${intent.confidence}${intent.topicSlug ? `, topicSlug=${intent.topicSlug}` : ''})`);
-            return Array.from(this.tools.values()).map(completa);
+            const nucleo = Array.from(this.tools.values()).filter(t => AgentLoop.CORE_TOOLS.has(t.name) || carregadas.has(t.name));
+            log.info(`[TOOLS] Roteador sem certeza (category=${intent.category}, confidence=${intent.confidence}${intent.topicSlug ? `, topicSlug=${intent.topicSlug}` : ''}): núcleo + catálogo (${nucleo.length}/${this.tools.size} completas)`);
+            return comCatalogo(nucleo);
         }
 
         const allowed = new Set([...AgentLoop.CORE_TOOLS, ...extras, ...carregadas]);

@@ -141,14 +141,14 @@ export class SkillLearner {
     private static readonly SKILL_DEFS: Record<typeof KNOWN_SKILL_TOPICS[number], { name: string; trigger: string; description: string; prompt: string; toolSeq: string[] }> = {
         crypto_price: {
             name: 'Preço de Cripto',
-            trigger: '(pre[cç]o|cota[cç][aã]o|valor|quanto).*(bitcoin|btc|ethereum|eth|solana|sol|river|doge|ada|xrp)',
+            trigger: campoDeGatilhos(['preço do bitcoin', 'cotação do bitcoin', 'preço do btc', 'preço do ethereum', 'preço da solana', 'preço do river', 'valor do river', 'preço da cripto', 'cotação da cripto', 'valor da cripto']),
             description: 'Busca preço de criptomoedas via web_search com instrução focada.',
             prompt: 'Sempre que perguntarem sobre preço de criptomoedas, use web_search com {"query": "preço NOMEMOEDA"}. Formate o resultado com preço em USD, variação 24h e market cap.',
             toolSeq: ['web_search']
         },
         crypto_query: {
             name: 'Consulta Cripto',
-            trigger: '(bitcoin|btc|ethereum|eth|solana|sol|river|doge|ada|xrp)',
+            trigger: campoDeGatilhos(['bitcoin', 'btc', 'ethereum', 'solana', 'dogecoin', 'xrp', 'criptomoeda', 'cripto']),
             description: 'Consulta geral sobre criptomoedas com formato consistente.',
             prompt: 'Use web_search para buscar dados de criptomoedas. Sempre inclua preço, variação 24h e volume.',
             toolSeq: ['web_search']
@@ -170,7 +170,7 @@ export class SkillLearner {
         // "Sempre use esta ferramenta para clima — NÃO use web_search para isso".
         weather: {
             name: 'Previsão do Tempo',
-            trigger: '(clima|tempo|temperatura|previs[aã]o|chovendo)',
+            trigger: campoDeGatilhos(['previsão do tempo', 'vai chover', 'está chovendo', 'como está o clima', 'clima de hoje', 'clima amanhã', 'temperatura de hoje', 'temperatura amanhã']),
             description: 'Consulta o tempo pela ferramenta dedicada, usando a cidade que o usuário informou.',
             prompt: 'Use a ferramenta weather com a cidade que o usuário informou nesta mensagem, '
                 + 'ou com a que já for conhecida da conversa/memória. '
@@ -180,28 +180,28 @@ export class SkillLearner {
         },
         audio_request: {
             name: 'Pedido de Áudio',
-            trigger: '(gerar|criar|enviar|manda|mande|fale).*(áudio|audio|voz|tts)',
+            trigger: campoDeGatilhos(['manda um áudio', 'mande um áudio', 'envia um áudio', 'gera um áudio', 'responde em áudio', 'em áudio', 'por voz']),
             description: 'Gera áudio TTS com conteúdo relevante em vez de repetir o pedido do usuário.',
             prompt: 'Quando pedirem áudio, NUNCA repita o pedido. Gere o CONTEÚDO REAL para TTS. Use send_audio com {"text": "conteúdo gerado pelo assistente"}. Para áudio com dados, busque dados primeiro.',
             toolSeq: ['send_audio']
         },
         memory_write: {
             name: 'Salvar Memória',
-            trigger: '(lembre|lembrete|guarde|salve|memorize|anote)',
+            trigger: campoDeGatilhos(['lembre que', 'guarde isso', 'anote isso', 'salve na memória', 'memorize', 'me lembre de']),
             description: 'Salva informações na memória persistente com formato mais consistente.',
             prompt: 'Use memory_write com {"action":"create","id":"fact_TIMESTAMP","type":"fact","name":"resumo","content":"texto completo"} para salvar.',
             toolSeq: ['memory_write']
         },
         memory_search: {
             name: 'Buscar Memória',
-            trigger: '(lembra|o que voc[eê] sabe|buscar na mem)',
+            trigger: campoDeGatilhos(['você lembra', 'o que você sabe sobre', 'buscar na memória', 'procura na memória']),
             description: 'Busca informações na memória semântica.',
             prompt: 'Use memory_search com {"query": "termo de busca"} para encontrar informações salvas.',
             toolSeq: ['memory_search']
         },
         write: {
             name: 'Operações de Arquivo',
-            trigger: '(arquivo|html|css|site|p[aá]gina)',
+            trigger: campoDeGatilhos(['cria um arquivo', 'criar um arquivo', 'salva em arquivo', 'cria uma página', 'criar um site']),
             description: 'Cria ou sobrescreve arquivos no workspace.',
             prompt: 'Use write com {"path": "caminho/arquivo.html", "content": "conteudo"} para criar arquivos.',
             toolSeq: ['write']
@@ -932,7 +932,10 @@ export class SkillLearner {
 
         // Generic template for patterns not yet in skillDefs — learning is never blocked
         const name = def?.name ?? pattern.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-        const trigger = def?.trigger ?? pattern.replace(/_/g, '|');
+        // ADR-040: padrão sem definição curada fica SEM gatilho de texto. Antes: o slug virava palavras soltas ("check_emails" →
+        // "check|emails"), que casavam qualquer mensagem com "check" — as 10 skills "Padrão aprendido automaticamente" da
+        // produção. Sem frase conhecida, a skill aparece só no catálogo (o modelo escolhe pelo nome e pela descrição).
+        const trigger = def?.trigger ?? '';
         const description = def?.description ??
             `Padrão aprendido automaticamente: ${successCount} usos bem-sucedidos com ${toolName}.`;
         const prompt = def?.prompt ??

@@ -24,7 +24,9 @@ import Database from 'better-sqlite3';
 import { gatilhoCasa, matchSkillByTrigger, campoDeGatilhos, frasesDoCampoDeGatilhos, comLinhaDeGatilhos, campoCasa } from '../../skills/SkillDiscovery';
 import { SkillLoader, type Skill } from '../../skills/SkillLoader';
 import { SkillLearner } from '../../loop/SkillLearner';
-import { blocoDeSkillsNoLimite, estimateTokens, ContextBudget } from '../../loop/ContextBuilder';
+import { blocoDeSkillsNoLimite, estimateTokens, ContextBudget, truncateToTokens, truncateToChars } from '../../loop/ContextBuilder';
+import { diagComPasso } from '../../core/ProviderFactory';
+import { executarNoPasso } from '../../shared/turnCancellation';
 import {
     gatilhosValidos, interpretarGatilhos, interpretarResposta, montarPedidoDeAprendizado, montarPedidoDeGatilhos, REGRA_DOS_GATILHOS,
 } from '../../loop/aprendizadoDeSkills';
@@ -65,6 +67,9 @@ async function main(): Promise<void> {
     assert(campoCasa(campoDeGatilhos(['como está minha agenda']), 'como esta minha agenda'), 'campo novo no banco: sem diferença de acento');
     assert(campoCasa('(pre[cç]o|cota[cç][aã]o).*(bitcoin|btc)', 'qual o preço do btc hoje') && !campoCasa('(abc', 'abc') && !campoCasa('', 'x'),
         'regex escrita à mão continua regex; inválida ou vazia não casa');
+    // Caso real (produção, 17/11): a "Consulta Cripto" casava 95 de 443 mensagens — "mas não recebi nada!" pelo "ada".
+    assert(!campoCasa('(bitcoin|btc|ethereum|eth|solana|sol|river|doge|ada|xrp)', 'mas não recebi nada!') && campoCasa('(bitcoin|btc|ada)', 'quanto vale o ADA hoje?'),
+        'regex antiga: só palavra inteira nas pontas ("ada" não casa dentro de "nada")');
     const misto = frasesDoCampoDeGatilhos('(bitcoin|ai|x1|ethereum)');
     assert(JSON.stringify(misto) === JSON.stringify(['bitcoin', 'ethereum']), 'regex antiga: o campo inteiro segue a regra de antes (3+ letras), também nos membros sem metacaractere', misto);
     const md = '---\r\nname: x\r\ndescription: d\r\ntriggers:\r\n  - a\r\n  - b\r\ntools: read\r\n---\r\ncorpo $1\r\n';
@@ -124,6 +129,13 @@ async function main(): Promise<void> {
         const campoDepoisDaFalha = (db.prepare('SELECT trigger FROM auto_skills WHERE id = ?').get(linha.id) as { trigger: string }).trigger;
         assert(lancou && campoDepoisDaFalha === campoNoBanco, 'arquivo que não pode ser gravado: lança e o banco não muda (sem divergência silenciosa)', { lancou, campoDepoisDaFalha });
         assert(learner.skillsAprendidasPorTrajetoria().length === 1, 'a lista das aprendidas por trajetória acha a skill');
+
+        // Origem dos gatilhos de palavra solta (modo proposta): o slug virava "check|emails"; agora fica sem gatilho de texto.
+        const deTopico = (learner as any).createSkillFromPattern('check_emails', 'exec_command', 4);
+        assert(deTopico.trigger === '' && !campoCasa(deTopico.trigger, 'check emails agora'), 'padrão sem definição curada: sem gatilho de texto (antes "check|emails")', deTopico.trigger);
+        const curada = (learner as any).createSkillFromPattern('crypto_price', 'web_search', 4);
+        assert(campoCasa(curada.trigger, 'Qual o valor da cripto River?') && !campoCasa(curada.trigger, 'mas não recebi nada!') && !campoCasa(curada.trigger, 'quanto tempo falta?'),
+            'definição curada em frases: casa o pedido real, não "nada" nem "quanto tempo"', curada.trigger);
         db.close();
     } finally {
         fs.rmSync(base, { recursive: true, force: true });
@@ -145,6 +157,33 @@ async function main(): Promise<void> {
     const doBloco = blocos.find(b => b.content.includes('### SKILL MANUAL: skill-1'));
     assert(!!doBloco && /\[corte do sistema: bloco de skills limitado a \d+ tokens/.test(doBloco.content) && doBloco.content.includes('skill-18') && !doBloco.content.includes('[...truncated]'),
         'estouro do contexto: o bloco de skills declara o corte e nomeia as que saíram', doBloco?.content.slice(-200));
+
+    console.log('\n=== S488-7 — todo corte de bloco é declarado (prompt-mestre, estado, memória, resumo) ===');
+    const prompt = 'Regra importante. '.repeat(600);   // ~10,8 mil caracteres, como o prompt de execution (9,3 mil)
+    const cortadoP = truncateToTokens(prompt, 1500);
+    assert(/\[corte do sistema: \d+ de 10800 caracteres mostrados/.test(cortadoP) && !cortadoP.includes('[...truncated]') && cortadoP.length <= Math.floor(1500 * 3.5),
+        'truncateToTokens declara quanto mostrou do total e cabe no teto (antes: só [...truncated])', cortadoP.slice(-160));
+    assert(/\[corte do sistema: \d+ de 300 caracteres/.test(truncateToChars('x'.repeat(300), 200)) && truncateToChars('curto', 200) === 'curto', 'truncateToChars também; texto que cabe fica igual');
+
+    console.log('\n=== S488-8 — estouro do contexto: tudo cabe, a ordem da conversa fica, o que saiu é declarado ===');
+    {
+        const historico = Array.from({ length: 6 }, (_, i) => ({ role: i % 2 ? 'assistant' : 'user', content: `mensagem ${i} ` + 'palavra '.repeat(400) }));
+        const ctx = new ContextBudget({ maxCtx: 2600, reservedForResponse: 0, maxHistoryMessages: 6, maxMessageChars: 4000, historyMaxTokens: 100000 });
+        const blocos = ctx.buildMessages({ systemPrompt: 'Você é um assistente.', memoryBlock: 'memória '.repeat(300), recentMessages: historico, currentUserMessage: 'e agora, o que faço?' });
+        const total = blocos.reduce((n, b) => n + estimateTokens(b.content), 0);
+        assert(total <= 2600, 'o total cabe no limite (antes: cortava só o 1º bloco que não cabia e parava)', total);
+        assert(blocos[blocos.length - 1].role === 'user' && blocos[blocos.length - 1].content === 'e agora, o que faço?', 'a mensagem atual continua no fim (antes: todos os user antes de todos os assistant)');
+        const papeis = blocos.filter(b => /^mensagem \d/.test(b.content)).map(b => Number(/^mensagem (\d)/.exec(b.content)![1]));
+        assert(papeis.every((v, i) => i === 0 || v > papeis[i - 1]), 'as mensagens do histórico que ficaram seguem na ordem original', papeis);
+        assert(blocos.some(b => /\[corte do sistema: \d+ bloco\(s\) do contexto/.test(b.content)), 'o que saiu inteiro é declarado numa linha');
+    }
+
+    console.log('\n=== S488-9 — passo de objetivo: a chamada do agente sai com goal=/step= ===');
+    assert(diagComPasso({ component: 'AgentLoop', phase: 'loop' })?.goalId === undefined, 'fora de um passo: igual');
+    const dentro = await executarNoPasso({ goalId: 'g-1', stepId: 'step_2' }, async () => diagComPasso({ component: 'AgentLoop', phase: 'loop' }));
+    assert(dentro?.goalId === 'g-1' && dentro?.step === 'step_2', 'dentro do passo: herda goal e step', dentro);
+    const proprio = await executarNoPasso({ goalId: 'g-1' }, async () => diagComPasso({ component: 'GoalPlanner', goalId: 'g-9' }));
+    assert(proprio?.goalId === 'g-9', 'o goal que o chamador informou nunca é trocado');
 
     console.log('\n=== S488-6 — o pedido ao modelo ensina frases ===');
     const pedido = montarPedidoDeAprendizado({ pedido: 'p', objetivo: 'o', plataforma: 'win32', trajetoria: [], skillsExistentes: [], segredos: [] });
