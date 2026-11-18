@@ -56,6 +56,8 @@ function fakeServer(opts: { chatDelayMs: number; modelsAlive: boolean }) {
         return await new Promise((resolve, reject) => {
             const t = setTimeout(() => resolve({
                 ok: true,
+                // Resposta inteira (servidor que não faz streaming): desde 14/11/2026 o provedor pede streaming e lê o tipo.
+                headers: new Headers({ 'content-type': 'application/json' }),
                 json: async () => ({ choices: [{ message: { content: 'resposta do modelo local' } }] }),
             } as any), opts.chatDelayMs);
             init?.signal?.addEventListener('abort', () => {

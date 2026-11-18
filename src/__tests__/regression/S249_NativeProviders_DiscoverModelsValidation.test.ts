@@ -12,7 +12,7 @@
  *    sem duplicar lógica) — batem no endpoint certo, parseiam `{data:[{id}]}` corretamente.
  * 2. Anthropic bate no endpoint real (`/v1/models`, headers `x-api-key`+`anthropic-version`),
  *    parseia `display_name`.
- * 3. Gemini bate no endpoint real (`/v1beta/models?key=`), remove o prefixo `models/` do id.
+ * 3. Gemini bate no endpoint real (`/v1beta/models`, chave no cabeçalho `x-goog-api-key` — ADR-040), remove o prefixo `models/` do id.
  * 4. Falha de autenticação (401) propaga como erro com status anexado, pros 4 acima.
  * 5. `ProviderFactory.getNativeProvider()` só devolve instância quando a key está configurada.
  * 6. `ModelRegistryService.discoverAll()` inclui os 5 nativos quando têm key (populando health),
@@ -109,10 +109,15 @@ async function main() {
         } finally { restore(); }
     }
 
-    // 5. Gemini — endpoint/auth/shape próprios (query param, prefixo "models/")
+    // 5. Gemini — endpoint/auth/shape próprios (cabeçalho x-goog-api-key, prefixo "models/")
     {
-        const { restore } = mockFetch(url => {
-            assert(url === 'https://generativelanguage.googleapis.com/v1beta/models?key=fake-key', 'Gemini autentica via query param key=', url);
+        const { restore } = mockFetch((url, init) => {
+            // ADR-040: a chave saiu da URL (URL vai para log e mensagem de erro); vai no cabeçalho.
+            // Só o resultado da comparação vai para o detalhe da falha — nunca o valor da chave (CodeQL: log de dado sensível).
+            const chaveNoCabecalho = (init?.headers as Record<string, string> | undefined)?.['x-goog-api-key'] === 'fake-key';
+            const chaveNaUrl = url.includes('fake-key') || url.includes('key=');
+            assert(url === 'https://generativelanguage.googleapis.com/v1beta/models' && !chaveNaUrl && chaveNoCabecalho,
+                'Gemini autentica pelo cabeçalho x-goog-api-key, sem a chave na URL', { urlCerta: url === 'https://generativelanguage.googleapis.com/v1beta/models', chaveNaUrl, chaveNoCabecalho });
             return { ok: true, json: async () => ({ models: [{ name: 'models/gemini-2.0-flash', displayName: 'Gemini 2.0 Flash' }] }) };
         });
         try {

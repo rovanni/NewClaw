@@ -1,9 +1,10 @@
 import { createLogger } from '../shared/AppLogger';
 import { errorMessage } from '../shared/errors';
-import { ILLMProvider, LLMMessage, LLMResponse, ToolDefinition, ChatOptions, StreamChunk, OpenAIChatResponse, RawApiChunk, RawToolCall, ModelInfo, AttemptTelemetry, TELEMETRY_SAMPLE_MS, mensagemSemModeloEscolhido, silencioDoModeloMs } from './providerTypes';
+import { ILLMProvider, LLMMessage, LLMResponse, ToolDefinition, ChatOptions, StreamChunk, OpenAIChatResponse, RawApiChunk, RawToolCall, ModelInfo, AttemptTelemetry, mensagemSemModeloEscolhido, silencioDoModeloMs } from './providerTypes';
 import { guessCapabilities, mapOllamaCapabilities } from './modelCapabilityHeuristics';
 import { taskQueue, TaskPriority } from './providerQueue';
 import { assertNotSsrfTarget } from './ssrfGuard';
+import { isChunkActive, prazoDoPrimeiroPedaco, TelemetriaAoVivo, VigiaDeSilencio } from './streamVigiado';
 
 const log = createLogger('Providerfactory');
 
@@ -26,18 +27,21 @@ function parseToolArgs(args: unknown): Record<string, unknown> {
  * Supports: Ollama (content, thinking, reasoning), OpenAI (delta.content),
  * DeepSeek (reasoning_content), Anthropic (thinking blocks), Gemini (parts).
  */
-function extractChunkText(chunk: RawApiChunk): { text: string; type: 'content' | 'thinking' | 'reasoning' | 'delta' | 'unknown' } {
+export function extractChunkText(chunk: RawApiChunk): { text: string; type: 'content' | 'thinking' | 'reasoning' | 'delta' | 'unknown' } {
+    // ADR-040: pedaço só de espaço/quebra de linha ("\n\n" entre parágrafos, o espaço entre palavras) é texto do modelo — antes o
+    // teste com trim() o descartava. Só cede a vez quando o mesmo pedaço traz raciocínio (o espaço ali não é resposta).
     if (chunk.message) {
-        if (chunk.message.content && chunk.message.content.trim()) return { text: chunk.message.content, type: 'content' };
-        if (chunk.message.thinking && chunk.message.thinking.trim()) return { text: chunk.message.thinking, type: 'thinking' };
-        if (chunk.message.reasoning && chunk.message.reasoning.trim()) return { text: chunk.message.reasoning, type: 'reasoning' };
+        const m = chunk.message;
+        if (m.content && (m.content.trim() || !(m.thinking || m.reasoning))) return { text: m.content, type: 'content' };
+        if (chunk.message.thinking) return { text: chunk.message.thinking, type: 'thinking' };
+        if (chunk.message.reasoning) return { text: chunk.message.reasoning, type: 'reasoning' };
         if (chunk.message.tool_calls) return { text: '', type: 'content' };
     }
     if (chunk.choices?.[0]?.delta) {
         const delta = chunk.choices[0].delta;
-        if (delta.content && delta.content.trim()) return { text: delta.content, type: 'delta' };
-        if (delta.reasoning_content && delta.reasoning_content.trim()) return { text: delta.reasoning_content, type: 'reasoning' };
-        if (delta.thinking && delta.thinking.trim()) return { text: delta.thinking, type: 'thinking' };
+        if (delta.content && (delta.content.trim() || !(delta.reasoning_content || delta.thinking))) return { text: delta.content, type: 'delta' };
+        if (delta.reasoning_content) return { text: delta.reasoning_content, type: 'reasoning' };
+        if (delta.thinking) return { text: delta.thinking, type: 'thinking' };
     }
     if (chunk.type === 'content_block_delta' && chunk.delta) {
         if (chunk.delta.type === 'thinking_delta' && chunk.delta.thinking) return { text: chunk.delta.thinking, type: 'thinking' };
@@ -45,34 +49,14 @@ function extractChunkText(chunk: RawApiChunk): { text: string; type: 'content' |
     }
     if (chunk.candidates?.[0]?.content?.parts) {
         for (const part of chunk.candidates[0].content.parts) {
-            if (part.text && part.text.trim()) return { text: part.text, type: 'content' };
-            if (part.thought && part.thought.trim()) return { text: part.thought, type: 'thinking' };
+            if (part.text && (part.text.trim() || !part.thought)) return { text: part.text, type: 'content' };
+            if (part.thought) return { text: part.thought, type: 'thinking' };
         }
     }
     return { text: '', type: 'unknown' };
 }
 
-/**
- * Check if a chunk represents any kind of activity.
- * Used to reset idle/activity timers — any chunk type counts.
- */
-function isChunkActive(chunk: RawApiChunk): boolean {
-    if (chunk.done) return true;
-    if (chunk.message) {
-        if (chunk.message.content?.trim()) return true;
-        if (chunk.message.thinking?.trim()) return true;
-        if (chunk.message.reasoning?.trim()) return true;
-        if (chunk.message.tool_calls) return true;
-    }
-    if (chunk.choices?.[0]?.delta) {
-        const delta = chunk.choices[0].delta;
-        if (delta.content?.trim() || delta.reasoning_content?.trim() || delta.thinking?.trim()) return true;
-        if (delta.tool_calls) return true;
-    }
-    if (chunk.type === 'content_block_delta' || chunk.type === 'content_block_start' || chunk.type === 'content_block_stop') return true;
-    if (chunk.candidates?.[0]) return true;
-    return false;
-}
+// `isChunkActive` (a regra de atividade que reinicia os relógios) mora em streamVigiado.ts — fonte única para todos os provedores.
 
 /**
  * Abort reasons emitted by the streaming pipeline.
@@ -215,11 +199,11 @@ export class OllamaProvider implements ILLMProvider {
         const numCtx = this.numCtx;
         const controller = new AbortController();
 
-        // CONNECTION_TIMEOUT scales with prompt size: Ollama must process all input tokens
-        // (prefill) before yielding the first chunk. Allow ~1s per 30 input tokens, min 150s, max 300s.
-        // Floor raised to 150s: gemma4:31b-cloud observed up to 84s TTFT at ~3k tokens under load.
-        const approxInputTokens = messages.reduce((sum, m) => sum + Math.ceil((m.content?.length || 0) / 4), 0);
-        const CONNECTION_TIMEOUT = Math.max(150_000, Math.min(300_000, Math.ceil(approxInputTokens / 30) * 1000));
+        // CONNECTION_TIMEOUT scales with prompt size: Ollama must process all input tokens (prefill) before yielding the first
+        // chunk. A regra (150–300 s pelo tamanho; maior quando a leitura MEDIDA do modelo pede) mora em streamVigiado.ts.
+        const primeiro = prazoDoPrimeiroPedaco(messages, this.model);
+        const approxInputTokens = primeiro.tokensDeEntrada;
+        const CONNECTION_TIMEOUT = primeiro.ms;
 
         // Issue 064 (06/10/2026): REMOVIDO o "orçamento de raciocínio" (abortar quando o modelo passava de 8.000 chars
         // / 60 s — ou 32.000 / 240 s com reasoningIntensive — só raciocinando, sem conteúdo). Ele respondia "o modelo
@@ -241,31 +225,12 @@ export class OllamaProvider implements ILLMProvider {
         }
 
         const startTime = Date.now();
-        let firstChunkReceived = false;
         let stats = { content: 0, thinking: 0, reasoning: 0, delta: 0, unknown: 0, total: 0 };
 
-        let activityTimer: NodeJS.Timeout | null = null;
-        let connectionTimer: NodeJS.Timeout | null = null;
-
-
-        const resetActivityTimer = () => {
-            if (activityTimer) clearTimeout(activityTimer);
-            activityTimer = setTimeout(() => {
-                log.warn(`[${streamId}] [STREAM] ACTIVITY TIMEOUT: No activity for ${ACTIVITY_TIMEOUT}ms`);
-                controller.abort();
-            }, ACTIVITY_TIMEOUT);
-        };
-
-        connectionTimer = setTimeout(() => {
-            if (!firstChunkReceived) {
-                log.error(`[${streamId}] [STREAM] CONNECTION TIMEOUT: No first chunk in ${CONNECTION_TIMEOUT}ms`);
-                controller.abort();
-            }
-        }, CONNECTION_TIMEOUT);
-
-        // NOTE: activityTimer starts only after the first chunk — CONNECTION_TIMEOUT covers
-        // the silent prefill period. Starting activityTimer before fetch would abort long-prefill
-        // models (large prompts) before they even begin generating output.
+        // Os dois relógios (streamVigiado.ts, fonte única): o do primeiro pedaço arma aqui; o do silêncio só depois do primeiro
+        // pedaço — CONNECTION_TIMEOUT cobre a leitura do prompt, em que o modelo legitimamente não manda nada.
+        const vigia = new VigiaDeSilencio({ controller, primeiroPedacoMs: CONNECTION_TIMEOUT, silencioMs: ACTIVITY_TIMEOUT, id: streamId, log });
+        vigia.iniciar();
 
         if (externalSignal) {
             externalSignal.addEventListener('abort', () => controller.abort(), { once: true });
@@ -298,15 +263,13 @@ export class OllamaProvider implements ILLMProvider {
                 body: JSON.stringify(requestBody)
             });
         } catch (fetchErr) {
-            if (connectionTimer) clearTimeout(connectionTimer);
-            if (activityTimer) clearTimeout(activityTimer);
+            vigia.encerrar();
             log.error(`[${streamId}] [STREAM] FETCH FAILED: ${errorMessage(fetchErr)}`);
             throw fetchErr;
         }
 
         if (!response.ok) {
-            if (connectionTimer) clearTimeout(connectionTimer);
-            if (activityTimer) clearTimeout(activityTimer);
+            vigia.encerrar();
             // O corpo é a explicação do servidor (no 429 da nuvem, qual limite de uso foi atingido) — antes era descartado e a
             // usuária só via o número (produção, 18/10/2026). O prefixo "Ollama API error: <status>" continua igual.
             let explicacao = '';
@@ -317,8 +280,7 @@ export class OllamaProvider implements ILLMProvider {
 
         const body = response.body;
         if (!body) {
-            if (connectionTimer) clearTimeout(connectionTimer);
-            if (activityTimer) clearTimeout(activityTimer);
+            vigia.encerrar();
             throw new Error('No response body from Ollama');
         }
 
@@ -357,10 +319,7 @@ export class OllamaProvider implements ILLMProvider {
                     else stats.unknown++;
 
                     if (isChunkActive(chunk) || text) {
-                        resetActivityTimer();
-                        if (!firstChunkReceived) {
-                            firstChunkReceived = true;
-                            if (connectionTimer) { clearTimeout(connectionTimer); connectionTimer = null; }
+                        if (vigia.pedaco()) {
                             log.info(`[${streamId}] [STREAM] First chunk received after ${Date.now() - startTime}ms type=${type}`);
                         }
                     }
@@ -420,8 +379,7 @@ export class OllamaProvider implements ILLMProvider {
             }
             throw streamErr;
         } finally {
-            if (connectionTimer) clearTimeout(connectionTimer);
-            if (activityTimer) clearTimeout(activityTimer);
+            vigia.encerrar();
             reader.releaseLock();
             log.info(`[${streamId}] [STREAM] END (reader released, all timers cleared)`);
         }
@@ -450,7 +408,8 @@ export class OllamaProvider implements ILLMProvider {
         // Gravador de voo (ADR-013): observa o que o modelo FEZ — inclusive o raciocínio que, num abort, é descartado
         // como resposta. Só preenche o objeto do chamador; nenhuma decisão abaixo depende dele.
         const tele = telemetry;
-        let proximaAmostra = TELEMETRY_SAMPLE_MS;
+        // Ao vivo (pedaços, último pedaço, linha do tempo): a mesma telemetria de todos os provedores (streamVigiado.ts).
+        const aoVivo = new TelemetriaAoVivo(tele);
         const registrarTelemetria = (): void => {
             if (!tele) return;
             Object.assign(tele, {
@@ -459,22 +418,11 @@ export class OllamaProvider implements ILLMProvider {
                 thinkingText: thinking, contentText: content,
             });
         };
-        if (tele) tele.timeline = [];
 
         try {
             for await (const chunk of this.streamChat(messages, tools, customTimeoutMs, externalSignal, reasoningIntensive, raciocinio, saidaJson, limiteDeSaida)) {
                 chunkCount++;
-                if (tele) {
-                    tele.pedacosAteAgora = chunkCount;
-                    tele.ultimoPedacoEm = Date.now();
-                    const ms = Date.now() - startTime;
-                    if (tele.firstChunkMs === undefined) { tele.firstChunkMs = ms; tele.firstChunkType = chunk.type; }
-                    if (chunk.type === 'content' && tele.firstContentMs === undefined) tele.firstContentMs = ms;
-                    while (ms >= proximaAmostra) {
-                        tele.timeline!.push({ ms: proximaAmostra, thinkingChars: thinking.length, contentChars: content.length });
-                        proximaAmostra += TELEMETRY_SAMPLE_MS;
-                    }
-                }
+                aoVivo.pedaco(chunk.type, thinking.length, content.length);
                 switch (chunk.type) {
                     case 'content': content += chunk.value; break;
                     case 'thinking': thinking += chunk.value; break;
