@@ -113,9 +113,11 @@ async function main() {
     {
         const { restore } = mockFetch((url, init) => {
             // ADR-040: a chave saiu da URL (URL vai para log e mensagem de erro); vai no cabeçalho.
-            const cabecalho = (init?.headers as Record<string, string> | undefined)?.['x-goog-api-key'];
-            assert(url === 'https://generativelanguage.googleapis.com/v1beta/models' && !url.includes('fake-key') && cabecalho === 'fake-key',
-                'Gemini autentica pelo cabeçalho x-goog-api-key, sem a chave na URL', { url, cabecalho });
+            // Só o resultado da comparação vai para o detalhe da falha — nunca o valor da chave (CodeQL: log de dado sensível).
+            const chaveNoCabecalho = (init?.headers as Record<string, string> | undefined)?.['x-goog-api-key'] === 'fake-key';
+            const chaveNaUrl = url.includes('fake-key') || url.includes('key=');
+            assert(url === 'https://generativelanguage.googleapis.com/v1beta/models' && !chaveNaUrl && chaveNoCabecalho,
+                'Gemini autentica pelo cabeçalho x-goog-api-key, sem a chave na URL', { urlCerta: url === 'https://generativelanguage.googleapis.com/v1beta/models', chaveNaUrl, chaveNoCabecalho });
             return { ok: true, json: async () => ({ models: [{ name: 'models/gemini-2.0-flash', displayName: 'Gemini 2.0 Flash' }] }) };
         });
         try {

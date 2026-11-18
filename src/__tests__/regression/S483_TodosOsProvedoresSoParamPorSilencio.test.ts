@@ -337,8 +337,10 @@ async function main(): Promise<void> {
             { role: 'tool', content: 'achei', tool_call_id: 't1' },
         ], undefined, { signal: sig }));
         const corpoG = JSON.parse(ultima?.corpo ?? '{}');
-        assert(!!ultima && !ultima.url.includes('chave-s483') && !ultima.url.includes('key=') && ultima.headers['x-goog-api-key'] === 'chave-s483',
-            'Gemini: a chave vai no cabeçalho x-goog-api-key, não na URL (antes ?key=…)', { url: ultima?.url });
+        // Só o resultado das comparações vai para o detalhe da falha — nunca a URL ou o cabeçalho com a chave (CodeQL).
+        const chaveNaUrl = !ultima || ultima.url.includes('chave-s483') || ultima.url.includes('key=');
+        const chaveNoCabecalho = !!ultima && ultima.headers['x-goog-api-key'] === 'chave-s483';
+        assert(!chaveNaUrl && chaveNoCabecalho, 'Gemini: a chave vai no cabeçalho x-goog-api-key, não na URL (antes ?key=…)', { chaveNaUrl, chaveNoCabecalho });
         const papeis = (corpoG.contents ?? []).map((c: { role: string }) => c.role);
         assert(corpoG.systemInstruction?.parts?.[0]?.text === 'regras' && papeis.every((r: string) => r === 'user' || r === 'model')
             && corpoG.contents?.[1]?.parts?.[0]?.functionCall?.name === 'buscar' && corpoG.contents?.[2]?.parts?.[0]?.functionResponse?.name === 'buscar',
