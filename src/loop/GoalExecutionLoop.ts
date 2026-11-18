@@ -2914,7 +2914,7 @@ export class GoalExecutionLoop {
         // exceção). Nada aqui lê activeTurns depois da chamada (ver S229_AgentLoop_
         // RunFinallyClearsActiveTurn.test.ts e S223, reescrito para validar isto).
         // ADR-040: as chamadas do sub-turno saem no [LLM-CALL] com goal=/step= (medição de tokens por objetivo).
-        const response: Awaited<ReturnType<AgentLoop['process']>> = await executarNoPasso({ goalId: goal.id, stepId: step.id }, () => this.agentLoop.process(
+        const response: Awaited<ReturnType<AgentLoop['process']>> = await executarNoPasso({ goalId: goal.id, stepId: step.id }, async () => await this.agentLoop.process(
             goal.conversationId,
             stepPrompt,
             sessionUserId ?? goal.conversationId,
