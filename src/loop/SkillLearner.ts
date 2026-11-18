@@ -938,9 +938,7 @@ export class SkillLearner {
         const trigger = def?.trigger ?? '';
         const description = def?.description ??
             `Padrão aprendido automaticamente: ${successCount} usos bem-sucedidos com ${toolName}.`;
-        const prompt = def?.prompt ??
-            `Quando detectar este padrão, use ${toolName} para processar a solicitação. ` +
-            `Analise a mensagem do usuário para extrair os parâmetros necessários.`;
+        const prompt = def?.prompt ?? SkillLearner.corpoGenerico(toolName);
         const toolSeq = def?.toolSeq ?? [toolName];
 
         return {
@@ -1050,11 +1048,23 @@ export class SkillLearner {
      * essas genéricas deu "exec_command", "36 usos bem-sucedidos" e "o que tenho hoje" (colidindo com a agenda).
      */
     gatilhosDasSkillsAntigas(): Array<{ id: string; nome: string; antes: string[]; propostos: string[] }> {
-        return this.skillsAntigasAtivas().map(s => {
+        // Só as duas origens que este código conhece pela FORMA (nada de adivinhar pelo texto da descrição): a definição curada
+        // (`source_pattern` em SKILL_DEFS) e o corpo genérico exatamente como `createSkillFromPattern` o escreve. Qualquer outra
+        // (adotada pela ADR-035, importada, editada à mão) fica de fora — ela tem gatilhos próprios que não são deste código.
+        const itens: Array<{ id: string; nome: string; antes: string[]; propostos: string[] }> = [];
+        for (const s of this.skillsAntigasAtivas()) {
             const p = s.source_pattern ?? '';
-            const propostos = SkillLearner.isKnownTopic(p) ? frasesDoCampoDeGatilhos(SkillLearner.SKILL_DEFS[p].trigger) : [];
-            return { id: s.id, nome: s.name, antes: frasesDoCampoDeGatilhos(s.trigger), propostos };
-        });
+            const antes = frasesDoCampoDeGatilhos(s.trigger);
+            if (SkillLearner.isKnownTopic(p)) itens.push({ id: s.id, nome: s.name, antes, propostos: frasesDoCampoDeGatilhos(SkillLearner.SKILL_DEFS[p].trigger) });
+            else if (s.source_tool && s.prompt === SkillLearner.corpoGenerico(s.source_tool)) itens.push({ id: s.id, nome: s.name, antes, propostos: [] });
+        }
+        return itens;
+    }
+
+    /** O corpo que `createSkillFromPattern` escreve para um padrão sem definição curada — a marca estrutural dessa origem. */
+    static corpoGenerico(toolName: string): string {
+        return `Quando detectar este padrão, use ${toolName} para processar a solicitação. ` +
+            `Analise a mensagem do usuário para extrair os parâmetros necessários.`;
     }
 
     /**

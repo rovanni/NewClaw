@@ -147,7 +147,7 @@ async function main(): Promise<void> {
         // Skills antigas na base: a mesma regra, sem modelo (curada → frases do código; genérica → sem gatilho de texto).
         db.prepare(`INSERT INTO auto_skills (id, name, trigger, description, prompt, status, source_pattern, source_tool, file_exported) VALUES
             ('a1', 'Consulta Cripto', '(bitcoin|btc|ada)', 'd', 'p', 'active', 'crypto_query', 'exec_command', 0),
-            ('a2', 'Newclaw Fixes', 'newclaw|fixes', 'Padrão aprendido automaticamente', 'Quando detectar este padrão…', 'active', 'newclaw_fixes', 'exec_command', 0)`).run();
+            ('a2', 'Newclaw Fixes', 'newclaw|fixes', 'Padrão aprendido automaticamente', ?, 'active', 'newclaw_fixes', 'exec_command', 0)`).run(SkillLearner.corpoGenerico('exec_command'));
         const antigas = learner.gatilhosDasSkillsAntigas();
         const cripto = antigas.find(a => a.nome === 'Consulta Cripto');
         const generica = antigas.find(a => a.nome === 'Newclaw Fixes');
@@ -155,6 +155,10 @@ async function main(): Promise<void> {
             'antigas: curada recebe as frases do código, genérica fica sem gatilho (antes "newclaw|fixes")', antigas);
         learner.trocarGatilhos('a2', []);
         assert(!campoCasa((db.prepare(`SELECT trigger FROM auto_skills WHERE id = 'a2'`).get() as { trigger: string }).trigger, 'newclaw fixes agora'), 'genérica trocada: nenhum texto a chama mais');
+        // Adotada (ADR-035) ou editada à mão: não é desta regra — fica fora da migração, com os gatilhos dela.
+        db.prepare(`INSERT INTO auto_skills (id, name, trigger, description, prompt, status, source_pattern, source_tool, file_exported) VALUES
+            ('a3', 'Adotada', 'minha frase|outra frase', 'd', 'corpo próprio', 'active', 'aprendida_adotada', 'adotada', 0)`).run();
+        assert(!learner.gatilhosDasSkillsAntigas().some(a => a.nome === 'Adotada'), 'skill adotada não entra na regra das antigas (revisão de código: antes perderia os gatilhos)');
 
         const curada = (learner as any).createSkillFromPattern('crypto_price', 'web_search', 4);
         assert(campoCasa(curada.trigger, 'Qual o valor da cripto River?') && !campoCasa(curada.trigger, 'mas não recebi nada!') && !campoCasa(curada.trigger, 'quanto tempo falta?'),
@@ -199,7 +203,19 @@ async function main(): Promise<void> {
         const papeis = blocos.filter(b => /^mensagem \d/.test(b.content)).map(b => Number(/^mensagem (\d)/.exec(b.content)![1]));
         assert(papeis.every((v, i) => i === 0 || v > papeis[i - 1]), 'as mensagens do histórico que ficaram seguem na ordem original', papeis);
         assert(blocos.some(b => /\[corte do sistema: \d+ bloco\(s\) do contexto/.test(b.content)), 'o que saiu inteiro é declarado numa linha');
+
+        // A mensagem atual nunca sai, mesmo sem espaço sobrando (revisão de código, 17/11).
+        const apertado = new ContextBudget({ maxCtx: 400, reservedForResponse: 0, systemMaxTokens: 100000 });
+        const b2 = apertado.buildMessages({ systemPrompt: 'regra '.repeat(400), recentMessages: [], currentUserMessage: 'qual é a pergunta? '.repeat(30) });
+        const ultimo = b2[b2.length - 1];
+        assert(ultimo.role === 'user' && ultimo.content.startsWith('qual é a pergunta?'), 'a mensagem atual fica (no pior caso cortada, com declaração), nunca some', b2.map(b => `${b.role}:${b.content.length}`));
+        // Bloco de código: o corte cabe no teto pela mesma conta que confere o limite.
+        const codigo = new ContextBudget({ maxCtx: 1500, reservedForResponse: 0, maxHistoryMessages: 2, maxMessageChars: 100000, historyMaxTokens: 100000 });
+        const b3 = codigo.buildMessages({ systemPrompt: 'Você é um assistente.', recentMessages: [{ role: 'user', content: '{"a":[1,2],"b":{"c":(3)}};'.repeat(400) }], currentUserMessage: 'e agora?' });
+        assert(b3.reduce((n, b) => n + estimateTokens(b.content), 0) <= 1500, 'bloco com muito código: o total continua no limite', b3.reduce((n, b) => n + estimateTokens(b.content), 0));
     }
+    assert(/\[corte do sistema: \d+ de 500 caracteres\]$/.test(truncateToChars('x'.repeat(500), 80)) && truncateToChars('x'.repeat(500), 80).length <= 80,
+        'teto menor que a declaração inteira: forma curta, ainda declarada, dentro do teto', truncateToChars('x'.repeat(500), 80));
 
     console.log('\n=== S488-9 — passo de objetivo: a chamada do agente sai com goal=/step= ===');
     assert(diagComPasso({ component: 'AgentLoop', phase: 'loop' })?.goalId === undefined, 'fora de um passo: igual');

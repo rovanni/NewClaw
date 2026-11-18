@@ -76,6 +76,12 @@ export function declaracaoDeCorte(mostrados: number, total: number): string {
 
 /** Corta no fim de frase/linha mais próximo, sem passar de `maxChars` contando a declaração. */
 function cortarDeclarando(text: string, maxChars: number): string {
+    // Teto menor que a declaração inteira: a forma curta, que ainda diz que houve corte (nunca um corte calado).
+    if (declaracaoDeCorte(text.length, text.length).length * 2 > maxChars) {
+        const curta = (m: number) => `\n[corte do sistema: ${m} de ${text.length} caracteres]`;
+        const util = Math.max(0, maxChars - curta(text.length).length);
+        return text.slice(0, util) + curta(util);
+    }
     const reserva = declaracaoDeCorte(text.length, text.length).length;
     const util = Math.max(0, maxChars - reserva);
     const truncated = text.slice(0, util);
@@ -254,14 +260,22 @@ export class ContextBudget {
         const orcamento = Math.max(0, limite - RESERVA_DA_DECLARACAO);
         const ficam = new Set<ContextBlock>();
         const sairam: ContextBlock[] = [];
+        // A mensagem atual (a última montada) nunca sai: sem ela o modelo responde a um turno sem pergunta. No pior caso é cortada.
+        const mensagemAtual = blocks[blocks.length - 1];
         let usados = 0;
         for (const block of porPrioridade) {
             const t = estimateTokens(block.content);
             const resta = orcamento - usados;
             if (t <= resta) { ficam.add(block); usados += t; continue; }
-            if (resta >= MINIMO_PARA_CORTAR) {
+            if (resta >= MINIMO_PARA_CORTAR || block === mensagemAtual) {
+                const teto = Math.max(resta, MINIMO_PARA_CORTAR);
                 // ADR-040: o bloco de skills declara o corte com o nome das skills que saíram.
-                block.content = block === blocoDeSkills ? blocoDeSkillsNoLimite(block.content, resta) : truncateToTokens(block.content, resta);
+                const cortar = (max: number) => block === blocoDeSkills ? blocoDeSkillsNoLimite(block.content, max) : truncateToTokens(block.content, max);
+                // O corte conta 3,5 caracteres por token e `estimateTokens` conta de 3 a 3,5: num bloco com muito código o
+                // corte pode ainda passar do teto — encolhe até caber pela mesma conta que confere o limite.
+                let cortado = cortar(teto);
+                for (let i = 0; i < 4 && estimateTokens(cortado) > teto; i++) cortado = cortar(Math.floor(teto * teto / estimateTokens(cortado)));
+                block.content = cortado;
                 ficam.add(block);
                 usados += estimateTokens(block.content);
             } else {
