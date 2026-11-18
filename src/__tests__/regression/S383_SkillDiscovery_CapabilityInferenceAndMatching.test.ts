@@ -2,19 +2,21 @@
 /**
  * Testes de SkillDiscovery — executa com: npx ts-node src/__tests__/regression/S383_SkillDiscovery_CapabilityInferenceAndMatching.test.ts (movido de src/skills/__tests__/ em 10/10/2026: nenhum script o executava)
  *
- * Cobre os 5 casos definidos na Sprint 3.7A:
- *   Caso 1: "Criar slides HTML"                → pptx-generator descoberta
- *   Caso 2: "Criar apresentação para aula"     → pptx-generator descoberta sem mencionar PPTX
- *   Caso 3: "Gerar documento PDF"              → html-pdf-converter descoberta
+ * Até 17/11/2026 este teste cobria o casamento por CAPACIDADE da Sprint 3.7A (palavras do pedido × etiquetas e palavras da
+ * descrição das skills). A ADR-040 (decisão da operadora, 17/11/2026) tirou esse casamento: nas 443 mensagens reais
+ * medidas ele trazia até 26 skills por mensagem (p90 6), puxadas por "quando" (185 mensagens), "arquivo" (99) e "para"
+ * (54). O planejador já recebe o catálogo inteiro (nome + descrição) e escolhe por ele; por texto, só gatilho em frase.
+ *
+ * Os 5 casos da Sprint 3.7A, agora pela regra de frase:
+ *   Caso 1: "Criar slides HTML"                → nenhuma skill por palavra de etiqueta (antes: pptx-generator por "slide")
+ *   Caso 2: "Criar apresentação para aula"     → nenhuma (antes: pptx-generator por etiqueta)
+ *   Caso 3: "Gerar documento PDF"              → html-pdf-converter pelo gatilho "pdf"
  *   Caso 4: Objetivo sem skill correspondente  → nenhuma descoberta, sem erro
- *   Caso 5: Skill sem tags                     → continua funcionando por trigger
+ *   Caso 5: Skill sem tags                     → continua funcionando por gatilho
+ *   Caso 6 (produção): "quando" na descrição de uma skill aprendida não a traz mais
  */
 
-import {
-    normalizeToken,
-    inferCapabilities,
-    discoverSkills,
-} from '../../skills/SkillDiscovery';
+import { discoverSkills, matchSkillByTrigger } from '../../skills/SkillDiscovery';
 import type { Skill } from '../../skills/SkillLoader';
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
@@ -41,21 +43,30 @@ const SKILLS: Skill[] = [
     {
         name: 'content-validator',
         description: 'Valida arquivos gerados (HTML, JS, Python, JSON) antes de enviar ao usuário.',
-        triggers: ['erro', 'error', 'syntax error', 'corrija', 'corrigir', 'verificar', 'validar'],
+        triggers: ['syntax error', 'validar o arquivo'],
         tools: ['exec_command', 'read', 'edit'],
         tags: ['validation', 'quality', 'syntax', 'check', 'debug', 'html', 'javascript'],
         content: '# Content Validator',
         globalContent: '# Content Validator',
     },
     {
-        // Caso 5: skill SEM tags — só deve responder a triggers
+        // Caso 5: skill SEM tags — só responde a gatilhos
         name: 'no-tags-skill',
         description: 'Uma skill sem campo tags definido.',
         triggers: ['triggerexclusivo'],
         tools: ['exec_command'],
-        // tags não definidas
         content: '# No Tags Skill',
         globalContent: '# No Tags Skill',
+    },
+    {
+        // Caso 6: como as aprendidas eram exportadas até 17/11 (etiquetas derivadas do nome/origem; descrição com "Quando")
+        name: 'calendario-turma-imagem-para-markdown',
+        description: 'Quando o usuário enviar a imagem do calendário da turma, montar o documento em markdown.',
+        triggers: ['organiza o calendário dessa turma', 'monta o cronograma da turma em markdown'],
+        tools: ['read', 'write'],
+        tags: ['aprendida-calendario-turma-imagem-para-markdown', 'trajetoria', 'calendario-turma-imagem-para-markdown'],
+        content: '# Calendário da turma',
+        globalContent: '# Calendário da turma',
     },
 ];
 
@@ -64,135 +75,47 @@ const SKILLS: Skill[] = [
 let passed = 0;
 let failed = 0;
 
-function assert(condition: boolean, message: string): void {
+function assert(condition: boolean, message: string, detalhe?: unknown): void {
     if (condition) {
         console.log(`  ✅ ${message}`);
         passed++;
     } else {
-        console.error(`  ❌ FALHOU: ${message}`);
+        console.error(`  ❌ FALHOU: ${message}`, detalhe ?? '');
         failed++;
     }
 }
-
-// ── Testes de normalização ────────────────────────────────────────────────────
-
-console.log('\n=== Testes de normalização ===');
-
-assert(normalizeToken('apresentações') === 'apresentacao' || normalizeToken('apresentações').startsWith('apresenta'),
-    'normalizeToken remove acento e normaliza plural PT-BR');
-
-assert(normalizeToken('slides') === 'slide',
-    'normalizeToken remove plural simples (slides → slide)');
-
-assert(normalizeToken('EXPORT') === 'export',
-    'normalizeToken faz lowercase');
-
-assert(normalizeToken('PDF') === 'pdf',
-    'normalizeToken normaliza siglas');
-
-// ── Testes de inferCapabilities ───────────────────────────────────────────────
-
-console.log('\n=== Testes de inferCapabilities ===');
-
-const caps1 = inferCapabilities('criar slides html para aula');
-assert(caps1.has('slide') || caps1.has('slides'),
-    'inferCapabilities: "slides" → "slide" presente no resultado');
-
-assert(caps1.has('html'),
-    'inferCapabilities: "html" preservado como token');
-
-assert(!caps1.has('de') && !caps1.has('a') && !caps1.has('em'),
-    'inferCapabilities: tokens curtos (< 4 chars) como "de", "a", "em" são excluídos');
-
-const caps2 = inferCapabilities('gerar documento PDF para impressão');
-assert(caps2.has('document') || caps2.has('documento'),
-    'inferCapabilities: "documento" → normalizado e presente');
-
-// ── Caso 1: "Criar slides HTML" → pptx-generator descoberta ─────────────────
+const nomes = (q: string) => discoverSkills(SKILLS, q).map(s => s.name);
 
 console.log('\n=== Caso 1: "Criar slides HTML" ===');
-
-const result1 = discoverSkills(SKILLS, 'criar slides html');
-const skillNames1 = result1.all.map(s => s.name);
-
-assert(skillNames1.includes('pptx-generator'),
-    'pptx-generator descoberta para "criar slides html"');
-
-assert(!result1.byTrigger.some(s => s.name === 'pptx-generator'),
-    'pptx-generator descoberta por capability (não por trigger exato)');
-
-assert(result1.byCapability.some(m => m.skillName === 'pptx-generator'),
-    'pptx-generator aparece em byCapability com matchedTerms');
-
-// ── Caso 2: "Criar apresentação para aula" sem mencionar PPTX ───────────────
+assert(nomes('criar slides html').length === 0, 'nenhuma skill por palavra de etiqueta ("slide", "html")', nomes('criar slides html'));
 
 console.log('\n=== Caso 2: "Criar apresentação para aula" ===');
-
-const result2 = discoverSkills(SKILLS, 'criar apresentação para aula');
-const skillNames2 = result2.all.map(s => s.name);
-
-assert(skillNames2.includes('pptx-generator'),
-    'pptx-generator descoberta para "criar apresentação para aula" sem mencionar PPTX');
-
-const match2 = result2.byCapability.find(m => m.skillName === 'pptx-generator');
-assert(match2 !== undefined && match2.matchedTerms.length > 0,
-    'pptx-generator: matchedTerms não vazio');
-
-// ── Caso 3: "Gerar documento PDF" → html-pdf-converter descoberta ─────────────
+assert(nomes('criar apresentação para aula').length === 0, 'nenhuma skill sem gatilho no pedido (o planejador tem o catálogo)', nomes('criar apresentação para aula'));
+assert(nomes('quero uma apresentação editável da aula').includes('pptx-generator'), 'com a frase do gatilho ("apresentação editável"), pptx-generator vem');
 
 console.log('\n=== Caso 3: "Gerar documento PDF" ===');
-
-const result3 = discoverSkills(SKILLS, 'gerar documento PDF');
-const skillNames3 = result3.all.map(s => s.name);
-
-assert(skillNames3.includes('html-pdf-converter'),
-    'html-pdf-converter descoberta para "gerar documento PDF"');
-
-// ── Caso 4: Objetivo sem skill correspondente ─────────────────────────────────
+assert(JSON.stringify(nomes('gerar documento PDF')) === JSON.stringify(['html-pdf-converter']), 'html-pdf-converter pelo gatilho "pdf", e só ela', nomes('gerar documento PDF'));
 
 console.log('\n=== Caso 4: Objetivo sem skill correspondente ===');
+let semErro = true;
+let r4: string[] = [];
+try { r4 = nomes('qual a temperatura em são paulo amanhã'); } catch { semErro = false; }
+assert(semErro && r4.length === 0, 'nenhuma skill e nenhum erro para objetivo de clima');
 
-let noError = true;
-let result4: ReturnType<typeof discoverSkills>;
-try {
-    result4 = discoverSkills(SKILLS, 'qual a temperatura em são paulo amanhã');
-} catch {
-    noError = false;
+console.log('\n=== Caso 5: Skill sem tags — gatilho ainda funciona ===');
+assert(nomes('quero usar o triggerexclusivo aqui').includes('no-tags-skill'), 'skill sem tags descoberta pelo gatilho');
+assert(!nomes('fazer algo completamente diferente').includes('no-tags-skill'), 'sem o gatilho no texto, não vem');
+
+console.log('\n=== Caso 6: palavra comum da descrição não traz skill (produção, 17/11) ===');
+assert(nomes('quando puder, me manda o arquivo para revisar').length === 0, '"quando", "arquivo", "para" não trazem nenhuma skill', nomes('quando puder, me manda o arquivo para revisar'));
+assert(nomes('organiza o calendário dessa turma pra mim').includes('calendario-turma-imagem-para-markdown'), 'a frase do gatilho traz a aprendida');
+
+console.log('\n=== discoverSkills é exatamente o filtro de matchSkillByTrigger (uma regra só) ===');
+for (const q of ['gerar documento PDF', 'criar slides html', 'organiza o calendário dessa turma', 'nada a ver']) {
+    const esperado = SKILLS.filter(s => matchSkillByTrigger(s, q)).map(s => s.name);
+    assert(JSON.stringify(nomes(q)) === JSON.stringify(esperado), `"${q}": mesma lista e ordem`, { obtido: nomes(q), esperado });
 }
-
-assert(noError,
-    'discoverSkills não lança erro para objetivo sem skill');
-
-assert(result4!.all.length === 0,
-    'nenhuma skill descoberta para objetivo de clima/previsão');
-
-assert(result4!.byTrigger.length === 0 && result4!.byCapability.length === 0,
-    'byTrigger e byCapability ambos vazios');
-
-// ── Caso 5: Skill sem tags continua funcionando por trigger ───────────────────
-
-console.log('\n=== Caso 5: Skill sem tags — trigger ainda funciona ===');
-
-const result5 = discoverSkills(SKILLS, 'quero usar o triggerexclusivo aqui');
-const skillNames5 = result5.all.map(s => s.name);
-
-assert(skillNames5.includes('no-tags-skill'),
-    'skill sem tags ainda é descoberta pelo trigger exato');
-
-assert(result5.byTrigger.some(s => s.name === 'no-tags-skill'),
-    'skill sem tags aparece em byTrigger (não byCapability)');
-
-const result5b = discoverSkills(SKILLS, 'fazer algo completamente diferente');
-assert(!result5b.all.map(s => s.name).includes('no-tags-skill'),
-    'skill sem tags NÃO é descoberta por capability (sem tags → sem match)');
-
-// ── Resultado final ───────────────────────────────────────────────────────────
 
 console.log(`\n${'─'.repeat(50)}`);
 console.log(`Resultado: ${passed} passaram, ${failed} falharam`);
-
-if (failed > 0) {
-    process.exit(1);
-} else {
-    console.log('✅ Todos os testes passaram.\n');
-}
+process.exit(failed > 0 ? 1 : 0);

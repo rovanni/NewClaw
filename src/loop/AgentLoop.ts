@@ -1526,36 +1526,15 @@ export class AgentLoop {
     /**
      * Returns the skill context relevant to the given query text.
      * Used by GoalOrchestrator to inject skill instructions into GoalPlanner.
-     *
-     * Combina dois mecanismos (Sprint 3.7A):
-     *   1. Trigger match (original — mantido sem alteração)
-     *   2. Capability match (novo — usa tags normalizadas via SkillDiscovery)
+     * ADR-040: a mesma regra do turno do agente — gatilho em frase (`discoverSkills`). O casamento por palavra de etiqueta
+     * (Sprint 3.7A) saiu; o planejador já recebe o catálogo de todas as skills e escolhe por ele.
      */
     public getSkillContextForQuery(query: string): string {
         const { discoverSkills } = require('../skills/SkillDiscovery') as typeof import('../skills/SkillDiscovery');
-        const skills = this.skillLoader.loadAll();
-        const discovery = discoverSkills(skills, query);
-
-        // Log para observabilidade
-        if (discovery.byTrigger.length > 0) {
-            for (const s of discovery.byTrigger) {
-                log.info(`[SKILL-MATCH] query="${query.slice(0, 60)}" skill=${s.name} matched_by=trigger`);
-            }
-        }
-        if (discovery.byCapability.length > 0) {
-            for (const m of discovery.byCapability) {
-                log.info(
-                    `[SKILL-MATCH] query="${query.slice(0, 60)}"` +
-                    ` skill=${m.skillName}` +
-                    ` matched_by=tag` +
-                    ` score=${m.score.toFixed(2)}` +
-                    ` terms=${m.matchedTerms.join(',')}`
-                );
-            }
-        }
-
-        if (discovery.all.length === 0) return '';
-        return discovery.all
+        const casadas = discoverSkills(this.skillLoader.loadAll(), query);
+        for (const s of casadas) log.info(`[SKILL-MATCH] query="${query.slice(0, 60)}" skill=${s.name} matched_by=trigger`);
+        if (casadas.length === 0) return '';
+        return casadas
             .map(s => `### SKILL: ${s.name}\n${s.globalContent || s.content}`)
             .join('\n\n');
     }
@@ -1759,10 +1738,14 @@ export class AgentLoop {
         }
 
         const extras = AgentLoop.CATEGORY_TOOLS[intent.category] ?? null;
-        // Unknown category, low confidence, or conversation with specific topicSlug (indicates a concrete operational capability) → send all tools to be safe.
+        // Categoria sem lista, confiança baixa ou conversa com topicSlug: o roteador não sabe o que o turno precisa. Antes iam as
+        // 22 definições completas (o "oi" de 17/10: ~69% da entrada; 24 de 695 turnos medidos em 17/11). ADR-040: o núcleo
+        // completo e TODO o resto no catálogo da ADR-021 — o agente vê que cada ferramenta existe e carrega a que usar.
         if (extras === null || intent.confidence < 0.65 || (intent.category === 'conversation' && intent.topicSlug)) {
-            log.info(`[TOOLS] Sending all tools (category=${intent.category}, confidence=${intent.confidence}${intent.topicSlug ? `, topicSlug=${intent.topicSlug}` : ''})`);
-            return Array.from(this.tools.values()).map(completa);
+            const nucleo = Array.from(this.tools.values()).filter(t => AgentLoop.CORE_TOOLS.has(t.name) || carregadas.has(t.name));
+            const motivo = extras === null ? 'categoria sem lista' : intent.confidence < 0.65 ? 'roteador sem certeza' : 'conversa com tópico';
+            log.info(`[TOOLS] ${motivo} (category=${intent.category}, confidence=${intent.confidence}${intent.topicSlug ? `, topicSlug=${intent.topicSlug}` : ''}): núcleo + catálogo (${nucleo.length}/${this.tools.size} completas)`);
+            return comCatalogo(nucleo);
         }
 
         const allowed = new Set([...AgentLoop.CORE_TOOLS, ...extras, ...carregadas]);
@@ -3844,10 +3827,10 @@ export class AgentLoop {
 
         const manualSkills = this.skillLoader.loadAll();
         // S149: matching por trigger unificado com SkillDiscovery.matchSkillByTrigger() (mesma
-        // lógica que estava duplicada inline aqui). Usa só `.byTrigger`, nunca `.all` —
-        // `.all` incluiria matches por capacidade/tag que este call site nunca considerou.
+        // lógica que estava duplicada inline aqui). ADR-040: gatilho em frase; é a única regra (o
+        // casamento por capacidade/tag, que este call site nunca usou, saiu do SkillDiscovery).
         const { discoverSkills } = require('../skills/SkillDiscovery') as typeof import('../skills/SkillDiscovery');
-        const matchedManual = discoverSkills(manualSkills, userText).byTrigger;
+        const matchedManual = discoverSkills(manualSkills, userText);
         if (matchedManual.length > 0) {
             // Usa conteúdo completo (com seções TASK_ONLY) apenas quando a skill é a
             // tarefa primária do turno — alta confiança e intent diretamente relacionada.
@@ -3871,14 +3854,21 @@ export class AgentLoop {
             log.info(`[SKILL] Injetando ${matchedManual.length} skill(s) manual(ais): ${matchedManual.map(s => s.name).join(', ')}`);
         }
 
-        const manualTools = matchedManual.flatMap(s => s.tools ?? []);
-        if (manualTools.length > 0) {
-            intentDecision.preferredTools = Array.from(new Set([...(intentDecision.preferredTools ?? []), ...manualTools]));
-        }
-
         const toolDefs: ToolDefinition[] = this.buildToolDefs(intentDecision, channelContext?.ferramentasCarregadas);
         // ADR-021: a lista do turno, para `carregar_ferramenta` poder acrescentar ferramentas no meio do turno.
         this.ferramentasDoTurno.set(conversationId, toolDefs);
+
+        // ADR-040 (D4): as ferramentas do `tools:` das skills casadas NÃO entram mais completas (antes viravam preferredTools e
+        // levavam o turno de 7 para ~14 definições, em toda volta do laço). Ficam no catálogo da ADR-021; o fato vai no topo do
+        // bloco de skills (o topo nunca é cortado), para o agente saber que existem e carregar as que usar.
+        const naLista = new Set(toolDefs.map(d => d.name));
+        const ferramentasDasSkills = [...new Set(matchedManual.flatMap(s => s.tools ?? []))].filter(t => this.tools.has(t) && !naLista.has(t));
+        if (ferramentasDasSkills.length > 0) {
+            const aviso = `[Ferramentas citadas pelas skills deste turno que não vieram completas: ${ferramentasDasSkills.join(', ')} — ` +
+                `carregue com ${AgentLoop.CARREGAR_FERRAMENTA} as que for usar.]`;
+            skillContext = skillContext ? `${aviso}\n\n${skillContext}` : aviso;
+            log.info(`[SKILL] ferramentas das skills no catálogo (ADR-040): ${ferramentasDasSkills.join(', ')}`);
+        }
 
         // O override do roteador vale só para ESTE turno. Antes, `resolveProfile()` devolvia a
         // referência do perfil guardado no registry e estas linhas escreviam nele: quando o perfil

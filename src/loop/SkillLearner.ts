@@ -30,6 +30,7 @@
 
 import { pastaDaSkill } from '../shared/pastaDaSkill';
 import { marcarCaminhos, pastasDaInstalacao, resumoDoCorpo } from '../skills/SkillLoader';
+import { campoCasa, campoDeGatilhos, comLinhaDeGatilhos, frasesDoCampoDeGatilhos } from '../skills/SkillDiscovery';
 import { configuracaoDoSync, idDaInstalacao, nomeDaSubpasta } from '../core/syncAgent';
 import { caminhosDaInstalacao } from '../core/backupDoConhecimento';
 import fs from 'fs';
@@ -140,14 +141,14 @@ export class SkillLearner {
     private static readonly SKILL_DEFS: Record<typeof KNOWN_SKILL_TOPICS[number], { name: string; trigger: string; description: string; prompt: string; toolSeq: string[] }> = {
         crypto_price: {
             name: 'Preço de Cripto',
-            trigger: '(pre[cç]o|cota[cç][aã]o|valor|quanto).*(bitcoin|btc|ethereum|eth|solana|sol|river|doge|ada|xrp)',
+            trigger: campoDeGatilhos(['preço do bitcoin', 'cotação do bitcoin', 'preço do btc', 'preço do ethereum', 'preço da solana', 'preço do river', 'valor do river', 'preço da cripto', 'cotação da cripto', 'valor da cripto']),
             description: 'Busca preço de criptomoedas via web_search com instrução focada.',
             prompt: 'Sempre que perguntarem sobre preço de criptomoedas, use web_search com {"query": "preço NOMEMOEDA"}. Formate o resultado com preço em USD, variação 24h e market cap.',
             toolSeq: ['web_search']
         },
         crypto_query: {
             name: 'Consulta Cripto',
-            trigger: '(bitcoin|btc|ethereum|eth|solana|sol|river|doge|ada|xrp)',
+            trigger: campoDeGatilhos(['bitcoin', 'btc', 'ethereum', 'solana', 'dogecoin', 'xrp', 'criptomoeda', 'cripto']),
             description: 'Consulta geral sobre criptomoedas com formato consistente.',
             prompt: 'Use web_search para buscar dados de criptomoedas. Sempre inclua preço, variação 24h e volume.',
             toolSeq: ['web_search']
@@ -169,7 +170,7 @@ export class SkillLearner {
         // "Sempre use esta ferramenta para clima — NÃO use web_search para isso".
         weather: {
             name: 'Previsão do Tempo',
-            trigger: '(clima|tempo|temperatura|previs[aã]o|chovendo)',
+            trigger: campoDeGatilhos(['previsão do tempo', 'vai chover', 'está chovendo', 'como está o clima', 'clima de hoje', 'clima amanhã', 'temperatura de hoje', 'temperatura amanhã']),
             description: 'Consulta o tempo pela ferramenta dedicada, usando a cidade que o usuário informou.',
             prompt: 'Use a ferramenta weather com a cidade que o usuário informou nesta mensagem, '
                 + 'ou com a que já for conhecida da conversa/memória. '
@@ -179,28 +180,28 @@ export class SkillLearner {
         },
         audio_request: {
             name: 'Pedido de Áudio',
-            trigger: '(gerar|criar|enviar|manda|mande|fale).*(áudio|audio|voz|tts)',
+            trigger: campoDeGatilhos(['manda um áudio', 'mande um áudio', 'envia um áudio', 'gera um áudio', 'responde em áudio', 'em áudio', 'por voz']),
             description: 'Gera áudio TTS com conteúdo relevante em vez de repetir o pedido do usuário.',
             prompt: 'Quando pedirem áudio, NUNCA repita o pedido. Gere o CONTEÚDO REAL para TTS. Use send_audio com {"text": "conteúdo gerado pelo assistente"}. Para áudio com dados, busque dados primeiro.',
             toolSeq: ['send_audio']
         },
         memory_write: {
             name: 'Salvar Memória',
-            trigger: '(lembre|lembrete|guarde|salve|memorize|anote)',
+            trigger: campoDeGatilhos(['lembre que', 'guarde isso', 'anote isso', 'salve na memória', 'memorize', 'me lembre de']),
             description: 'Salva informações na memória persistente com formato mais consistente.',
             prompt: 'Use memory_write com {"action":"create","id":"fact_TIMESTAMP","type":"fact","name":"resumo","content":"texto completo"} para salvar.',
             toolSeq: ['memory_write']
         },
         memory_search: {
             name: 'Buscar Memória',
-            trigger: '(lembra|o que voc[eê] sabe|buscar na mem)',
+            trigger: campoDeGatilhos(['você lembra', 'o que você sabe sobre', 'buscar na memória', 'procura na memória']),
             description: 'Busca informações na memória semântica.',
             prompt: 'Use memory_search com {"query": "termo de busca"} para encontrar informações salvas.',
             toolSeq: ['memory_search']
         },
         write: {
             name: 'Operações de Arquivo',
-            trigger: '(arquivo|html|css|site|p[aá]gina)',
+            trigger: campoDeGatilhos(['cria um arquivo', 'criar um arquivo', 'salva em arquivo', 'cria uma página', 'criar um site']),
             description: 'Cria ou sobrescreve arquivos no workspace.',
             prompt: 'Use write com {"path": "caminho/arquivo.html", "content": "conteudo"} para criar arquivos.',
             toolSeq: ['write']
@@ -673,12 +674,8 @@ export class SkillLearner {
     }
 
     private scoreSkillMatch(skill: Skill, lowerInput: string): SkillMatch | null {
-        try {
-            const regex = new RegExp(skill.trigger, 'i');
-            if (!regex.test(lowerInput)) return null;
-        } catch {
-            return null;
-        }
+        // ADR-040: a mesma regra do arquivo para o formato novo (frase inteira); regex antiga continua regex.
+        if (!campoCasa(skill.trigger, lowerInput)) return null;
 
         const priorityScore = Math.min(0.2, Math.max(0, skill.priority) / 10 * 0.2);
         const usageScore = Math.min(0.1, Math.log10(skill.hits + 1) * 0.08);
@@ -856,7 +853,8 @@ export class SkillLearner {
             const skill: Skill = {
                 id: `skill_aprendida_${p.nome.replace(/-/g, '_')}_${Date.now()}`,
                 name: p.nome,
-                trigger: p.gatilhos.join(' '),
+                // ADR-040: a lista de frases, sem perder onde cada uma começa (antes: join(' ')).
+                trigger: campoDeGatilhos(p.gatilhos),
                 description: p.descricao,
                 // ADR-035: os caminhos desta instalação viram marcadores ({NEWCLAW}, {WORKSPACE}, {SKILLS}, {PASTA:nome}).
                 prompt: marcarCaminhos(montarCorpoDaSkill(p, { pedido: entrada.pedido, plataforma: entrada.plataforma, data: agora.slice(0, 10), segredos: entrada.segredos }),
@@ -934,12 +932,13 @@ export class SkillLearner {
 
         // Generic template for patterns not yet in skillDefs — learning is never blocked
         const name = def?.name ?? pattern.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-        const trigger = def?.trigger ?? pattern.replace(/_/g, '|');
+        // ADR-040: padrão sem definição curada fica SEM gatilho de texto. Antes: o slug virava palavras soltas ("check_emails" →
+        // "check|emails"), que casavam qualquer mensagem com "check" — as 10 skills "Padrão aprendido automaticamente" da
+        // produção. Sem frase conhecida, a skill aparece só no catálogo (o modelo escolhe pelo nome e pela descrição).
+        const trigger = def?.trigger ?? '';
         const description = def?.description ??
             `Padrão aprendido automaticamente: ${successCount} usos bem-sucedidos com ${toolName}.`;
-        const prompt = def?.prompt ??
-            `Quando detectar este padrão, use ${toolName} para processar a solicitação. ` +
-            `Analise a mensagem do usuário para extrair os parâmetros necessários.`;
+        const prompt = def?.prompt ?? SkillLearner.corpoGenerico(toolName);
         const toolSeq = def?.toolSeq ?? [toolName];
 
         return {
@@ -1005,22 +1004,17 @@ export class SkillLearner {
     }
 
     /**
-     * Generates the SKILL.md content for a skill.
-     * Includes triggers (extracted from regex) and tags (derived from source_pattern and tool)
-     * so SkillDiscovery's semantic matching can work on auto-skills without extra configuration.
+     * Generates the SKILL.md content for a skill: triggers (as frases — ADR-040) and tools.
+     * ADR-040: sem `tags` derivadas do nome/origem. Elas só alimentavam o casamento por palavra de etiqueta
+     * (`byCapability`), que saiu: "aprendida", "trajetoria", "consulta", "agenda" casavam por palavra solta.
      */
     private buildSkillMd(skill: Skill): string {
-        const keywords = this.extractTriggerKeywords(skill.trigger);
+        const keywords = frasesDoCampoDeGatilhos(skill.trigger);
         const tools = this.parseToolSequence(skill.tool_sequence);
-        const tags = this.deriveTagsFromSkill(skill);
 
         const lines: string[] = ['---', `name: ${skill.name}`, `description: ${skill.description}`];
         if (keywords.length > 0) lines.push(`triggers: ${keywords.join(',')}`);
         if (tools.length > 0) lines.push(`tools: ${tools.join(',')}`);
-        if (tags.length > 0) {
-            lines.push('tags:');
-            tags.forEach(t => lines.push(`  - ${t}`));
-        }
         // ADR-035: linhas planas; campo vazio fica de fora (desconhecido). Só a skill com a origem conhecida declara o formato.
         if (skill.sistema_origem) {
             lines.push(`sistema_origem: ${skill.sistema_origem}`);
@@ -1034,36 +1028,64 @@ export class SkillLearner {
         return lines.join('\n');
     }
 
-    /**
-     * Extracts plain-text keywords from a regex trigger string.
-     * Used to populate the `triggers:` field in SKILL.md for SkillLoader's simple includes-match.
-     */
-    private extractTriggerKeywords(trigger: string): string[] {
-        return trigger
-            .replace(/\[[^\]]*\]/g, ' ')          // remove char classes [...]
-            .replace(/[().*+?^${}|\\[\]]/g, ' ')  // remove regex metacharacters
-            .split(/\s+/)
-            .map(s => s.trim())
-            .filter(s => s.length >= 3 && !/^\d+$/.test(s))
-            .slice(0, 10);
+    /** ADR-040 (D2): as skills aprendidas por trajetória (ADR-017), para a regeração dos gatilhos. */
+    skillsAprendidasPorTrajetoria(): Skill[] {
+        return this.db.prepare(`SELECT * FROM auto_skills WHERE source_tool = 'trajetoria' ORDER BY created_at`).all() as Skill[];
     }
 
     /**
-     * Derives semantic tags for a skill based on its source metadata.
-     * These tags enable SkillDiscovery's capability-based matching for auto-skills.
+     * ADR-040: as skills ativas que NÃO vieram de trajetória — os padrões antigos (`SKILL_DEFS` e "Padrão aprendido
+     * automaticamente"), com gatilho de regex ou de palavra solta ("check|emails"). Também entram na regeração.
      */
-    private deriveTagsFromSkill(skill: Skill): string[] {
-        const tags: string[] = [];
-        if (skill.source_pattern) tags.push(skill.source_pattern.replace(/_/g, '-'));
-        if (skill.source_tool) tags.push(skill.source_tool.replace(/_/g, '-'));
-        const nameWords = skill.name
-            .toLowerCase()
-            .normalize('NFD')
-            .replace(/[̀-ͯ]/g, '')
-            .split(/\s+/)
-            .filter(w => w.length >= 4);
-        tags.push(...nameWords.slice(0, 3));
-        return [...new Set(tags)];
+    skillsAntigasAtivas(): Skill[] {
+        return this.db.prepare(`SELECT * FROM auto_skills WHERE status = 'active' AND (source_tool IS NULL OR source_tool <> 'trajetoria') ORDER BY created_at`).all() as Skill[];
+    }
+
+    /**
+     * ADR-040: os gatilhos novos das skills antigas, pela MESMA regra de `createSkillFromPattern` (uma fonte só, sem modelo):
+     * padrão com definição curada (`SKILL_DEFS`) → as frases de lá; padrão sem definição (o modelo genérico "Quando detectar
+     * este padrão, use X…", sem procedimento) → sem gatilho de texto. Testado com o Bonsai em 17/11: pedir frases ao modelo para
+     * essas genéricas deu "exec_command", "36 usos bem-sucedidos" e "o que tenho hoje" (colidindo com a agenda).
+     */
+    gatilhosDasSkillsAntigas(): Array<{ id: string; nome: string; antes: string[]; propostos: string[] }> {
+        // Só as duas origens que este código conhece pela FORMA (nada de adivinhar pelo texto da descrição): a definição curada
+        // (`source_pattern` em SKILL_DEFS) e o corpo genérico exatamente como `createSkillFromPattern` o escreve. Qualquer outra
+        // (adotada pela ADR-035, importada, editada à mão) fica de fora — ela tem gatilhos próprios que não são deste código.
+        const itens: Array<{ id: string; nome: string; antes: string[]; propostos: string[] }> = [];
+        for (const s of this.skillsAntigasAtivas()) {
+            const p = s.source_pattern ?? '';
+            const antes = frasesDoCampoDeGatilhos(s.trigger);
+            if (SkillLearner.isKnownTopic(p)) itens.push({ id: s.id, nome: s.name, antes, propostos: frasesDoCampoDeGatilhos(SkillLearner.SKILL_DEFS[p].trigger) });
+            else if (s.source_tool && s.prompt === SkillLearner.corpoGenerico(s.source_tool)) itens.push({ id: s.id, nome: s.name, antes, propostos: [] });
+        }
+        return itens;
+    }
+
+    /** O corpo que `createSkillFromPattern` escreve para um padrão sem definição curada — a marca estrutural dessa origem. */
+    static corpoGenerico(toolName: string): string {
+        return `Quando detectar este padrão, use ${toolName} para processar a solicitação. ` +
+            `Analise a mensagem do usuário para extrair os parâmetros necessários.`;
+    }
+
+    /**
+     * ADR-040 (D2): troca os gatilhos de uma skill (banco + SKILL.md, se exportada). Devolve o valor anterior do campo, para
+     * reversão; null se a skill não existe. No SKILL.md muda SÓ a linha `triggers:` — não regera o arquivo do banco (que
+     * apagaria uma edição feita no disco e o SKILL.md.revisar de uma importação pendente). Falha ao gravar o arquivo LANÇA,
+     * antes de mexer no banco: banco e arquivo não divergem em silêncio.
+     */
+    trocarGatilhos(id: string, frases: string[]): string | null {
+        const skill = this.db.prepare('SELECT * FROM auto_skills WHERE id = ?').get(id) as Skill | undefined;
+        if (!skill) return null;
+        const anterior = skill.trigger;
+        const novo = campoDeGatilhos(frases);
+        if (skill.file_exported) {
+            const arquivo = path.resolve(this.skillsDir, this.sanitizeSkillFolderName(skill), 'SKILL.md');
+            if (!fs.existsSync(arquivo)) throw new Error(`SKILL.md de "${skill.name}" não existe em ${arquivo}`);
+            fs.writeFileSync(arquivo, comLinhaDeGatilhos(fs.readFileSync(arquivo, 'utf-8'), frasesDoCampoDeGatilhos(novo)), 'utf-8');
+        }
+        this.db.prepare(`UPDATE auto_skills SET trigger = ?, updated_at = ? WHERE id = ?`).run(novo, new Date().toISOString(), id);
+        log.info(`[SKILL-GATILHOS] "${skill.name}" gatilhos trocados: ${JSON.stringify(anterior)} → ${JSON.stringify(novo)}`);
+        return anterior;
     }
 
     /**

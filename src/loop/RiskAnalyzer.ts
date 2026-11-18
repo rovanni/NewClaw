@@ -26,6 +26,7 @@ import { sanitizePlanSteps } from './planning/sanitizePlanSteps';
 import { resolveToolAlias } from './planning/toolAliasResolver';
 import { resolveArtifactPathFromEvidence } from './planning/artifactContract';
 import { KNOWN_DEPS } from './GoalEvaluator';
+import { matchSkillByTrigger } from '../skills/SkillDiscovery';
 import { resolvePath } from '../utils/crossPlatform';
 import { createHash } from 'crypto';
 import { gravarAvaliacao, novaAvaliacaoId, versaoDoPrompt, INSTRUCAO_FALTOU, INSTRUCAO_DIFICULDADE, lerFaltou, lerDificuldade } from '../shared/evaluatorFlightRecorder';
@@ -560,7 +561,8 @@ export class RiskAnalyzer {
                 const coveringSkill = availableSkills.find(skill =>
                     !seenSkills.has(skill.name) &&
                     (skill.tools ?? []).includes('exec_command') &&
-                    (skill.triggers ?? []).some(t => cmd.includes(t.toLowerCase()))
+                    // ADR-040: a mesma regra de casamento do AgentLoop (frase inteira), não um includes próprio.
+                    matchSkillByTrigger(skill, cmd)
                 );
                 if (coveringSkill) {
                     log.info(

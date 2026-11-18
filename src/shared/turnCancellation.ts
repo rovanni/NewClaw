@@ -14,7 +14,24 @@ import { AsyncLocalStorage } from 'async_hooks';
 
 // ADR-027 (23/10/2026): saiu o PRAZO FINAL do objetivo (executarComPrazo / prazoDoTurno) — o objetivo não tem mais relógio,
 // e nada do que ele executa herda um teto de duração.
-const contexto = new AsyncLocalStorage<{ signal?: AbortSignal; aguardarComandos?: boolean; conversa?: string }>();
+const contexto = new AsyncLocalStorage<{ signal?: AbortSignal; aguardarComandos?: boolean; conversa?: string; passo?: PassoDoObjetivo }>();
+
+/** O passo de objetivo em que o código atual roda (para o diagnóstico das chamadas ao modelo). */
+export interface PassoDoObjetivo { goalId: string; stepId?: string }
+
+/**
+ * ADR-040: roda `fn` como um passo de objetivo — toda chamada ao modelo feita dentro dele (o sub-turno do agente, inclusive)
+ * sai no log `[LLM-CALL]` com `goal=`/`step=`. Antes a do agente não levava, e a medição de tokens não separava conversa
+ * direta de passo de objetivo (17/11/2026).
+ */
+export function executarNoPasso<T>(passo: PassoDoObjetivo, fn: () => Promise<T>): Promise<T> {
+    return contexto.run({ ...contexto.getStore(), passo }, fn);
+}
+
+/** O passo de objetivo em que o código atual roda; `undefined` fora de um. */
+export function passoDoTurno(): PassoDoObjetivo | undefined {
+    return contexto.getStore()?.passo;
+}
 
 /** Roda `fn` dentro do turno: toda chamada ao modelo feita por ela (e pelo que ela dispara) enxerga o sinal.
  * `conversa`: a chave da conversa do turno (`canal:usuário`) (ADR-033: o modelo que respondeu fica registrado por conversa). */

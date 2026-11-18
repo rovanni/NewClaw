@@ -2,7 +2,7 @@
 name: system-provisioner
 description: Instala dependências e configura o ambiente (pip, npm, apt, etc.)
 version: "1.0"
-triggers: instalar, install, configurar, setup, dependência, pip, npm, apt
+triggers: instalar dependência, instalar o pacote, instalar a biblioteca, configurar o ambiente, falta a dependência, pip install, npm install, apt install, pip, npm, apt
 tools: exec_command
 tags: install, setup, environment, dependency, package, configure, provision
 ---

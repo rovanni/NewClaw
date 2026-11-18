@@ -18,7 +18,7 @@
  *   - Nenhum ciclo roda sem trigger explícito (user message ou auth callback)
  */
 
-import { executarAguardandoComandos } from '../shared/turnCancellation';
+import { executarAguardandoComandos, executarNoPasso } from '../shared/turnCancellation';
 import { intervaloDoRelatoMs, montarRelatoDeProgresso } from './relatoDeProgresso';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -2913,12 +2913,13 @@ export class GoalExecutionLoop {
         // cleanup no seu PRÓPRIO finally, sempre, antes mesmo deste await resolver (sucesso ou
         // exceção). Nada aqui lê activeTurns depois da chamada (ver S229_AgentLoop_
         // RunFinallyClearsActiveTurn.test.ts e S223, reescrito para validar isto).
-        const response: Awaited<ReturnType<AgentLoop['process']>> = await this.agentLoop.process(
+        // ADR-040: as chamadas do sub-turno saem no [LLM-CALL] com goal=/step= (medição de tokens por objetivo).
+        const response: Awaited<ReturnType<AgentLoop['process']>> = await executarNoPasso({ goalId: goal.id, stepId: step.id }, async () => await this.agentLoop.process(
             goal.conversationId,
             stepPrompt,
             sessionUserId ?? goal.conversationId,
             goalChannelContext
-        );
+        ));
         const text = typeof response === 'string' ? response : response.text;
         const respOptions = typeof response === 'string' ? undefined : response.options;
 
@@ -3979,25 +3980,23 @@ export class GoalExecutionLoop {
             log.warn('[GoalLoop] Q1 memory search error:', String(err));
         }
 
-        // Sprint 3.7A — Q1 Skill Discovery: informa o planner sobre skills relevantes
-        // Usa capability-based matching (SkillDiscovery) para separar linguagem do usuário
-        // dos domínios de capacidade, sem regras hardcoded.
+        // Sprint 3.7A — Q1 Skill Discovery: informa o planner sobre skills relevantes.
+        // ADR-040: pela mesma regra do agente (gatilho em frase). O casamento por palavra de etiqueta/descrição saiu; o
+        // planejador já tem o catálogo de todas as skills. Aqui vai FATO (quais casaram), não ordem ("Priorize-as").
         try {
             const { discoverSkills } = await import('../skills/SkillDiscovery');
             const availableSkills = this.planner.getAvailableSkills();
-            const discovery = discoverSkills(availableSkills, goal.userIntent);
-
-            const relevantSkills = discovery.all;
+            const relevantSkills = discoverSkills(availableSkills, goal.userIntent);
             if (relevantSkills.length > 0) {
                 const names = relevantSkills.map(s => s.name).join(', ');
                 parts.push(
-                    `Skills especializadas disponíveis para este objetivo: ${names}.\n` +
-                    `O planner já recebeu as instruções dessas skills. Priorize-as.`
+                    `Skills cujos gatilhos aparecem no pedido: ${names}.\n` +
+                    `As instruções delas já estão no contexto do planejamento.`
                 );
                 log.info(
                     `[SKILL-DISCOVERY]` +
                     ` goal=${goal.id}` +
-                    ` capabilities=${[...new Set(discovery.byCapability.flatMap(m => m.matchedTerms))].join(',') || '(trigger)'}` +
+                    ` matched_by=trigger` +
                     ` matched_skills=${relevantSkills.map(s => s.name).join(',')}` +
                     ` source=local` +
                     ` cycle=${cycleNumber}`

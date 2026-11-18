@@ -92,8 +92,16 @@ async function main(): Promise<void> {
         'o GoalExecutionLoop entrega o MESMO conjunto a todos os passos de um goal (e outro a cada goal)');
 
     console.log('\n=== S413-4 — sem nada de fora, não há meta-ferramenta ===');
-    const todas = quieto(() => agente().buildToolDefs({ category: 'desconhecida', confidence: 0.3 }, new Set())) as Array<{ name: string }>;
-    assert(todas.length === REGISTRO.length && !nomes(todas).includes(AgentLoop.CARREGAR_FERRAMENTA), 'todas as ferramentas enviadas → sem catálogo nem meta-ferramenta');
+    const todas = quieto(() => agente().buildToolDefs({ category: 'desconhecida', confidence: 0.3 }, new Set(REGISTRO.map(t => t.name)))) as Array<{ name: string }>;
+    assert(todas.length === REGISTRO.length && !nomes(todas).includes(AgentLoop.CARREGAR_FERRAMENTA), 'todas já carregadas → sem catálogo nem meta-ferramenta');
+
+    console.log('\n=== S413-4b — roteador sem certeza: núcleo + catálogo, não as definições todas (ADR-040) ===');
+    const incerto = quieto(() => agente().buildToolDefs({ category: 'desconhecida', confidence: 0.3 }, new Set())) as Array<{ name: string; description: string }>;
+    const metaIncerto = incerto.find(d => d.name === AgentLoop.CARREGAR_FERRAMENTA);
+    assert(!nomes(incerto).includes('exec_command') && !nomes(incerto).includes('web_search') && nomes(incerto).includes('read'),
+        'só o núcleo vem completo (antes: as 11 do registro, completas)', nomes(incerto));
+    assert(!!metaIncerto && ['exec_command', 'web_search', 'read_document', 'web_navigate'].every(n => metaIncerto.description.includes(`- ${n}:`)),
+        'o resto está no catálogo da meta-ferramenta — nenhuma fica invisível', metaIncerto?.description);
 
     console.log('\n=== S413-5 — o critério da árvore é MEDIDO a cada turno, no log ===');
     {

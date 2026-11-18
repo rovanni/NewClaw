@@ -7,20 +7,19 @@
  * do mesmo algoritmo (substring case-insensitive de cada trigger no texto do usuário). Sprint 002
  * substituiu o filtro inline por `discoverSkills(manualSkills, userText).byTrigger`.
  *
- * Ponto crítico validado aqui: `discoverSkills()` também retorna `.byCapability`/`.all` (match por
- * tag/capacidade) — algo que este call site NUNCA fez. Usar `.all` por engano adicionaria skills
- * que o comportamento antigo nunca selecionava. Este teste trava que:
- *   1. `byTrigger` é idêntico, skill a skill e em ordem, ao filtro inline antigo, para uma
- *      variedade de mensagens/skills sintéticas;
- *   2. existe pelo menos um caso sintético onde `.all` DIFERE de `.byTrigger` (prova de que a
- *      escolha de usar só `.byTrigger` era uma decisão real, não uma coincidência sem efeito);
- *   3. as 6 skills reais do repositório continuam sendo descobertas por trigger exatamente como
- *      antes, para uma amostra de mensagens reais já usadas nos logs desta sessão.
+ * Até a ADR-040 (17/11/2026), `discoverSkills()` também devolvia `.byCapability`/`.all` (match por
+ * tag/capacidade), que este call site nunca usou. A ADR-040 tirou esse casamento: `discoverSkills()`
+ * devolve só as skills casadas por gatilho (frase). Este teste trava que:
+ *   1. `discoverSkills` é idêntico, skill a skill e em ordem, à regra de referência (frase inteira,
+ *      fronteira de palavra, sem diferença de acento), para uma variedade de mensagens/skills sintéticas;
+ *   2. uma consulta que só casaria por etiqueta (sem gatilho no texto) não traz a skill;
+ *   3. as 6 skills reais do repositório seguem a mesma regra para mensagens reais dos logs.
  */
 import * as fs from 'fs';
 import * as path from 'path';
 import { discoverSkills } from '../../skills/SkillDiscovery';
 import type { Skill } from '../../skills/SkillLoader';
+import { keywordBoundaryMatches } from '../../shared/keywordBoundary';
 
 let failures = 0;
 function check(ok: boolean, label: string, detail = ''): void {
@@ -32,10 +31,15 @@ function check(ok: boolean, label: string, detail = ''): void {
   }
 }
 
-/** Réplica exata do filtro inline que existia em AgentLoop.ts antes da unificação (S149). */
+/**
+ * A regra do AgentLoop para gatilho. Era a réplica do filtro inline antigo (substring); desde a ADR-040 (S488) é a frase
+ * inteira com fronteira de palavra (`keywordBoundaryMatches`) e sem diferença de acento. `discoverSkills` segue
+ * exatamente essa regra.
+ */
 function oldInlineMatch(skills: Skill[], userText: string): Skill[] {
+  const semAcento = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
   return skills.filter(s =>
-    s.triggers?.some(t => userText.toLowerCase().includes(t.toLowerCase()))
+    s.triggers?.some(t => keywordBoundaryMatches(semAcento(userText), semAcento(t)))
   );
 }
 
@@ -52,7 +56,7 @@ function makeSkill(name: string, triggers: string[], tags: string[] = []): Skill
   } as unknown as Skill;
 }
 
-console.log('\n=== S149-1 — byTrigger é idêntico ao filtro inline antigo (sintético) ===');
+console.log('\n=== S149-1 — discoverSkills é idêntico à regra de referência (sintético) ===');
 {
   const skills = [
     makeSkill('system-provisioner', ['instalar', 'install', 'configurar', 'setup', 'dependência', 'pip', 'npm', 'apt']),
@@ -72,7 +76,7 @@ console.log('\n=== S149-1 — byTrigger é idêntico ao filtro inline antigo (si
 
   for (const msg of messages) {
     const expected = oldInlineMatch(skills, msg).map(s => s.name);
-    const actual = discoverSkills(skills, msg).byTrigger.map(s => s.name);
+    const actual = discoverSkills(skills, msg).map(s => s.name);
     check(
       JSON.stringify(actual) === JSON.stringify(expected),
       `"${msg.slice(0, 40)}" → mesmas skills, mesma ordem`,
@@ -81,20 +85,17 @@ console.log('\n=== S149-1 — byTrigger é idêntico ao filtro inline antigo (si
   }
 }
 
-console.log('\n=== S149-2 — .all difere de .byTrigger em pelo menos um caso (prova que a escolha importa) ===');
+console.log('\n=== S149-2 — etiqueta sem gatilho no texto não traz a skill (ADR-040) ===');
 {
-  // system-provisioner tem tag "install"/"setup"/"environment" — uma query que NÃO bate nenhum
-  // trigger mas cujas palavras (após stemming) batem as tags deve aparecer em .all e não em
-  // .byTrigger, demonstrando que usar .all mudaria o comportamento.
+  // system-provisioner tem a tag "environment" — uma query sem nenhum gatilho ("instalar/install/configurar/setup/pip/
+  // npm/apt") mas com "environment" trazia a skill pelo casamento por capacidade, que saiu.
   const skills = [
     makeSkill('system-provisioner', ['instalar', 'install', 'configurar', 'setup', 'dependência', 'pip', 'npm', 'apt'], ['install', 'setup', 'environment', 'dependency', 'package', 'configure', 'provision']),
   ];
-  // Deliberadamente sem nenhum trigger literal ("instalar/install/configurar/setup/pip/npm/apt")
-  // mas contendo "environment", que é uma tag da skill — deve bater por capacidade, não por trigger.
-  const query = 'preciso saber mais sobre o environment disponível agora';
-  const discovery = discoverSkills(skills, query);
-  const differs = JSON.stringify(discovery.all.map(s => s.name)) !== JSON.stringify(discovery.byTrigger.map(s => s.name));
-  check(differs, '.all inclui matches por capacidade que .byTrigger não inclui', `byTrigger=${JSON.stringify(discovery.byTrigger.map(s => s.name))} all=${JSON.stringify(discovery.all.map(s => s.name))}`);
+  const achadas = discoverSkills(skills, 'preciso saber mais sobre o environment disponível agora').map(s => s.name);
+  check(achadas.length === 0, 'a tag "environment" sozinha não traz system-provisioner', `obtido=${JSON.stringify(achadas)}`);
+  check(discoverSkills(skills, 'o pacote foi instalado ontem').length === 0, '"instalado" não é o gatilho "instalar" (palavra inteira)');
+  check(discoverSkills(skills, 'falta uma dependencia aqui').map(s => s.name).includes('system-provisioner'), 'o gatilho "dependência" casa escrito sem acento');
 }
 
 console.log('\n=== S149-3 — skills reais do repositório: mesmas mensagens da sessão continuam batendo os mesmos triggers ===');
@@ -127,7 +128,7 @@ console.log('\n=== S149-3 — skills reais do repositório: mesmas mensagens da 
 
   for (const msg of realMessages) {
     const expected = oldInlineMatch(realSkills, msg).map(s => s.name);
-    const actual = discoverSkills(realSkills, msg).byTrigger.map(s => s.name);
+    const actual = discoverSkills(realSkills, msg).map(s => s.name);
     check(
       JSON.stringify(actual) === JSON.stringify(expected),
       `mensagem real "${msg.slice(0, 40)}" → mesmo resultado do filtro antigo`,

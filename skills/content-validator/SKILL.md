@@ -2,7 +2,7 @@
 name: content-validator
 description: Valida arquivos gerados (HTML, JS, Python, JSON) antes de enviar ao usuário, detectando erros de sintaxe e problemas comuns. Também faz revisão visual (Self Review) de artefatos renderizados — HTML, dashboards, slides, PDF — usando o modelo de visão já configurado.
 version: "1.1"
-triggers: erro, error, syntax error, não abre, não renderiza, diagrama, mermaid, broken, corrija, corrigir, verificar, validar, checar, revisar visualmente, ficou bom, qualidade visual, self review
+triggers: syntax error, erro de sintaxe, não abre, não renderiza, diagrama mermaid, mermaid, arquivo quebrado, corrija o arquivo, corrigir o arquivo, validar o arquivo, verificar o arquivo, checar o arquivo, revisar visualmente, qualidade visual, self review
 tools: exec_command, read, edit, read_document
 tags: validation, quality, syntax, check, debug, html, javascript, python, json, visual, screenshot, vision, self-review
 ---

@@ -1,7 +1,7 @@
 ---
 name: Salvar Memória
 description: Salva informações na memória persistente com formato mais consistente.
-triggers: lembre,lembrete,guarde,salve,memorize,anote
+triggers: lembre que,guarde isso,anote isso,salve na memória,memorize,me lembre de
 tools: memory_write
 tags:
   - memory-write

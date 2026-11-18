@@ -1,7 +1,6 @@
 ---
 name: Event:Interaction Pattern
 description: Padrão aprendido automaticamente: 36 usos bem-sucedidos com system.
-triggers: event:interaction,pattern
 tools: system
 tags:
   - event:interaction-pattern

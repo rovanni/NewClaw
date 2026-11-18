@@ -9,7 +9,8 @@
  *
  * Este teste valida:
  *   1 → Quando category='conversation' tem confiança >= 0.65 mas possui um topicSlug operacional (ex: 'check_email'),
- *       buildToolDefs não tranca as ferramentas: envia todas as ferramentas disponíveis para evitar bloqueio;
+ *       buildToolDefs não tranca as ferramentas: todas ficam alcançáveis (núcleo completo + catálogo da ADR-021; até a
+ *       ADR-040, 17/11/2026, iam todas completas);
  *   2 → Quando skills manuais são correspondidas (com tools declaradas como 'exec_command'), essas ferramentas
  *       são adicionadas a preferredTools e liberadas pelo filtro de ferramentas;
  *   3 → Conversa pura (sem topicSlug, sem skills correspondidas) continua restrita apenas às CORE_TOOLS (comportamento original preservado).
@@ -59,12 +60,17 @@ console.log('\n[1] Conversa pura (sem topicSlug) — continua restrita às CORE_
     assert(tools.includes('read') && tools.includes('memory_search'), 'CORE_TOOLS disponíveis');
 }
 
-console.log('\n[2] Conversa com topicSlug operacional (ex: check_email) — evita bloqueio e envia todas as ferramentas');
+console.log('\n[2] Conversa com topicSlug operacional (ex: check_email) — nada fica inalcançável (ADR-040: pelo catálogo)');
 {
-    const tools = build({ category: 'conversation', confidence: 0.85, topicSlug: 'check_email' });
-    assert(tools.includes('exec_command'), 'exec_command disponível quando há topicSlug operacional');
-    assert(tools.includes('web_search'), 'web_search disponível quando há topicSlug operacional');
-    assert(tools.length === fakeTools.size, 'todas as ferramentas enviadas para segurança');
+    // O incidente era exec_command INALCANÇÁVEL. Desde a ADR-021 o que não vem completo vai no catálogo de
+    // carregar_ferramenta; a ADR-040 tirou o "manda as 22 completas" deste caso (~69% da entrada de um "oi").
+    const defs = (AgentLoop.prototype as unknown as { buildToolDefs: (i: unknown) => Array<{ name: string; description: string }> })
+        .buildToolDefs.call({ tools: fakeTools }, { category: 'conversation', confidence: 0.85, topicSlug: 'check_email' });
+    const catalogo = defs.find(d => d.name === AgentLoop.CARREGAR_FERRAMENTA)?.description ?? '';
+    const alcancaveis = new Set([...defs.map(d => d.name), ...[...fakeTools.keys()].filter(n => catalogo.includes(`- ${n}:`))]);
+    assert(alcancaveis.has('exec_command'), 'exec_command alcançável (no catálogo) quando há topicSlug operacional');
+    assert([...fakeTools.keys()].every(n => alcancaveis.has(n)), 'todas as ferramentas registradas alcançáveis (completas ou no catálogo)');
+    assert(!defs.some(d => d.name === 'exec_command'), 'mas não vêm todas completas (só o núcleo)', defs.map(d => d.name));
 }
 
 console.log('\n[3] Conversa com preferredTools (vindo de skill aprendida ou manual)');

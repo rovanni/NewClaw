@@ -1,7 +1,7 @@
 ---
 name: Pedido de Áudio
 description: Gera áudio TTS com conteúdo relevante em vez de repetir o pedido do usuário.
-triggers: gerar,criar,enviar,manda,mande,fale,áudio,audio,voz,tts
+triggers: manda um áudio,mande um áudio,envia um áudio,gera um áudio,responde em áudio,em áudio,por voz
 tools: send_audio
 tags:
   - audio-request
