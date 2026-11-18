@@ -326,3 +326,17 @@ genéricas, cujo corpo é só "Quando detectar este padrão, use X…", vieram "
 **Achado na migração, decisão da operadora:** "Buscar Memória" está ativa e marcada como exportada no banco, mas o
 `SKILL.md` dela não existe no disco (pasta `memory_search`). Ela não carrega por nenhum caminho (o arquivo não existe;
 o caminho do banco ignora `file_exported = 1`). O script recusa trocá-la (não deixa banco e arquivo divergirem).
+Decisão (17/11): recriar — `--recriar "Buscar Memória"` (desativar + ativar pelo `SkillLearner`, o caminho do painel).
+
+### Execução real, segunda rodada (17/11/2026, Bonsai local, cópia isolada com todos os gatilhos novos)
+
+| Mensagem | O que o log mostrou |
+|---|---|
+| "o que tenho hoje na agenda?" | planejador e agente: só `consulta-agenda`, por frase (`[SKILL-DISCOVERY] matched_by=trigger`); `schedule` no catálogo; `[LLM-CALL] component=AgentLoop … goal=goal_… step=step_2` (item 7) |
+| "mas não recebi nada!" | nenhuma skill (antes: "Consulta Cripto" pelo "ada"); 7 ferramentas da categoria |
+| "sim, pode fazer" / "ok, confirma" | categoria `confirmation` (sem lista): 7 de 21 completas + catálogo (antes: as 21); o agente carregou `list_workspace` quando precisou (item 6) |
+| "oi" | saudação direta, sem ferramenta |
+
+Não exercitado na execução real (sem teste ao vivo possível aqui): o estouro do contexto (item 5, coberto pelo S488-8) e
+os provedores do item 8 — Anthropic e Gemini sem chave nesta máquina; o Ollama local está sem modelo de conversa
+utilizável (os dois `gemma4` locais têm o manifesto mas não o arquivo do modelo: "read GGUF metadata … open …").

@@ -1743,7 +1743,8 @@ export class AgentLoop {
         // completo e TODO o resto no catálogo da ADR-021 — o agente vê que cada ferramenta existe e carrega a que usar.
         if (extras === null || intent.confidence < 0.65 || (intent.category === 'conversation' && intent.topicSlug)) {
             const nucleo = Array.from(this.tools.values()).filter(t => AgentLoop.CORE_TOOLS.has(t.name) || carregadas.has(t.name));
-            log.info(`[TOOLS] Roteador sem certeza (category=${intent.category}, confidence=${intent.confidence}${intent.topicSlug ? `, topicSlug=${intent.topicSlug}` : ''}): núcleo + catálogo (${nucleo.length}/${this.tools.size} completas)`);
+            const motivo = extras === null ? 'categoria sem lista' : intent.confidence < 0.65 ? 'roteador sem certeza' : 'conversa com tópico';
+            log.info(`[TOOLS] ${motivo} (category=${intent.category}, confidence=${intent.confidence}${intent.topicSlug ? `, topicSlug=${intent.topicSlug}` : ''}): núcleo + catálogo (${nucleo.length}/${this.tools.size} completas)`);
             return comCatalogo(nucleo);
         }
 
