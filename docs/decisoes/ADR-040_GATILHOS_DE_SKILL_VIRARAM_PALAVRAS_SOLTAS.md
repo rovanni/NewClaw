@@ -294,3 +294,35 @@ Os três pontos que ficariam para depois também foram resolvidos no ramo (a ope
   escrita à mão (skills antigas só no banco) continua regex.
 - **Painel:** conferido que nenhuma tela lê o campo `trigger` (`SkillsView.js` mostra nome, descrição, prioridade,
   ferramentas e situação; o `/skills` também não o mostra). O achado não se confirmou; nada a mudar.
+
+## Revisão 2 (17/11/2026) — os 8 erros encontrados na auditoria dos históricos
+
+A operadora pediu para conferir se tinha ficado erro para trás nos históricos; a conferência no código achou 8, e ela
+mandou corrigir todos.
+
+| # | Erro (com a prova) | Correção |
+|---|---|---|
+| 1 | 4 skills antigas só no banco, regex de substring com confiança 0,82–0,98: "Consulta Cripto" casava 95 de 443 mensagens ("ada" em "nada") | `campoCasa`: regex antiga só com palavra inteira nas pontas; as 4 recebem as frases de `SKILL_DEFS` (migração) |
+| 2 | 10 pastas de "Padrão aprendido automaticamente" com gatilho de palavra solta ("check", "skill", "newclaw"); a origem é `createSkillFromPattern` (`pattern.replace(/_/g, '\|')`) | Padrão sem definição curada nasce sem gatilho de texto (fica só no catálogo); as existentes perdem o gatilho na migração; `SKILL_DEFS` em frases |
+| 3 | 2 frases da prévia cortadas pelo modelo ("…antigravit", "…instalado o") | Corrigidas na prévia revisada |
+| 4 | Prompt-mestre (e estado, memória, resumo) cortado com só `[...truncated]` | `truncateToTokens`/`truncateToChars` declaram quanto mostraram do total |
+| 5 | Estouro do contexto cortava só o 1º bloco e parava, e punha todos os `user` antes dos `assistant` | `ContextBudget.caberNoLimite`: tudo cabe, ordem original, o que sai é declarado |
+| 6 | Roteador sem certeza mandava as 22 definições completas (24 de 695 turnos; o "oi" de 17/10) | Núcleo completo + catálogo da ADR-021 |
+| 7 | `[LLM-CALL]` do sub-turno do agente sem `goal=` | `executarNoPasso` + `diagComPasso` |
+| 8 | Anthropic `max_tokens` 8192 fixo; Gemini com a chave na URL e papéis `system`/`tool` inválidos; Ollama descartando pedaço só de espaço | No ramo do PR #58 (mexe nos mesmos arquivos): teto pela Models API, `x-goog-api-key`, `systemInstruction`/`functionCall`/`functionResponse`, espaço mantido |
+
+Também no mesmo defeito: as skills oficiais `content-validator` ("erro", "verificar") e `system-provisioner`
+("instalar", "configurar") passaram a frases; as cópias de padrões antigos no repositório (`audio_request`,
+`memory_write`, `event_interaction_pattern`) ficaram iguais ao que a migração grava.
+
+**Por que não pedir frases ao modelo para as 20 skills antigas.** Testado com o Bonsai local (17/11): para as 13
+genéricas, cujo corpo é só "Quando detectar este padrão, use X…", vieram "exec_command", "36 usos bem-sucedidos" e
+"o que tenho hoje" (que colidiria com a agenda). Sem procedimento não há de onde tirar frase; a regra estrutural
+(curada → frases do código; genérica → sem gatilho) é a mesma do nascimento da skill e não depende de modelo.
+
+**Medido com tudo (443 mensagens, gatilhos da prévia + antigas):** no máximo 2 skills por mensagem (antes 18), p90 1
+(antes 8), 0 mensagens com 5 ou mais (antes 121).
+
+**Achado na migração, decisão da operadora:** "Buscar Memória" está ativa e marcada como exportada no banco, mas o
+`SKILL.md` dela não existe no disco (pasta `memory_search`). Ela não carrega por nenhum caminho (o arquivo não existe;
+o caminho do banco ignora `file_exported = 1`). O script recusa trocá-la (não deixa banco e arquivo divergirem).

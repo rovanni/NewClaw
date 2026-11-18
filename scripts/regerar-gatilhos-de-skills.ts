@@ -8,6 +8,12 @@
  *   --aplicar <arquivo.json>   grava os gatilhos de uma prévia revisada (banco + SKILL.md). Não chama modelo. Antes de gravar,
  *                              escreve `<arquivo>.reversao.json` com o campo e o SKILL.md de antes de cada skill.
  *   --reverter <reversao.json> devolve campo e SKILL.md ao que estava.
+ *   --recriar <nome>           skill ATIVA no banco cujo SKILL.md não existe no disco (caso real: "Buscar Memória", 17/11):
+ *                              desativa e ativa de novo pelo SkillLearner (o mesmo caminho do painel), que regera o arquivo
+ *                              a partir do banco. Depois, rode de novo o `--aplicar` da prévia para os gatilhos em frase.
+ *
+ * Ordem no deploy: `--previa x.json --antigas`, `--previa y.json` (aprendidas, com modelo), revisar, `--recriar` (se houver),
+ * `--aplicar y.json`, `--aplicar x.json`.
  *
  * Exemplo (PowerShell, na pasta da instalação; o `ts-node` lê o tsconfig do repositório):
  *   $env:TS_NODE_PROJECT="<repo>\tsconfig.json"; npx ts-node "<repo>\scripts\regerar-gatilhos-de-skills.ts" --previa previa.json
@@ -32,8 +38,8 @@ interface ItemDaReversao { id: string; nome: string; campoAntes: string; skillMd
 function falhar(msg: string): never { console.error(`ERRO: ${msg}`); process.exit(1); }
 
 const [modo, arquivo, ...extras] = process.argv.slice(2);
-if (!['--previa', '--aplicar', '--reverter'].includes(modo ?? '') || !arquivo) {
-    falhar('uso: --previa <arquivo.json> [--antigas] [--skills nome1,nome2] | --aplicar <arquivo.json> | --reverter <reversao.json>');
+if (!['--previa', '--aplicar', '--reverter', '--recriar'].includes(modo ?? '') || !arquivo) {
+    falhar('uso: --previa <arquivo.json> [--antigas] [--skills nome1,nome2] | --aplicar <arquivo.json> | --reverter <reversao.json> | --recriar <nome da skill>');
 }
 // --antigas: as skills ativas que não vieram de trajetória (padrões antigos, regex/palavra solta).
 // --skills a,b: só estas (pelo nome), de qualquer origem — para refazer as que saíram ruins numa prévia.
@@ -135,6 +141,17 @@ function aplicar(): void {
     if (semProposta.length) console.log(`Sem proposta (nada mudou): ${semProposta.map(i => `${i.nome} (${i.erro ?? 'vazia'})`).join(', ')}`);
 }
 
+/** Recria o SKILL.md de uma skill ativa sem arquivo, pelo caminho do painel (desativar + ativar). Recusa qualquer outro caso. */
+function recriar(nome: string): void {
+    const s = db.prepare(`SELECT * FROM auto_skills WHERE name = ? AND status = 'active'`).get(nome) as { id: string; name: string; source_pattern?: string } | undefined;
+    if (!s) { console.log(`- ${nome}: não há skill ATIVA com esse nome — nada feito`); process.exitCode = 1; return; }
+    const arq = arquivoDaSkill(s);
+    if (fs.existsSync(arq)) { console.log(`- ${nome}: o SKILL.md já existe (${arq}) — nada feito`); process.exitCode = 1; return; }
+    const ok = learner.deactivateSkill(s.id) && learner.activateSkill(s.id);
+    console.log(`- ${nome}: ${ok && fs.existsSync(arq) ? `SKILL.md recriado em ${arq}` : 'NÃO recriado'}`);
+    if (!ok || !fs.existsSync(arq)) process.exitCode = 1;
+}
+
 function reverter(): void {
     const { itens } = JSON.parse(fs.readFileSync(arquivo, 'utf8')) as { itens: ItemDaReversao[] };
     for (const r of itens) {
@@ -148,6 +165,7 @@ function reverter(): void {
     try {
         if (modo === '--previa') await previa();
         else if (modo === '--aplicar') aplicar();
+        else if (modo === '--recriar') recriar(arquivo);
         else reverter();
     } finally {
         db.close();
