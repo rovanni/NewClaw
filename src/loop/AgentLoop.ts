@@ -40,7 +40,7 @@ import { AgentFSM, AgentFSMEvent, type AgentFSMState } from './AgentFSM';
 import { FSMHistoryStore } from './FSMHistoryStore';
 import { descreverArgumentos } from '../shared/argumentosDaChamada';
 import { ToolRegistry, DIRECT_DELIVERABLE_TOOLS } from '../core/ToolRegistry';
-import { comSegredos } from '../core/ToolRegistry';
+import { comSegredos, validateToolArgs } from '../core/ToolRegistry';
 import { isReadOnlyExecCommand } from '../tools/exec_command';
 import { SkillLoader } from '../skills/SkillLoader';
 import { ModelProfile } from './ModelProfileRegistry';
@@ -2040,6 +2040,14 @@ export class AgentLoop {
         // completo, que sabe pedir autorização direito.
         if (ToolRegistry.requiresAuthorization(toolName, toolArgs)) {
             log.info(`[${this.ts()}] [FAST-PATH] "${toolName}" exige autorização — saindo do atalho para o fluxo com gate`);
+            return null;
+        }
+
+        // 19/11/2026: o atalho também passa pela validação do esquema (campo obrigatório, enum, campo desconhecido) — antes
+        // só o ProactiveRecovery validava, e um campo que a ferramenta não tem chegava a ela e era ignorado sem aviso.
+        const erroDosArgumentos = validateToolArgs(tool as unknown as { parameters?: unknown }, toolArgs);
+        if (erroDosArgumentos) {
+            log.info(`[${this.ts()}] [FAST-PATH] "${toolName}" recusado pelo esquema (${erroDosArgumentos}) — caindo no loop de cognição`);
             return null;
         }
 

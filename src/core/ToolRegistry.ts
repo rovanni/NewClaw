@@ -60,6 +60,7 @@ export function producesUserReadableText(toolName: string | undefined): boolean 
 interface ToolArgsSchema {
     required?: string[];
     properties?: Record<string, { enum?: string[]; description?: string }>;
+    additionalProperties?: boolean | object;
 }
 
 /**
@@ -88,6 +89,19 @@ export function validateToolArgs(tool: { parameters?: unknown }, args: Record<st
     if (!schema) return null;
     const required = Array.isArray(schema.required) ? schema.required : [];
     const properties = schema.properties ?? {};
+
+    // Decisão da operadora (19/11/2026), generalizando o S489: campo que a ferramenta não declara recusa a chamada inteira.
+    // Antes ele era ignorado sem aviso — o `schedule` recebeu `frequency: "weekly"`/`day: "monday"` e gravou uma tarefa
+    // diária. Só vale para esquema que declara `properties` (mesmo vazio) e não abre `additionalProperties`: sem a lista,
+    // não há como saber o que é desconhecido.
+    if (schema.properties && (schema.additionalProperties === undefined || schema.additionalProperties === false)) {
+        const aceitos = Object.keys(properties);
+        const desconhecidos = Object.keys(args ?? {}).filter(k => !aceitos.includes(k));
+        if (desconhecidos.length > 0) {
+            return `Campos que esta ferramenta não tem: ${desconhecidos.join(', ')}. Nada foi feito. ` +
+                (aceitos.length > 0 ? `Campos aceitos: ${aceitos.join(', ')}.` : 'Ela não recebe campo nenhum.');
+        }
+    }
 
     for (const field of required) {
         const value = args[field];

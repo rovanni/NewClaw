@@ -25,6 +25,7 @@
 import Database from 'better-sqlite3';
 import { SchedulerService, proximoDisparo } from '../../services/SchedulerService';
 import { ScheduleTool } from '../../tools/schedule_tool';
+import { validateToolArgs } from '../../core/ToolRegistry';
 
 let passed = 0;
 let failed = 0;
@@ -208,10 +209,9 @@ async function main(): Promise<void> {
         const s4 = new SchedulerService(':memory:', db3);
         const ferramenta = new ScheduleTool(s4);
         ferramenta.setContext('chat_teste', 'web');
-        const comExtras = await ferramenta.execute({ action: 'create', title: 'Revisar planejamento', frequency: 'weekly', day: 'monday', time: '09:00' });
-        assert(!comExtras.success && /frequency/.test(comExtras.error ?? '') && /day/.test(comExtras.error ?? '') && /title/.test(comExtras.error ?? ''),
-            'recusa e nomeia frequency, day e title', comExtras.error);
-        assert(s4.listTasks('chat_teste').length === 0, 'nada criado com campo desconhecido', s4.listTasks('chat_teste'));
+        // 19/11/2026: a recusa é do despacho, para todas as ferramentas (validateToolArgs); o S493 cobre os pontos de despacho.
+        const erro = validateToolArgs(ferramenta, { action: 'create', title: 'Revisar planejamento', frequency: 'weekly', day: 'monday', time: '09:00' });
+        assert(!!erro && /frequency/.test(erro) && /day/.test(erro) && /title/.test(erro), 'recusa e nomeia frequency, day e title', erro);
         const certo = await ferramenta.execute({ action: 'create', label: 'Revisar planejamento', time: '0 9 * * 1', type_action: 'custom' });
         const gravadas = s4.listTasks('chat_teste');
         assert(certo.success && gravadas.length === 1 && gravadas[0].cron_expr === '0 9 * * 1', 'com os campos do esquema, grava "0 9 * * 1"', { certo, gravadas });

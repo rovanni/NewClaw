@@ -48,17 +48,8 @@ export class ScheduleTool implements ToolExecutor {
         try {
             const action = args.action;
 
-            // S489 (18/11/2026, instância isolada com modelo real): o modelo mandou `frequency: "weekly"`, `day: "monday"` e
-            // `time: "09:00"`. Campos fora do esquema eram ignorados sem aviso, e a tarefa nascia diária. Campo desconhecido
-            // agora recusa a chamada inteira, dizendo quais e onde a informação cabe.
-            const aceitos = Object.keys(this.parameters.properties);
-            const desconhecidos = Object.keys(args ?? {}).filter(k => !aceitos.includes(k));
-            if (desconhecidos.length > 0) {
-                return {
-                    success: false, output: '',
-                    error: `Campos que esta ferramenta não tem: ${desconhecidos.join(', ')}. Nada foi feito. Campos aceitos: ${aceitos.join(', ')}. Dia da semana, dia do mês ou mês vão em "time" como expressão cron de 5 campos ("0 9 * * 1" = segundas às 9h); o nome do agendamento vai em "label".`,
-                };
-            }
+            // S489: campo fora do esquema (`frequency`, `day`) é recusado antes de chegar aqui, para todas as ferramentas
+            // (`validateToolArgs`, ToolRegistry.ts; decisão da operadora de 19/11/2026).
 
             if (action === 'create') {
                 const chatId = args.chat_id || this.currentChatId;
