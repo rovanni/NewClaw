@@ -26,6 +26,77 @@ export interface ScheduledTask {
     created_at: string;
 }
 
+// ── Expressão cron de cinco campos (minuto hora dia-do-mês mês dia-da-semana) ──────────────────────────────────────────
+// S489 (18/11/2026): antes, a expressão pronta nunca era aceita e só minuto e hora eram lidos — "0 9 * * 1" disparava
+// todo dia. Aceita `*`, número, intervalo `a-b`, passo `/n` e listas com vírgula; nomes (MON, JAN) não. Dia da semana
+// vai de 0 a 7 (0 e 7 = domingo). Quando dia do mês E dia da semana estão restritos, basta um casar (regra do cron).
+
+const CAMPOS_DO_CRON: ReadonlyArray<{ min: number; max: number }> = [
+    { min: 0, max: 59 }, { min: 0, max: 23 }, { min: 1, max: 31 }, { min: 1, max: 12 }, { min: 0, max: 7 },
+];
+
+/** Valores que um campo aceita, ou `null` se o campo não é válido. */
+function valoresDoCampo(campo: string, { min, max }: { min: number; max: number }): Set<number> | null {
+    const valores = new Set<number>();
+    for (const item of campo.split(',')) {
+        const m = /^(\*|\d+(?:-\d+)?)(?:\/(\d+))?$/.exec(item);
+        if (!m) return null;
+        let inicio = min;
+        let fim = max;
+        if (m[1] !== '*') {
+            const [a, b] = m[1].split('-').map(Number);
+            inicio = a;
+            fim = b ?? (m[2] ? max : a);
+        }
+        const passo = m[2] ? Number(m[2]) : 1;
+        if (inicio < min || fim > max || inicio > fim || passo < 1) return null;
+        for (let v = inicio; v <= fim; v += passo) valores.add(v);
+    }
+    return valores;
+}
+
+interface CronLido { minutos: Set<number>; horas: Set<number>; dias: Set<number>; meses: Set<number>; semana: Set<number>; diaRestrito: boolean; semanaRestrita: boolean }
+
+function lerCron(cronExpr: string): CronLido | null {
+    const partes = cronExpr.trim().split(/\s+/);
+    if (partes.length !== 5) return null;
+    const lidos = partes.map((p, i) => valoresDoCampo(p, CAMPOS_DO_CRON[i]));
+    if (lidos.some(v => v === null)) return null;
+    const [minutos, horas, dias, meses, semana] = lidos as Set<number>[];
+    if (semana.has(7)) semana.add(0);
+    return { minutos, horas, dias, meses, semana, diaRestrito: !partes[2].startsWith('*'), semanaRestrita: !partes[4].startsWith('*') };
+}
+
+/**
+ * Próximo instante (hora local da máquina, segundos zerados) estritamente depois de `depoisDe` em que a expressão casa.
+ * `null` se a expressão é inválida ou não casa nos próximos 5 anos (ex.: 31 de fevereiro).
+ */
+export function proximoDisparo(cronExpr: string, depoisDe: Date): Date | null {
+    const c = lerCron(cronExpr);
+    if (!c) return null;
+    const d = new Date(depoisDe.getTime());
+    d.setSeconds(0, 0);
+    d.setMinutes(d.getMinutes() + 1);
+    const limite = new Date(depoisDe.getTime());
+    limite.setFullYear(limite.getFullYear() + 5);
+    while (d <= limite) {
+        if (!c.meses.has(d.getMonth() + 1)) { d.setMonth(d.getMonth() + 1, 1); d.setHours(0, 0, 0, 0); continue; }
+        const casaDia = c.dias.has(d.getDate());
+        const casaSemana = c.semana.has(d.getDay());
+        const diaCasa = c.diaRestrito && c.semanaRestrita ? (casaDia || casaSemana) : (casaDia && casaSemana);
+        if (!diaCasa) { d.setDate(d.getDate() + 1); d.setHours(0, 0, 0, 0); continue; }
+        if (!c.horas.has(d.getHours())) { d.setHours(d.getHours() + 1, 0, 0, 0); continue; }
+        if (!c.minutos.has(d.getMinutes())) { d.setMinutes(d.getMinutes() + 1, 0, 0); continue; }
+        return d;
+    }
+    return null;
+}
+
+const NOMES_DA_SEMANA = ['domingos', 'segundas', 'terças', 'quartas', 'quintas', 'sextas', 'sábados'];
+
+/** Teto de um único `setTimeout`: ao chegar nele, o timer recalcula o próximo disparo (não dispara). */
+const TETO_DO_TIMER_MS = 24 * 60 * 60 * 1000;
+
 export class SchedulerService {
     private db: Database.Database;
     private timers: Map<number, ReturnType<typeof setTimeout>> = new Map();
@@ -68,46 +139,35 @@ export class SchedulerService {
         this.onTrigger = handler;
     }
 
-    /** Parse simple time expressions like "8h, 12h, 18h" or "8:30" into cron */
-    parseTimeInput(input: string): string {
-        // Already a cron expression (5 parts)
-        if (input.trim().split(/\s+/).length === 5 && /^[\d*/,-]+$/.test(input.trim())) {
-            return input.trim();
+    /**
+     * Converte o horário pedido em expressão cron, ou devolve `''` quando não é um formato aceito.
+     * Aceita: (1) expressão cron válida de cinco campos, gravada como veio; (2) lista só de horários, todo dia
+     * ("8h, 12h, 18h", "8:30", "8h30", "7:30 e 19:30"), com o mesmo minuto em todos. Qualquer outra palavra recusa a
+     * entrada inteira: antes ela era ignorada ("toda segunda 9h" virava todo dia às 9h, S489). Minutos diferentes
+     * também recusam, porque uma expressão só não os representa sem criar horários que ninguém pediu.
+     */
+    parseTimeInput(entrada: string | number): string {
+        // Revisão (18/11/2026): o modelo pode mandar `time: 9` (número); vira texto em vez de lançar TypeError.
+        const input = String(entrada ?? '');
+        const campos = input.trim().split(/\s+/);
+        if (campos.length === 5 && lerCron(campos.join(' '))) return campos.join(' ');
+
+        const itens = input.replace(/\b(e|and)\b/gi, ',').split(/[\s,;]+/).filter(Boolean);
+        if (itens.length === 0) return '';
+        const horas: number[] = [];
+        const minutos = new Set<number>();
+        for (const item of itens) {
+            const m = /^(\d{1,2})(?:[:h](\d{2}))?h?$/i.exec(item);
+            if (!m) return '';
+            const hora = Number(m[1]);
+            const minuto = m[2] ? Number(m[2]) : 0;
+            if (hora > 23 || minuto > 59) return '';
+            horas.push(hora);
+            minutos.add(minuto);
         }
-
-        // Parse patterns like "8h, 12h, 18h" or "8:00 12:00 18:00" or "8 12 18"
-        const times: number[] = [];
-        const hourMinPattern = /(\d{1,2})(?::(\d{2}))?\s*h?/gi;
-        let match;
-        while ((match = hourMinPattern.exec(input)) !== null) {
-            const hour = parseInt(match[1]);
-            const minute = match[2] ? parseInt(match[2]) : 0;
-            // Store as minutes since midnight for sorting
-            times.push(hour * 60 + minute);
-        }
-
-        if (times.length === 0) return '';
-
-        times.sort((a, b) => a - b);
-
-        // Group by minute, collect hours
-        const byMinute: Map<number, number[]> = new Map();
-        for (const t of times) {
-            const h = Math.floor(t / 60);
-            const m = t % 60;
-            if (!byMinute.has(m)) byMinute.set(m, []);
-            byMinute.get(m)!.push(h);
-        }
-
-        // Build cron expression: minute hour * * *
-        if (byMinute.size === 1) {
-            const [minute, hours] = [...byMinute.entries()][0];
-            return `${minute} ${hours.join(',')} * * *`;
-        }
-
-        // Multiple different minutes — return first one for simplicity (most common case is same minute)
-        const [minute, hours] = [...byMinute.entries()][0];
-        return `${minute} ${hours.join(',')} * * *`;
+        if (minutos.size !== 1) return '';
+        const unicas = [...new Set(horas)].sort((a, b) => a - b);
+        return `${[...minutos][0]} ${unicas.join(',')} * * *`;
     }
 
     /** Map action keywords to action_type + params */
@@ -137,6 +197,9 @@ export class SchedulerService {
 
     /** Create a new scheduled task */
     createTask(chatId: string, label: string, cronExpr: string, actionType: string, actionParams: string, channel: string = 'telegram'): ScheduledTask {
+        if (!proximoDisparo(cronExpr, new Date())) {
+            throw new Error(`expressão cron "${cronExpr}" inválida ou sem data futura nos próximos 5 anos`);
+        }
         const info = this.db.prepare(
             'INSERT INTO scheduled_tasks (chat_id, channel, label, cron_expr, action_type, action_params) VALUES (?, ?, ?, ?, ?, ?)'
         ).run(chatId, channel, label, cronExpr, actionType, actionParams);
@@ -164,6 +227,12 @@ export class SchedulerService {
     }
 
     toggleTask(id: number, active: boolean): ScheduledTask | undefined {
+        // Revisão (18/11/2026): ativar uma tarefa que nunca vai disparar (cron inválido gravado pelo código antigo) não
+        // pode responder "ativado" — recusa, dizendo qual expressão.
+        const atual = this.getTask(id);
+        if (active && atual && !proximoDisparo(atual.cron_expr, new Date())) {
+            throw new Error(`a tarefa #${id} tem a expressão cron "${atual.cron_expr}", inválida ou sem data futura nos próximos 5 anos; recrie-a com um horário válido`);
+        }
         this.db.prepare('UPDATE scheduled_tasks SET active = ? WHERE id = ?').run(active ? 1 : 0, id);
         if (active) {
             const task = this.getTask(id);
@@ -192,47 +261,42 @@ export class SchedulerService {
         log.info('[Scheduler] All timers stopped');
     }
 
-    /** Calculate milliseconds until next cron tick (simplified) */
-    private msUntilNext(cronExpr: string): number {
-        const parts = cronExpr.trim().split(/\s+/);
-        if (parts.length !== 5) return 60000; // default 1 min
-
-        const [, hourPart, , ,] = parts;
-        const minute = parseInt(parts[0]) || 0;
-        const hours = hourPart.split(',').map(h => parseInt(h.trim())).filter(h => !isNaN(h));
-
-        if (hours.length === 0) return 60000;
-
-        const now = new Date();
-        const currentMinutes = now.getHours() * 60 + now.getMinutes();
-
-        // Find next occurrence today or tomorrow
-        let nextMinutes: number | null = null;
-        for (const h of hours.sort((a, b) => a - b)) {
-            const targetMin = h * 60 + minute;
-            if (targetMin > currentMinutes) {
-                nextMinutes = targetMin;
-                break;
-            }
-        }
-
-        if (nextMinutes === null) {
-            // Next is first hour tomorrow
-            nextMinutes = hours.sort((a, b) => a - b)[0] * 60 + minute + 24 * 60;
-        }
-
-        const diffMinutes = nextMinutes - currentMinutes;
-        return diffMinutes * 60 * 1000;
+    /**
+     * Milissegundos até o próximo disparo depois de `depoisDe` (padrão: agora), ou `null` se a expressão é inválida ou não
+     * tem data futura. Nunca negativo: base é o maior entre agora e `depoisDe`.
+     */
+    private msUntilNext(cronExpr: string, depoisDe?: Date): number | null {
+        const agora = new Date();
+        const base = depoisDe && depoisDe.getTime() > agora.getTime() ? depoisDe : agora;
+        const proximo = proximoDisparo(cronExpr, base);
+        return proximo ? proximo.getTime() - agora.getTime() : null;
     }
 
-    private startTaskTimer(task: ScheduledTask): void {
+    /**
+     * `jaDisparouEm`: o minuto em que a tarefa acabou de disparar. O próximo é calculado depois DELE, não de agora:
+     * revisão de 18/11/2026 — o setTimeout conta pelo relógio monotônico e o Date pelo de parede; se ele acordasse alguns
+     * ms antes do minuto pelo Date, o recálculo acharia o mesmo minuto e a tarefa dispararia duas vezes.
+     */
+    private startTaskTimer(task: ScheduledTask, jaDisparouEm?: Date): void {
         this.stopTaskTimer(task.id);
 
         const scheduleNext = () => {
-            const ms = this.msUntilNext(task.cron_expr);
-            // Cap at 24h to re-evaluate
-            const timerMs = Math.min(ms, 24 * 60 * 60 * 1000);
+            const ms = this.msUntilNext(task.cron_expr, jaDisparouEm);
+            if (ms === null) {
+                log.error(`[Scheduler] Tarefa #${task.id} não agendada: expressão cron "${task.cron_expr}" inválida ou sem data futura nos próximos 5 anos`);
+                return;
+            }
+            if (ms > TETO_DO_TIMER_MS) {
+                // Teto de um setTimeout: ao chegar nele, só recalcula. Antes disparava a tarefa (S489).
+                const espera = setTimeout(() => {
+                    const atual = this.getTask(task.id);
+                    if (atual && atual.active) this.startTaskTimer(atual, jaDisparouEm);
+                }, TETO_DO_TIMER_MS);
+                this.timers.set(task.id, espera);
+                return;
+            }
 
+            const alvo = new Date(Date.now() + ms);
             const timer = setTimeout(async () => {
                 if (!this.onTrigger) return;
 
@@ -246,9 +310,9 @@ export class SchedulerService {
                 // Schedule next occurrence
                 const updated = this.getTask(task.id);
                 if (updated && updated.active) {
-                    this.startTaskTimer(updated);
+                    this.startTaskTimer(updated, alvo);
                 }
-            }, timerMs);
+            }, ms);
 
             this.timers.set(task.id, timer);
         };
@@ -264,17 +328,24 @@ export class SchedulerService {
         }
     }
 
-    /** Get human-readable description of cron expression */
+    /**
+     * Descrição em texto: "8h, 12h todo dia", "9h às segundas". Quando a expressão não cabe nessa forma (passos,
+     * intervalos de hora, dia do mês, mês), devolve a própria expressão e o próximo disparo, sem traduzir pela metade.
+     */
     describeCron(cronExpr: string): string {
-        const parts = cronExpr.trim().split(/\s+/);
-        if (parts.length !== 5) return cronExpr;
-
-        const minute = parts[0];
-        const hours = parts[1].split(',').map(h => h.trim()).join('h, ') + 'h';
-
-        let dayDesc = 'todo dia';
-        if (parts[4] !== '*') dayDesc = 'dia ' + parts[4];
-
-        return `${hours} ${dayDesc}` + (minute !== '0' && minute !== '*' ? ` às ${minute}min` : '');
+        const c = lerCron(cronExpr);
+        if (!c) return `cron "${cronExpr}" (inválida)`;
+        const [min, hora, dia, mes, semana] = cronExpr.trim().split(/\s+/);
+        const simples = /^\d+$/.test(min) && /^\d+(,\d+)*$/.test(hora) && dia === '*' && mes === '*' && /^(\*|[0-7](,[0-7])*)$/.test(semana);
+        if (!simples) {
+            const proximo = proximoDisparo(cronExpr, new Date());
+            const quando = proximo ? proximo.toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : 'nenhum nos próximos 5 anos';
+            return `cron "${cronExpr}" (próximo: ${quando})`;
+        }
+        const m = Number(min);
+        const horas = [...c.horas].sort((a, b) => a - b).map(h => m === 0 ? `${h}h` : `${h}h${String(m).padStart(2, '0')}`).join(', ');
+        if (semana === '*') return `${horas} todo dia`;
+        const dias = [...c.semana].filter(d => d !== 7).sort((a, b) => a - b).map(d => NOMES_DA_SEMANA[d]);
+        return `${horas} às ${dias.join(', ')}`;
     }
 }
