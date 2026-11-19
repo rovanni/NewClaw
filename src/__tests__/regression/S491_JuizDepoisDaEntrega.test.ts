@@ -125,6 +125,26 @@ async function main(): Promise<void> {
         assert(m2.enviados.length === 1 && m2.enviados[0].texto === T.naoConferida, 'veredito que chega depois da interrupção não é entregue fora de contexto', m2.enviados);
     }
 
+    console.log('\nD3 na chegada da mensagem (etapa 4, 19/11/2026: o run() só começava 28 s depois)');
+    {
+        const loop = Object.create(AgentLoop.prototype) as any;
+        loop.activeTurns = new Map();
+        const a = new AbortController(); const b = new AbortController();
+        loop.validacoesPorConversa = new Map([['conv', [a]], ['outra', [b]]]);
+        loop.interromperValidacoesDaConversa('conv');
+        assert(a.signal.aborted && !b.signal.aborted, 'interrompe só a conversa do pedido novo');
+        const c = new AbortController();
+        loop.validacoesPorConversa.set('conv', [c]);
+        loop.activeTurns.set('conv', {});
+        loop.interromperValidacoesDaConversa('conv');
+        assert(!c.signal.aborted, 'com turno ativo na conversa, não interrompe (S224)');
+        const bus = fs.readFileSync(path.join(process.cwd(), 'src', 'channels', 'MessageBus.ts'), 'utf-8');
+        const iRecebida = bus.indexOf("log.info('message_received'");
+        const iInterrompe = bus.indexOf('this.agentLoop?.interromperValidacoesDaConversa?.(msg.userId)');
+        const iOrquestrador = bus.indexOf('await this.goalOrchestrator.process(');
+        assert(iRecebida > -1 && iInterrompe > iRecebida && iOrquestrador > iInterrompe, 'MessageBus interrompe logo que a mensagem chega, antes do classificador de objetivo');
+    }
+
     console.log('\nNo AgentLoop: o desvio vem antes do julgamento síncrono e só para a conversa direta');
     {
         const fonte = fs.readFileSync(path.join(process.cwd(), 'src', 'loop', 'AgentLoop.ts'), 'utf-8');

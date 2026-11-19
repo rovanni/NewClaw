@@ -389,6 +389,9 @@ export class MessageBus {
             type: msg.type,
             correlationId
         });
+        // ADR-042 (D3): o pedido novo interrompe já na chegada a conferência em segundo plano da resposta anterior — antes só
+        // no começo do run(), depois do classificador de objetivo e do roteador. ?.: objetos parciais de teste.
+        this.agentLoop?.interromperValidacoesDaConversa?.(msg.userId);
 
         // Chave da fila: por canal + usuário — preserva independência entre usuários
         const queueId = composeSessionKey({ channel: msg.channel, userId: msg.userId });

@@ -1585,6 +1585,21 @@ export class AgentLoop {
         }
     }
 
+    /**
+     * ADR-027 + ADR-042 (D3): interrompe as validações em segundo plano da conversa (inclusive o juiz depois da entrega). Só sem
+     * turno ativo nela: um pedido que chega com um turno rodando não apaga as validações desse turno (S224). Chamado no
+     * começo do `run()` e, desde 19/11/2026, pelo `MessageBus` quando a mensagem do usuário CHEGA — na etapa 4, o `run()` só
+     * começava 28 s depois (classificador de objetivo + roteador), e o juiz da resposta anterior terminava e disputava o
+     * modelo com o pedido novo nesse intervalo.
+     */
+    public interromperValidacoesDaConversa(conversationId: string): void {
+        if (this.activeTurns.has(conversationId)) return;
+        const pendentes = this.validacoesPorConversa?.get(conversationId);
+        if (!pendentes || pendentes.length === 0) return;
+        for (const anterior of pendentes) anterior.abort();
+        pendentes.length = 0;
+    }
+
     public async process(conversationId: string, userText: string, _userId?: string, context?: ChannelContext, options?: { onStatus?: (event: SemanticStatusEvent) => void }): Promise<string | ProcessedResult> {
         return this.run(conversationId, userText, conversationId, context, options);
     }
@@ -1614,11 +1629,9 @@ export class AgentLoop {
         // pedido do usuário os interrompe de uma vez. E só sem turno ativo na conversa: uma chamada que será rejeitada como
         // concorrente (S224: Scheduler durante um passo) não pode apagar as validações do turno legítimo.
         // ?.: objetos parciais de teste (S101, S229) chamam run() sem o mapa — o mesmo cuidado de ferramentasDoTurno.
+        // Pelo protótipo: testes (S447, S448) chamam run() sobre objetos parciais que só têm os campos.
+        if (!context?.goalTrace) AgentLoop.prototype.interromperValidacoesDaConversa.call(this, conversationId);
         const pendentes = this.validacoesPorConversa?.get(conversationId) ?? [];
-        if (!context?.goalTrace && !this.activeTurns.has(conversationId)) {
-            for (const anterior of pendentes) anterior.abort();
-            pendentes.length = 0;
-        }
         const validacoesEmSegundoPlano = new AbortController();
         pendentes.push(validacoesEmSegundoPlano);
         this.validacoesPorConversa?.set(conversationId, pendentes);
