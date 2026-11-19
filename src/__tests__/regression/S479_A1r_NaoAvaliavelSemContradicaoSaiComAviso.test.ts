@@ -159,6 +159,7 @@ async function main(): Promise<void> {
             const bloco = fonte.slice(iA1r, iFimA1r + 80);
             assert(/comAvisoNaoConfirmado\(response, naoConfirmadas\)/.test(bloco) && /resposta_entregue_com_aviso_nao_confirmada/.test(bloco) && /tentouParcial: false/.test(bloco), 'entrega com o aviso e registra o efeito (tentouParcial: false) no gravador de voo');
             assert(!/validateGrounding\(|trySynthesizePartialResponse\(/.test(bloco), 'nenhuma chamada nova no ramo (nem juiz nem síntese)');
+            assert(/path: 'delivered_with_notice'/.test(bloco), 'grava a linha [GROUNDING-TRACE] de decisão (a medição conta este caminho)');
         }
 
         console.log('\n=== S479-7 — o aviso nos três idiomas ===');

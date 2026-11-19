@@ -1328,6 +1328,8 @@ export class AgentLoop {
                         const naoConfirmadas = g.claims.filter(c => c.verdict === 'NOT_EVALUABLE').map(c => c.claim);
                         efeitoDoJuiz('resposta_entregue_com_aviso_nao_confirmada', { estado: g.state, sustentadas: supportedClaims.length, total: g.claims.length, naoConfirmadas: naoConfirmadas.length, tentouParcial: false });
                         log.warn(`[${this.ts()}] [GROUNDING] NOT_EVALUABLE sem contradição apontada — entregando COM AVISO, sem parcial (${naoConfirmadas.length} ponto(s) não confirmado(s))`);
+                        // A mesma linha de decisão dos outros caminhos: sem ela, a medição do juiz (03–16/11) não contava este.
+                        log.info(`[GROUNDING-TRACE] ${JSON.stringify({ v: 1, phase: 'decision', traceId: trace.id, conversationId, ...channelContext?.goalTrace, state: g.state, claimsTotal: g.claims.length, supported: supportedClaims.length, path: 'delivered_with_notice', unconfirmed: naoConfirmadas.length, evidenceSources: { turn: evidences.length - (channelContext?.priorStepEvidence?.length ?? 0), priorSteps: channelContext?.priorStepEvidence?.length ?? 0 } })}`);
                         return AgentLoop.comAvisoNaoConfirmado(response, naoConfirmadas);
                     }
 
