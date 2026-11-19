@@ -1,5 +1,7 @@
 # ADR-030 — Interface de voz opcional (harness) sobre o NewClaw, com Pipecat como ouvido e boca
 
+> **Decisão da operadora (19/11/2026): a voz não vai para a produção Linux (VPS).** A Etapa 5 fica encerrada para aquela instalação. Medido: a máquina tem 4 núcleos (Xeon E5-2670 v3), nenhuma GPU, 6,1 GB de RAM disponível e 30 GB de disco livre; a transcrição na CPU seria bem mais lenta que na produção com GPU (não medido); e a janela escuta em 127.0.0.1, enquanto o navegador só libera o microfone em HTTPS ou localhost. O instalador genérico continua valendo para qualquer instalação que queira a voz.
+
 Data: 28/10/2026. Status: **Etapa 0 concluída** (provas e auditoria, nada no produto). **Decisões aprovadas em
 29/10/2026** (seção "Decisões da operadora"); **Etapa 1 feita** só no núcleo — o contrato público do turno
 (`docs/CONTRATO_DO_TURNO.md`); **Etapas 2 a 4 feitas** no repositório do harness (newclaw-ivox), fora do núcleo; **Etapa 5 quase feita** (ativação pelo
