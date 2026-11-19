@@ -142,7 +142,7 @@ async function main(): Promise<void> {
         let erro = '';
         try { s5.toggleTask(1, true); } catch (e) { erro = String(e); }
         assert(/0 8,30 \* \* \*/.test(erro), 'ativar tarefa com cron inválido é recusado e diz a expressão', erro);
-        assert(s5.getTask(1)?.active === 0, 'e a tarefa continua desativada', s5.getTask(1)?.active);
+        assert(Number(s5.getTask(1)?.active) === 0, 'e a tarefa continua desativada', s5.getTask(1)?.active);   // o SQLite devolve 0/1
         db4.close();
 
         // Disparo duplo: depois de disparar, o próximo é calculado depois do minuto que disparou, não de agora.
