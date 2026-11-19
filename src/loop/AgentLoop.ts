@@ -1005,6 +1005,74 @@ export class AgentLoop {
         'es-ES': { titulo: '⚠️ No encontré confirmación en los datos obtenidos para estos puntos — verifícalos antes de usarlos:', mais: n => `…y ${n} más` },
     };
 
+    /**
+     * ADR-042 (A3, decisões da operadora de 19/11/2026): na conversa direta, a resposta sai antes do juiz contra a evidência,
+     * com a `marca`; o que o juiz achar chega numa 2ª mensagem. Nenhum canal edita mensagem já enviada.
+     */
+    static readonly TEXTOS_DO_JUIZ_DEPOIS: Record<string, { marca: string; naoConferida: string; semVeredito: string; correcao: string; fonte: string }> = {
+        'pt-BR': {
+            marca: '🔎 Conferindo esta resposta com os dados obtidos; aviso aqui se encontrar algum erro.',
+            naoConferida: '⚠️ A resposta anterior ficou sem conferência: o novo pedido interrompeu a verificação.',
+            semVeredito: '⚠️ Não consegui conferir a resposta anterior contra os dados obtidos — confirme os detalhes importantes antes de usar.',
+            correcao: '⚠️ Conferi a resposta anterior, e estes pontos não batem com os dados obtidos:',
+            fonte: 'fonte',
+        },
+        'en-US': {
+            marca: '🔎 Checking this answer against the retrieved data; I will post here if I find an error.',
+            naoConferida: '⚠️ The previous answer was not checked: the new request interrupted the verification.',
+            semVeredito: '⚠️ I could not check the previous answer against the retrieved data — confirm the important details before relying on it.',
+            correcao: '⚠️ I checked the previous answer, and these points do not match the retrieved data:',
+            fonte: 'source',
+        },
+        'es-ES': {
+            marca: '🔎 Verificando esta respuesta con los datos obtenidos; aviso aquí si encuentro algún error.',
+            naoConferida: '⚠️ La respuesta anterior quedó sin verificar: el nuevo pedido interrumpió la verificación.',
+            semVeredito: '⚠️ No pude verificar la respuesta anterior con los datos obtenidos — confirma los detalles importantes antes de usarla.',
+            correcao: '⚠️ Verifiqué la respuesta anterior, y estos puntos no coinciden con los datos obtenidos:',
+            fonte: 'fuente',
+        },
+    };
+
+    private static textosDoJuizDepois(idioma: string = process.env.APP_LANG || 'pt-BR') {
+        return AgentLoop.TEXTOS_DO_JUIZ_DEPOIS[idioma] ?? AgentLoop.TEXTOS_DO_JUIZ_DEPOIS['pt-BR'];
+    }
+
+    /**
+     * ADR-042 (code-review de 19/11/2026): a resposta como vai para o HISTÓRICO, sem a marca. Com a marca gravada, o modelo a
+     * via nas próprias respostas anteriores e podia passar a escrevê-la sozinho (em objetivo, sem juiz nenhum depois).
+     * Retirada exata das marcas que o próprio núcleo escreve, nos três idiomas — não interpreta texto.
+     */
+    static semMarcaConferindo(texto: string): string {
+        for (const t of Object.values(AgentLoop.TEXTOS_DO_JUIZ_DEPOIS)) {
+            const sufixo = `\n\n${t.marca}`;
+            if (texto.endsWith(sufixo)) return texto.slice(0, -sufixo.length);
+        }
+        return texto;
+    }
+
+    /** ADR-042: a resposta que sai na hora, com a marca de que a conferência está em curso. */
+    static comMarcaConferindo(resposta: string, idioma?: string): string {
+        return `${resposta.trimEnd()}\n\n${AgentLoop.textosDoJuizDepois(idioma).marca}`;
+    }
+
+    /** ADR-042, D2: a correção posterior — os pontos que não conferem e, quando o juiz citou, o trecho da fonte. Sem chamada nova. */
+    static correcaoDepoisDaEntrega(pontos: ReadonlyArray<{ claim: string; trecho?: string }>, idioma?: string): string {
+        const t = AgentLoop.textosDoJuizDepois(idioma);
+        const MOSTRAR = 8;
+        const linhas = pontos.slice(0, MOSTRAR).map(p => `• ${p.claim.slice(0, 200)}${p.trecho ? `\n  ${t.fonte}: "${p.trecho.slice(0, 240)}"` : ''}`);
+        if (pontos.length > MOSTRAR) linhas.push(`• …+${pontos.length - MOSTRAR}`);
+        return `${t.correcao}\n${linhas.join('\n')}`;
+    }
+
+    /**
+     * ADR-042: o juiz roda depois da entrega? Só na conversa direta (o objetivo usa o veredito para replanejar), com canal e
+     * conversa conhecidos (sem para onde mandar a correção, ele continua na frente) e sem `JUIZ_DEPOIS_DA_ENTREGA=desligado`.
+     */
+    static juizDepoisDaEntrega(ctx: { goalTrace?: unknown; channel?: string; chatId?: string } | undefined, temAviso: boolean): boolean {
+        if ((process.env.JUIZ_DEPOIS_DA_ENTREGA ?? '').trim().toLowerCase() === 'desligado') return false;
+        return temAviso && !ctx?.goalTrace && !!ctx?.channel && !!ctx?.chatId;
+    }
+
     static comAvisoNaoConfirmado(resposta: string, naoConfirmadas: readonly string[], idioma: string = process.env.APP_LANG || 'pt-BR'): string {
         const t = AgentLoop.AVISO_NAO_CONFIRMADO[idioma] ?? AgentLoop.AVISO_NAO_CONFIRMADO['pt-BR'];
         const MOSTRAR = 8;
@@ -1275,6 +1343,14 @@ export class AgentLoop {
             // independentemente, e o juiz recebe uma lista só, sem rótulos duplicados.
             const evidences = [...AgentLoop.evidencesFromTrace(trace), ...(channelContext?.priorStepEvidence ?? [])]
                 .map((e, i) => ({ ...e, id: `E${i + 1}` }));
+            if (AgentLoop.juizDepoisDaEntrega(channelContext, !!this.avisarUsuario)) {
+                // ADR-042 (A3): a resposta sai agora, com a marca; o mesmo julgamento roda em segundo plano, preso ao sinal da
+                // conversa (ADR-027: o próximo pedido dela o interrompe — D3), e o desfecho vira uma 2ª mensagem (D1/D2).
+                const sinal = this.getTurnState(conversationId).validacoesEmSegundoPlano?.signal;
+                void this.julgarDepoisDaEntrega({ response, evidences, userText, conversationId, traceId: trace.id, channelContext: channelContext!, last, sinal });
+                log.info(`[${this.ts()}] [GROUNDING] A3: resposta entregue antes do juiz (conversa direta); o veredito sai depois`);
+                return AgentLoop.comMarcaConferindo(response);
+            }
             try {
                 const g = await this.observer.validateGrounding(response, evidences, signal, { traceId: trace.id, conversationId, phase: 'initial', userRequest: userText, recentMessages: channelContext?.recentMessages, ...channelContext?.goalTrace });
                 // Gravador de voo (ADR-013): o que o turno fez com o veredito.
@@ -1522,6 +1598,21 @@ export class AgentLoop {
         }
     }
 
+    /**
+     * ADR-027 + ADR-042 (D3): interrompe as validações em segundo plano da conversa (inclusive o juiz depois da entrega). Só sem
+     * turno ativo nela: um pedido que chega com um turno rodando não apaga as validações desse turno (S224). Chamado no
+     * começo do `run()` e, desde 19/11/2026, pelo `MessageBus` quando a mensagem do usuário CHEGA — na etapa 4, o `run()` só
+     * começava 28 s depois (classificador de objetivo + roteador), e o juiz da resposta anterior terminava e disputava o
+     * modelo com o pedido novo nesse intervalo.
+     */
+    public interromperValidacoesDaConversa(conversationId: string): void {
+        if (this.activeTurns.has(conversationId)) return;
+        const pendentes = this.validacoesPorConversa?.get(conversationId);
+        if (!pendentes || pendentes.length === 0) return;
+        for (const anterior of pendentes) anterior.abort();
+        pendentes.length = 0;
+    }
+
     public async process(conversationId: string, userText: string, _userId?: string, context?: ChannelContext, options?: { onStatus?: (event: SemanticStatusEvent) => void }): Promise<string | ProcessedResult> {
         return this.run(conversationId, userText, conversationId, context, options);
     }
@@ -1551,11 +1642,9 @@ export class AgentLoop {
         // pedido do usuário os interrompe de uma vez. E só sem turno ativo na conversa: uma chamada que será rejeitada como
         // concorrente (S224: Scheduler durante um passo) não pode apagar as validações do turno legítimo.
         // ?.: objetos parciais de teste (S101, S229) chamam run() sem o mapa — o mesmo cuidado de ferramentasDoTurno.
+        // Pelo protótipo: testes (S447, S448) chamam run() sobre objetos parciais que só têm os campos.
+        if (!context?.goalTrace) AgentLoop.prototype.interromperValidacoesDaConversa.call(this, conversationId);
         const pendentes = this.validacoesPorConversa?.get(conversationId) ?? [];
-        if (!context?.goalTrace && !this.activeTurns.has(conversationId)) {
-            for (const anterior of pendentes) anterior.abort();
-            pendentes.length = 0;
-        }
         const validacoesEmSegundoPlano = new AbortController();
         pendentes.push(validacoesEmSegundoPlano);
         this.validacoesPorConversa?.set(conversationId, pendentes);
@@ -1622,9 +1711,83 @@ export class AgentLoop {
     private readonly validacoesPorConversa = new Map<string, AbortController[]>();
 
     /** Entrega uma mensagem ao usuário no canal/conversa do turno (ligado pelo AgentController ao MessageBus). */
-    private avisarUsuario?: (canal: string, chatId: string, texto: string) => Promise<void>;
-    setAvisoAoUsuario(avisar: (canal: string, chatId: string, texto: string) => Promise<void>): void {
+    /**
+     * `tipo`: 'progresso' (ADR-027, relato de andamento; o canal web mostra só o último enquanto o trabalho roda) ou
+     * 'entrega' (ADR-042, a 2ª mensagem do juiz depois da entrega: vai para a fila de entregas e para o histórico da conversa).
+     */
+    private avisarUsuario?: (canal: string, chatId: string, texto: string, tipo?: 'progresso' | 'entrega', userId?: string) => Promise<void>;
+    setAvisoAoUsuario(avisar: (canal: string, chatId: string, texto: string, tipo?: 'progresso' | 'entrega', userId?: string) => Promise<void>): void {
         this.avisarUsuario = avisar;
+    }
+
+    /**
+     * ADR-042 (A3): o julgamento contra a evidência de uma resposta JÁ entregue. Mesmo juiz, mesma evidência; muda o destino
+     * do veredito (decisões da operadora, 19/11/2026): aprovado → nada (D1); contradição → os pontos e o trecho da fonte, sem
+     * chamada nova (D2); "não avaliável" sem contradição → o aviso da A1-r; juiz que não concluiu → uma linha dizendo que não
+     * pôde conferir; pedido novo da conversa durante o julgamento → interrompe e diz que ficou "não conferida" (D3).
+     * Nunca lança: roda solto (`void`) depois que o turno já respondeu.
+     */
+    private async julgarDepoisDaEntrega(a: {
+        response: string; evidences: EvidenceItem[]; userText: string; conversationId: string; traceId: string;
+        channelContext: ChannelContext; last: TurnState['lastToolExecution']; sinal?: AbortSignal;
+    }): Promise<void> {
+        const canal = a.channelContext.channel!;
+        const chatId = a.channelContext.chatId!;
+        const t = AgentLoop.textosDoJuizDepois();
+        const contexto = { traceId: a.traceId, conversationId: a.conversationId, goalId: undefined, stepId: undefined };
+        const enviar = async (texto: string): Promise<void> => {
+            try { await this.avisarUsuario?.(canal, chatId, texto, 'entrega', a.channelContext.userId); }
+            catch (err) { log.warn(`[${this.ts()}] [GROUNDING] A3: falha ao enviar o aviso posterior (${errorMessage(err)})`); }
+        };
+        let g: Awaited<ReturnType<ObserverValidator['validateGrounding']>>;
+        try {
+            g = await this.observer.validateGrounding(a.response, a.evidences, a.sinal, { traceId: a.traceId, conversationId: a.conversationId, phase: 'initial', userRequest: a.userText, recentMessages: a.channelContext.recentMessages });
+        } catch (err) {
+            const interrompido = a.sinal?.aborted === true;
+            log.warn(`[${this.ts()}] [GROUNDING] A3: ${interrompido ? 'interrompido pelo pedido seguinte' : `falha no julgamento (${errorMessage(err)})`}`);
+            await enviar(interrompido ? t.naoConferida : t.semVeredito);
+            return;
+        }
+        const efeito = (nome: string, detalhe?: Record<string, unknown>): void => gravarEfeito({
+            avaliacaoId: g.avaliacaoId, avaliador: 'validacao_saida_contra_evidencia', efeito: nome, detalhe: { ...detalhe, depoisDaEntrega: true }, contexto,
+        });
+        const trace = (path: string, extra?: Record<string, unknown>): void => log.info(`[GROUNDING-TRACE] ${JSON.stringify({ v: 1, phase: 'decision', traceId: a.traceId, conversationId: a.conversationId, state: g.state, claimsTotal: g.claims.length, supported: g.claims.filter(c => c.verdict === 'SUPPORTED').length, path, depoisDaEntrega: true, ...extra })}`);
+
+        if (a.sinal?.aborted) {
+            // O veredito chegou, mas a conversa já seguiu (D3): o desfecho não é entregue fora de contexto.
+            efeito('juiz_depois_interrompido', { estado: g.state });
+            trace('after_delivery_interrupted');
+            await enviar(t.naoConferida);
+            return;
+        }
+        if (g.state === 'VALIDATED' || g.state === 'NOT_APPLICABLE') {
+            efeito('resposta_liberada', { estado: g.state });
+            trace('after_delivery_confirmed');
+            return;
+        }
+        if (g.state === 'UNVALIDATED') {
+            efeito('resposta_entregue_sem_veredito', { estado: g.state, motivo: (g.reason ?? '').slice(0, 120) });
+            trace('after_delivery_unvalidated');
+            await enviar(t.semVeredito);
+            return;
+        }
+        // Daqui em diante o juiz concluiu e não aprovou: a mesma gravação de falha do caminho síncrono (S453 exclui UNVALIDATED).
+        if (a.last) this.reflectionMemory.record({
+            traceId: a.traceId, conversationId: a.conversationId, userInput: a.userText, intent: a.last.intent, toolUsed: a.last.toolName,
+            toolOutput: a.last.toolOutput.slice(0, 1000), finalResponse: a.response.slice(0, 500), approved: false, reason: g.reason,
+            confidence: 0, pattern: 'grounding_blocked', outcome: 'failure', category: a.last.category,
+        });
+        if (AgentLoop.liberavelComAviso(g)) {
+            const naoConfirmadas = g.claims.filter(c => c.verdict === 'NOT_EVALUABLE').map(c => c.claim);
+            efeito('resposta_entregue_com_aviso_nao_confirmada', { estado: g.state, naoConfirmadas: naoConfirmadas.length, tentouParcial: false });
+            trace('after_delivery_notice', { unconfirmed: naoConfirmadas.length });
+            await enviar(AgentLoop.comAvisoNaoConfirmado('', naoConfirmadas).trim());
+            return;
+        }
+        const pontos = g.claims.filter(c => c.verdict !== 'SUPPORTED').map(c => ({ claim: c.claim, ...(c.trecho ? { trecho: c.trecho } : {}) }));
+        efeito('correcao_enviada_depois_da_entrega', { estado: g.state, pontos: pontos.length });
+        trace('after_delivery_correction', { pontos: pontos.length });
+        await enviar(AgentLoop.correcaoDepoisDaEntrega(pontos.length > 0 ? pontos : [{ claim: g.reason ?? '' }]));
     }
 
     /**

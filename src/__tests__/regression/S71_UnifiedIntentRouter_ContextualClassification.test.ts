@@ -218,7 +218,9 @@ console.log('\n=== S71-10 [invariante] — role=assistant na transcript só exis
     assert(messageBusCalls.length === 3, `MessageBus.ts tem exatamente 3 call sites de recordAssistantMessage (encontrado: ${messageBusCalls.length}) — se esse número mudar, revisar manualmente se o novo call site também vem depois de uma entrega real`);
 
     const agentControllerCalls = [...agentControllerSrc.matchAll(/recordAssistantMessage\(/g)];
-    assert(agentControllerCalls.length === 2, `AgentController.ts tem exatamente 2 call sites de recordAssistantMessage (encontrado: ${agentControllerCalls.length})`);
+    // 3º call site (ADR-042, 19/11/2026, revisado): a 2ª mensagem do juiz depois da entrega, gravada logo depois de
+    // `await this.messageBus.sendToChat(...)` — entrega real, aceita na janela abaixo.
+    assert(agentControllerCalls.length === 3, `AgentController.ts tem exatamente 3 call sites de recordAssistantMessage (encontrado: ${agentControllerCalls.length})`);
 
     // Para cada ocorrência, verifica que "adapter.send(" aparece ANTES dela dentro de uma janela
     // curta de código (mesmo bloco de função) — prova estrutural de "send antes de record".
@@ -230,7 +232,7 @@ console.log('\n=== S71-10 [invariante] — role=assistant na transcript só exis
             const windowStart = Math.max(0, found - 1200);
             const window = src.slice(windowStart, found);
             assert(
-                /adapter\.send\(/.test(window) || /\.send\(\s*\{/.test(window),
+                /adapter\.send\(/.test(window) || /\.send\(\s*\{/.test(window) || /await this\.messageBus\.sendToChat\(/.test(window),
                 `recordAssistantMessage em offset ${found} é precedido por uma chamada de entrega (adapter.send) na janela de 1200 chars anterior`,
             );
             idx = found + 1;
