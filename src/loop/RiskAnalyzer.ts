@@ -135,6 +135,10 @@ export type ModoDaRevisaoDeRisco = 'desligado' | 'sombra' | 'aplicar';
 let modoDesconhecidoAvisado = '';
 export function modoDaRevisaoDeRisco(): ModoDaRevisaoDeRisco {
     const v = (process.env.RISK_REVIEW_LLM ?? '').trim().toLowerCase();
+    if (v === '' && process.env.RISK_REVIEW_SHADOW !== undefined && modoDesconhecidoAvisado !== '__antiga__') {
+        modoDesconhecidoAvisado = '__antiga__';
+        log.warn(`[RiskAnalyzer] RISK_REVIEW_SHADOW="${process.env.RISK_REVIEW_SHADOW}" não é mais lida (19/11/2026) — a revisão por LLM está desligada; para a sombra use RISK_REVIEW_LLM=sombra`);
+    }
     if (v === '' || v === 'desligado') return 'desligado';
     if (v === 'sombra' || v === 'aplicar') return v;
     if (modoDesconhecidoAvisado !== v) {
@@ -147,8 +151,7 @@ export function modoDaRevisaoDeRisco(): ModoDaRevisaoDeRisco {
 // ── Modo sombra da revisão por LLM (campanha S-D, issue 048) ─────────────────────────────────
 //
 // Opt-in EXPLÍCITO (`RISK_REVIEW_LLM=sombra`, lido a cada chamada, mesmo padrão de
-// `COGNITIVE_KERNEL_APPLY_DECISION` em CognitiveKernelGate.ts: observar sem aplicar). Desligado —
-// o padrão — `analyze()` é exatamente o que era. Ligado, o revisor roda em segundo plano sobre
+// `COGNITIVE_KERNEL_APPLY_DECISION` em CognitiveKernelGate.ts: observar sem aplicar). Em sombra, o revisor roda em segundo plano sobre
 // CÓPIAS do plano e do goal, e o que ele propõe NÃO chega ao plano real, aos `risks` nem ao
 // `planRejected`: só vira UMA linha `[RISK-SHADOW]`. O desfecho do plano real não ganha mecanismo
 // novo — correlaciona-se pelos logs que já existem (`[GoalStep] goal= step= outcome=`,
@@ -239,11 +242,6 @@ export class RiskAnalyzer {
 
     setModel(model: string): void {
         if (model) this.model = model;
-    }
-
-    /** Opt-in explícito da campanha S-D — desligado por padrão (ver "Modo sombra" acima). */
-    static shadowModeEnabled(): boolean {
-        return modoDaRevisaoDeRisco() === 'sombra';
     }
 
     /**

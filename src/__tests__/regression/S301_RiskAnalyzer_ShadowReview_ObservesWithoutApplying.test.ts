@@ -110,6 +110,7 @@ async function main(): Promise<void> {
         process.env.RISK_REVIEW_SHADOW = 'true';   // a variável antiga não religa nada
         const antigo = await captureLogs(async () => { const r = await semLLM.analyze(makeGoal('x'), realPlan(), []); await new Promise(res => setTimeout(res, 50)); return r; });
         assert(chamadas === 0 && shadowRecords(antigo.lines).length === 0, 'RISK_REVIEW_SHADOW=true sozinha não liga a sombra', chamadas);
+        assert(antigo.lines.map(strip).some(l => l.includes('RISK_REVIEW_SHADOW="true" não é mais lida')), 'e o log diz que a variável antiga não é mais lida');
         delete process.env.RISK_REVIEW_SHADOW;
         process.env.RISK_REVIEW_LLM = 'qualquer';
         const estranho = await captureLogs(() => semLLM.analyze(makeGoal('x'), realPlan(), []));
