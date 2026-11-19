@@ -68,7 +68,7 @@ async function main() {
         tool.setContext('chat-1', 'web');
         // Simula "acabou de enviar" mexendo no relógio interno do debounce.
         // S492: o intervalo é por conversa (canal:chatId).
-        (tool as unknown as { ultimoEnvioPorConversa: Map<string, number> }).ultimoEnvioPorConversa.set('web:chat-1', Date.now());
+        (tool as unknown as { ultimoEnvioPorConversa: Map<string, { texto: string; em: number }> }).ultimoEnvioPorConversa.set('web:chat-1', { texto: CONTEUDO, em: Date.now() });
 
         const result = await tool.execute({ text: CONTEUDO });
 

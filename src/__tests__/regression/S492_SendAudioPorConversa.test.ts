@@ -84,7 +84,22 @@ async function main(): Promise<void> {
         tool.setContext('conversa-A', 'telegram');
         const repetido = await tool.execute({ text: 'áudio conversa-A' });
         assert(repetido.success === true && enviados.filter(e => e.chatId === 'conversa-A').length === 1,
-            'o 2º áudio na MESMA conversa dentro de 10 s continua barrado (sem envio duplicado)', enviados);
+            'o MESMO áudio repetido na mesma conversa dentro de 10 s continua barrado (sem envio duplicado)', enviados);
+    }
+
+    console.log('\nOutro texto na mesma conversa não é duplicado (code-review de 19/11/2026)');
+    {
+        const { tool, enviados, liberar, pendentes } = montar();
+        tool.setContext('conversa-C', 'telegram');
+        for (const texto of ['passo 1: resumo', 'passo 2: conclusão']) {
+            const p = tool.execute({ text: texto });
+            const limite = Date.now() + 10_000;
+            while (pendentes.length === 0 && Date.now() < limite) await esperar(5);
+            liberar();
+            await p;
+        }
+        assert(enviados.filter(e => e.chatId === 'conversa-C').length === 2, 'dois áudios de textos diferentes na mesma conversa saem os dois', enviados);
+        assert((tool as any).ultimoEnvioPorConversa.size <= 2, 'o mapa do intervalo não acumula entradas vencidas', (tool as any).ultimoEnvioPorConversa.size);
     }
 
     console.log('\nUm áudio por turno também na conversa direta (decisão da operadora, 19/11/2026)');
