@@ -50,6 +50,35 @@ console.log('\nAs ferramentas reais');
     assert(/endpoint/.test(validateToolArgs(api, { endpoint: 'http://x' }) ?? ''), 'api_request: o apelido endpoint (não declarado) é recusado');
 }
 
+console.log('\nschedule: destino e dona da tarefa são a conversa do pedido (etapa 4, 19/11/2026: chat_id inventado pelo modelo)');
+(async () => {
+    const Database = require('better-sqlite3');
+    const { SchedulerService } = require('../../services/SchedulerService');
+    const { ScheduleTool } = require('../../tools/schedule_tool');
+    const svc = new SchedulerService(':memory:', new Database(':memory:'));
+    const tool = new ScheduleTool(svc);
+    assert(/chat_id/.test(validateToolArgs(tool, { action: 'create', time: '0 9 * * 1', chat_id: '-100643661514' }) ?? ''), 'chat_id vindo do modelo é recusado (saiu do esquema)');
+    tool.setContext('conversa-A', 'web');
+    const criada = await tool.execute({ action: 'create', label: 'semanal', time: '0 9 * * 1' });
+    const tarefaA = svc.listTasks('conversa-A')[0];
+    assert(criada.success && tarefaA?.chat_id === 'conversa-A', 'a tarefa nasce na conversa do pedido', tarefaA);
+    tool.setContext('conversa-B', 'web');
+    const lista = await tool.execute({ action: 'list' });
+    assert(!String(lista.output).includes('semanal'), 'outra conversa não lista a tarefa da A', lista.output);
+    const apagar = await tool.execute({ action: 'delete', task_id: tarefaA.id });
+    const desligar = await tool.execute({ action: 'toggle', task_id: tarefaA.id, active: false });
+    assert(!apagar.success && !desligar.success && svc.getTask(tarefaA.id)?.active, 'outra conversa não apaga nem desliga a tarefa da A', { apagar, desligar });
+    tool.setContext('', 'web');
+    const semConversa = await tool.execute({ action: 'create', label: 'x', time: '0 9 * * 1' });
+    assert(!semConversa.success && svc.listTasks().length === 1, 'sem conversa conhecida: nada é criado (não adivinha destino)', semConversa);
+    tool.setContext('conversa-A', 'web');
+    const apagarDona = await tool.execute({ action: 'delete', task_id: tarefaA.id });
+    assert(apagarDona.success && !svc.getTask(tarefaA.id), 'a dona apaga a própria tarefa');
+    svc.stopAll();
+    fim();
+})();
+
+function fim(): void {
 console.log('\nOs três despachos validam');
 {
     const ler = (p: string) => fs.readFileSync(path.join(process.cwd(), 'src', p), 'utf-8');
@@ -66,3 +95,4 @@ console.log('\nOs três despachos validam');
 
 console.log(`\n${passed} passaram, ${failed} falharam\n`);
 if (failed > 0) process.exit(1);
+}
