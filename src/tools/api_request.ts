@@ -18,7 +18,8 @@ export class ApiRequestTool implements ToolExecutor {
     async execute(args: Record<string, any>): Promise<ToolResult> {
         try {
             const method = args.method?.toUpperCase() || 'GET';
-            let url = args.url || args.endpoint || '';
+            // `endpoint` (apelido não declarado) saiu em 19/11/2026: campo fora do esquema é recusado antes (validateToolArgs).
+            let url = args.url || '';
             if (!url) return { success: false, output: '', error: 'URL não fornecida.' };
 
             // Trata chamadas em legado para o backend local se o modelo omitir o hostname

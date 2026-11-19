@@ -20,7 +20,6 @@ export class ScheduleTool implements ToolExecutor {
                 enum: ['create', 'list', 'delete', 'toggle'],
                 description: 'Ação: create (novo agendamento), list (listar), delete (remover), toggle (ativar/desativar)'
             },
-            chat_id: { type: 'string', description: 'ID do chat/destinatário (obrigatório para create)' },
             label: { type: 'string', description: 'Nome/descrição do agendamento (create)' },
             time: { type: 'string', description: 'Horários. Todo dia: lista só de horários com o mesmo minuto ("8h, 12h, 18h", "8:30", "7:30 e 19:30"). Dia da semana, dia do mês, mês ou intervalo: expressão cron de 5 campos, "minuto hora dia-do-mês mês dia-da-semana" (ex.: "0 9 * * 1" = segundas às 9h; "*/15 * * * *" = a cada 15 min; dia da semana 0 ou 7 = domingo).' },
             type_action: { type: 'string', description: 'Tipo: weather, crypto, custom (create)' },
@@ -48,21 +47,17 @@ export class ScheduleTool implements ToolExecutor {
         try {
             const action = args.action;
 
-            // S489 (18/11/2026, instância isolada com modelo real): o modelo mandou `frequency: "weekly"`, `day: "monday"` e
-            // `time: "09:00"`. Campos fora do esquema eram ignorados sem aviso, e a tarefa nascia diária. Campo desconhecido
-            // agora recusa a chamada inteira, dizendo quais e onde a informação cabe.
-            const aceitos = Object.keys(this.parameters.properties);
-            const desconhecidos = Object.keys(args ?? {}).filter(k => !aceitos.includes(k));
-            if (desconhecidos.length > 0) {
-                return {
-                    success: false, output: '',
-                    error: `Campos que esta ferramenta não tem: ${desconhecidos.join(', ')}. Nada foi feito. Campos aceitos: ${aceitos.join(', ')}. Dia da semana, dia do mês ou mês vão em "time" como expressão cron de 5 campos ("0 9 * * 1" = segundas às 9h); o nome do agendamento vai em "label".`,
-                };
-            }
+            // S489: campo fora do esquema (`frequency`, `day`) é recusado antes de chegar aqui, para todas as ferramentas
+            // (`validateToolArgs`, ToolRegistry.ts; decisão da operadora de 19/11/2026).
+
+            // Etapa 4 (19/11/2026): o modelo mandou `chat_id: "-100643661514"` (inventado) e a tarefa nasceu para esse destino.
+            // O destino e a dona da tarefa são SEMPRE a conversa do pedido (setContext); `chat_id` saiu do esquema e é recusado.
+            const chatId = this.currentChatId;
+            if (!chatId) return { success: false, error: 'A conversa deste pedido não é conhecida; nada foi feito.', output: '' };
+            /** Só tarefas desta conversa: outra conversa não lista, apaga nem liga/desliga o que não é dela. */
+            const daConversa = (id: number) => { const tarefa = this.scheduler.getTask(id); return tarefa && tarefa.chat_id === chatId ? tarefa : undefined; };
 
             if (action === 'create') {
-                const chatId = args.chat_id || this.currentChatId;
-                if (!chatId) return { success: false, error: 'chat_id é obrigatório.', output: '' };
                 if (!args.time) return { success: false, error: 'Informe os horários. Ex: "8h, 12h, 18h"', output: '' };
 
                 const cronExpr = this.scheduler.parseTimeInput(args.time);
@@ -95,7 +90,6 @@ export class ScheduleTool implements ToolExecutor {
             }
 
             if (action === 'list') {
-                const chatId = args.chat_id || this.currentChatId;
                 const tasks = this.scheduler.listTasks(chatId);
 
                 if (tasks.length === 0) {
@@ -115,8 +109,8 @@ export class ScheduleTool implements ToolExecutor {
             if (action === 'delete') {
                 if (!args.task_id) return { success: false, error: 'Informe o task_id para deletar.', output: '' };
                 // O nome é lido antes de apagar: depois, só a ferramenta saberia qual era (ADR-028).
-                const antes = this.scheduler.getTask(args.task_id);
-                const deleted = this.scheduler.deleteTask(args.task_id);
+                const antes = daConversa(args.task_id);
+                const deleted = antes ? this.scheduler.deleteTask(args.task_id) : false;
                 if (deleted) {
                     return {
                         success: true, output: `✅ Agendamento #${args.task_id} removido.`,
@@ -129,7 +123,7 @@ export class ScheduleTool implements ToolExecutor {
             if (action === 'toggle') {
                 if (!args.task_id) return { success: false, error: 'Informe o task_id e active (true/false).', output: '' };
                 const active = args.active !== false;
-                const task = this.scheduler.toggleTask(args.task_id, active);
+                const task = daConversa(args.task_id) ? this.scheduler.toggleTask(args.task_id, active) : undefined;
                 if (task) {
                     return {
                         success: true, output: `✅ Agendamento #${args.task_id} ${active ? 'ativado 🟢' : 'desativado 🔴'}.`,

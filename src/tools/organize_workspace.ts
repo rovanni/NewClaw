@@ -73,13 +73,8 @@ export class OrganizeWorkspaceTool implements ToolExecutor {
     async execute(args: Record<string, unknown>): Promise<ToolResult> {
         const workspaceDir = path.resolve(process.env.WORKSPACE_DIR ?? path.join(process.cwd(), 'workspace'));
 
-        // Aviso de compatibilidade para args legados
-        if (args.dry_run === true) {
-            log.warn(
-                `[WORKSPACE-ORGANIZE] dry_run=true foi passado mas é ignorado — organize_workspace` +
-                ` sempre executa. Use analyze_workspace_groups para preview sem modificações.`
-            );
-        }
+        // `dry_run` (não declarado, era só registrado e ignorado) é recusado antes desde 19/11/2026 (validateToolArgs): esta
+        // ferramenta não recebe campo nenhum. Para prévia sem mudanças, analyze_workspace_groups.
 
         if (!fs.existsSync(workspaceDir)) {
             return { success: false, output: '', error: 'Workspace não encontrado.' };

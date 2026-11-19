@@ -11,6 +11,7 @@
  */
 
 import { createLogger } from '../shared/AppLogger';
+import { validateToolArgs } from '../core/ToolRegistry';
 import type { ToolExecutor } from './AgentLoop';
 import {
     AuthDecision,
@@ -190,7 +191,12 @@ export class WorkflowEngine {
         }
 
         try {
-            const result = await tool.execute(txn.params as Record<string, any>);
+            // 19/11/2026: a ação aprovada passa pela mesma validação de esquema dos outros despachos (campo desconhecido
+            // recusa a chamada, em vez de ser ignorado sem aviso).
+            const erroDosArgumentos = validateToolArgs(tool as unknown as { parameters?: unknown }, txn.params as Record<string, unknown>);
+            const result = erroDosArgumentos
+                ? { success: false, output: '', error: erroDosArgumentos }
+                : await tool.execute(txn.params as Record<string, any>);
             const finalStatus = result.success ? 'completed' : 'failed';
             this.updateStatus(txnId, finalStatus);
             this.deleteTxn(txnId);
