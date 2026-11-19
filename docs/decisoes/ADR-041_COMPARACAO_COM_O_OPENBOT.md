@@ -198,8 +198,13 @@ modelo Bonsai 27B local em todos os papéis; pedidos pelo chat web):
 | "…cotação do bitcoin todo dia às 8:30 e às 12h" | com a recusa | Não chegou ao agendador: o plano `[schedule, schedule, read]` foi rejeitado por `response_contract_without_answer_step`; o replanejamento derivou para o Agendador de Tarefas do Windows por `exec_command`, que parou no gate da ADR-005 |
 
 Os dois desvios das linhas 1 e 3 (juiz de conclusão aprovando o que o passo anterior acusou; plano rejeitado por
-contrato de resposta) são do laço de objetivos e dos juízes, anteriores a esta correção, e ficam registrados para
-tratamento próprio.
+contrato de resposta) são do laço de objetivos e dos juízes, anteriores a esta correção. Foram corrigidos no mesmo
+dia, no mesmo ramo (`S490`): o juiz de conclusão passa a receber as tentativas rebaixadas pelo juiz do passo, com o
+veredito dele, e a descrição do passo só da mesma geração do plano; agendamentos e lembretes com data e hora passam a
+ser `system_operation` no roteador, fora do contrato de resposta. Na revisão, considerou-se marcar `schedule` em
+`DIRECT_DELIVERABLE_TOOLS` no lugar da mudança no roteador. Foi descartado: o recibo do agendamento seria entregue
+no lugar do conteúdo real (o defeito do incidente River). Risco que fica: `system_operation` descreve "executing
+commands" e pode puxar o plano para `exec_command`, que o gate da ADR-005 segura.
 
 Fica para o deploy: as tarefas já gravadas nas produções podem ter expressões deformadas pelo código antigo. As
 inválidas (ex.: `0 8,30 * * *`) deixam de disparar e aparecem no log; as válidas mas erradas (ex.: `0 0,1,9 * * *`

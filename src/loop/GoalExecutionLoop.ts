@@ -2075,7 +2075,10 @@ export class GoalExecutionLoop {
                 // result='success' — corrige para 'partial', alinhando com o que
                 // ReflectionMemory.record({outcome:'partial', ...}) já registrava acima
                 // para o mesmo evento.
-                this.goalStore.downgradeLastAttemptToPartial(goal.id, pendingStep.id);
+                this.goalStore.downgradeLastAttemptToPartial(goal.id, pendingStep.id, {
+                    motivo: semanticValidation.reason ?? 'o resultado não corresponde à intenção do passo',
+                    confianca: semanticValidation.confidence,
+                });
                 goal = this.goalStore.getById(goal.id)!;
                 // Retry só é útil quando o step NÃO tem toolName fixo (caminho 'agentloop'):
                 // nesse caso o próximo ciclo chama o LLM de novo com a description enriquecida
@@ -3490,25 +3493,41 @@ export class GoalExecutionLoop {
      * os recebia assim, sem aviso. Aqui: a saída completa desta execução quando existe (`saidasCompletas`), dividida pela mesma
      * regra do resto do sistema (`limiteComum`), e QUALQUER corte declarado no texto — o do orçamento e o do registro
      * (Informação Completa para Decidir: nunca cortar em silêncio).
+     *
+     * 18/11/2026 (goal_1795025275187_fhknb, "toda segunda-feira às 9h"): entram também as tentativas que o juiz do passo
+     * REBAIXOU para `partial` — a ferramenta rodou e o efeito ficou no sistema (`schedule` criou uma tarefa diária) —,
+     * com o veredito dele. Antes só os sucessos entravam: o juiz de conclusão via dois `memory_write`, aprovava, e a resposta
+     * dizia "toda segunda-feira" com a tarefa diária errada ativa. E a descrição do passo só vale na mesma geração do plano:
+     * os ids se repetem a cada replanejamento ("step_1"), e o `memory_write` da geração anterior saía rotulado com a
+     * descrição do passo novo ("Confirmar a persistência do agendamento semanal") — a mesma alegação falsa que o juiz repetiu.
      */
     static resultadosParaOJuiz(goal: Goal, state: GoalExecutionState, orcamentoChars: number): { passos: string; ferramentas: string } {
-        const sucessos = goal.attempts
-            .filter(a => a.result === 'success')
+        const executadas = goal.attempts
+            .filter(a => a.result === 'success' || a.result === 'partial')
             .map(a => {
                 const completa = state.saidasCompletas?.get(chaveDaSaida(a.planGeneration, a.planStepId));
                 return { a, texto: completa ?? a.output ?? '', soTrecho: completa === undefined };
             });
         const CABECALHO_POR_ITEM = 120;
-        const limite = limiteComum(sucessos.map(x => x.texto.length), orcamentoChars - sucessos.length * CABECALHO_POR_ITEM);
-        const descricaoDoPasso = (id: string | undefined): string => goal.currentPlan.find(p => p.id === id)?.description ?? '';
-        const ferramentas = sucessos.map(({ a, texto, soTrecho }) => {
+        const limite = limiteComum(executadas.map(x => x.texto.length), orcamentoChars - executadas.length * CABECALHO_POR_ITEM);
+        const geracaoAtual = goal.planGeneration ?? 0;
+        const descricaoDoPasso = (a: GoalAttempt): string => (a.planGeneration ?? 0) === geracaoAtual
+            ? goal.currentPlan.find(p => p.id === a.planStepId)?.description ?? ''
+            : '';
+        const ferramentas = executadas.map(({ a, texto, soTrecho }) => {
             const cortado = texto.length > limite;
             const corpo = texto ? (cortado ? texto.slice(0, limite) : texto) : '(sem output)';
             const notas = [
+                a.result === 'partial'
+                    ? (a.vereditoDoPasso
+                        ? `o juiz do passo acusou que este resultado NÃO corresponde ao pedido (confiança ${a.vereditoDoPasso.confianca.toFixed(2)}): ${a.vereditoDoPasso.motivo} — a ferramenta rodou, e o efeito dela continua no sistema`
+                        : 'resultado não confirmado')
+                    : '',
+                (a.planGeneration ?? 0) !== geracaoAtual ? 'de uma estratégia anterior do plano' : '',
                 soTrecho && texto.length >= attemptOutputLimit(a.toolName) ? `só os primeiros ${texto.length} caracteres ficaram guardados — o resto não está disponível` : '',
                 cortado ? `cortado para caber: mostrando ${limite} de ${texto.length} caracteres` : '',
             ].filter(Boolean);
-            const passo = descricaoDoPasso(a.planStepId);
+            const passo = descricaoDoPasso(a);
             return `- ${a.toolName}${passo ? ` (passo: ${passo.slice(0, 120)})` : ''}${notas.length ? ` [${notas.join('; ')}]` : ''}: ${corpo}`;
         }).join('\n');
         const passos = goal.currentPlan.filter(p => p.status === 'completed').map(p => `- ${p.description}`).join('\n');

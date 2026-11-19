@@ -84,9 +84,13 @@ export class ScheduleTool implements ToolExecutor {
                 );
 
                 const timeDesc = this.scheduler.describeCron(cronExpr);
+                // ADR-028 (18/11/2026): o recibo diz o que ficou gravado, com o horário que vai valer. Caso real
+                // (instância isolada, Bonsai 27B): o pedido era "toda segunda às 9h", a tarefa nasceu diária, o objetivo
+                // terminou em falha e a resposta não contava que a tarefa diária tinha ficado ativa.
                 return {
                     success: true,
-                    output: `✅ Agendamento criado!\n📋 ID: #${task.id}\n🏷️ ${label}\n⏰ ${timeDesc}\n📌 Tipo: ${actionInfo.action_type}\n\nVou te enviar automaticamente nesses horários!`
+                    output: `✅ Agendamento criado!\n📋 ID: #${task.id}\n🏷️ ${label}\n⏰ ${timeDesc}\n📌 Tipo: ${actionInfo.action_type}\n\nVou te enviar automaticamente nesses horários!`,
+                    alteracao: `Criou o agendamento "${label}" (#${task.id}), ativo: ${timeDesc}`,
                 };
             }
 
@@ -110,9 +114,14 @@ export class ScheduleTool implements ToolExecutor {
 
             if (action === 'delete') {
                 if (!args.task_id) return { success: false, error: 'Informe o task_id para deletar.', output: '' };
+                // O nome é lido antes de apagar: depois, só a ferramenta saberia qual era (ADR-028).
+                const antes = this.scheduler.getTask(args.task_id);
                 const deleted = this.scheduler.deleteTask(args.task_id);
                 if (deleted) {
-                    return { success: true, output: `✅ Agendamento #${args.task_id} removido.` };
+                    return {
+                        success: true, output: `✅ Agendamento #${args.task_id} removido.`,
+                        alteracao: antes ? `Apagou o agendamento "${antes.label}" (#${args.task_id})` : `Apagou o agendamento #${args.task_id}`,
+                    };
                 }
                 return { success: false, error: `Agendamento #${args.task_id} não encontrado.`, output: '' };
             }
@@ -122,7 +131,10 @@ export class ScheduleTool implements ToolExecutor {
                 const active = args.active !== false;
                 const task = this.scheduler.toggleTask(args.task_id, active);
                 if (task) {
-                    return { success: true, output: `✅ Agendamento #${args.task_id} ${active ? 'ativado 🟢' : 'desativado 🔴'}.` };
+                    return {
+                        success: true, output: `✅ Agendamento #${args.task_id} ${active ? 'ativado 🟢' : 'desativado 🔴'}.`,
+                        alteracao: `${active ? 'Ativou' : 'Desativou'} o agendamento "${task.label}" (#${args.task_id})`,
+                    };
                 }
                 return { success: false, error: `Agendamento #${args.task_id} não encontrado.`, output: '' };
             }

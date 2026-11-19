@@ -543,7 +543,7 @@ export class GoalStore {
     private updateLastAttempt(
         goalId: string,
         planStepId: string,
-        patch: Partial<Pick<GoalAttempt, 'result' | 'output' | 'error'>>,
+        patch: Partial<Pick<GoalAttempt, 'result' | 'output' | 'error' | 'vereditoDoPasso'>>,
         predicate: (a: GoalAttempt) => boolean,
     ): void {
         this.db.transaction(() => {
@@ -577,9 +577,10 @@ export class GoalStore {
      * Corrige o `result` do attempt mais recente de um step, já persistido como 'success',
      * para 'partial' — usado quando uma validação posterior (ex: mismatch semântico) rebaixa
      * a confiança na conclusão depois que o attempt original já foi gravado via addAttempt().
+     * `veredito` (18/11/2026): o motivo do juiz do passo fica na tentativa — o juiz de conclusão o recebe junto do efeito.
      */
-    downgradeLastAttemptToPartial(goalId: string, planStepId: string): void {
-        this.updateLastAttempt(goalId, planStepId, { result: 'partial' }, a => a.result === 'success');
+    downgradeLastAttemptToPartial(goalId: string, planStepId: string, veredito?: GoalAttempt['vereditoDoPasso']): void {
+        this.updateLastAttempt(goalId, planStepId, { result: 'partial', ...(veredito ? { vereditoDoPasso: veredito } : {}) }, a => a.result === 'success');
     }
 
     /**
