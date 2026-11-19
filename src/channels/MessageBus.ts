@@ -389,9 +389,6 @@ export class MessageBus {
             type: msg.type,
             correlationId
         });
-        // ADR-042 (D3): o pedido novo interrompe já na chegada a conferência em segundo plano da resposta anterior — antes só
-        // no começo do run(), depois do classificador de objetivo e do roteador. ?.: objetos parciais de teste.
-        this.agentLoop?.interromperValidacoesDaConversa?.(msg.userId);
 
         // Chave da fila: por canal + usuário — preserva independência entre usuários
         const queueId = composeSessionKey({ channel: msg.channel, userId: msg.userId });
@@ -436,6 +433,11 @@ export class MessageBus {
                 return;
             }
         }
+
+        // ADR-042 (D3): o pedido novo interrompe já na chegada a conferência em segundo plano da resposta anterior — antes só
+        // no começo do run(), depois do classificador de objetivo e do roteador. Depois do desvio acima: complemento de um
+        // objetivo em andamento não é pedido novo e não corta a validação dos passos dele. ?.: objetos parciais de teste.
+        this.agentLoop?.interromperValidacoesDaConversa?.(msg.userId);
 
         // Mensagens em sequência viram um turno só (ver `textosEmEspera`): texto comum chegando enquanto outra mensagem de
         // texto ainda espera a vez na fila entra junto com ela, em vez de virar um pedido separado. Anexos e comandos
@@ -696,7 +698,8 @@ export class MessageBus {
                 deliveredAttachments = delivered?.attachments;
             }
 
-            await this.sessionManager.recordAssistantMessage(sessionKey, responseText || '', { model: 'newclaw' }, deliveredAttachments).catch(err => {
+            // ADR-042: a marca "conferindo" é só para a pessoa; o histórico guarda a resposta sem ela.
+            await this.sessionManager.recordAssistantMessage(sessionKey, AgentLoop.semMarcaConferindo(responseText || ''), { model: 'newclaw' }, deliveredAttachments).catch(err => {
                 log.error('record_assistant_message_failed', err, 'Failed to persist assistant message; response already sent');
             });
 

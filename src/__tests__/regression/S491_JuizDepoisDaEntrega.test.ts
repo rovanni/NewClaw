@@ -155,8 +155,22 @@ async function main(): Promise<void> {
         assert(/void this\.julgarDepoisDaEntrega\(/.test(bloco) && /return AgentLoop\.comMarcaConferindo\(response\)/.test(bloco), 'dispara o julgamento sem esperar e devolve a resposta com a marca');
         assert(/validacoesEmSegundoPlano\?\.signal/.test(bloco), 'preso ao sinal da conversa (ADR-027), que o pedido seguinte aborta');
         const controller = fs.readFileSync(path.join(process.cwd(), 'src', 'core', 'AgentController.ts'), 'utf-8');
-        assert(/tipo === 'progresso'/.test(controller) && /recordAssistantMessage\(\{ channel: tipoDoCanal, userId: chatId \}, texto/.test(controller),
-            'AgentController: entrega vai para a fila do canal (sem `progresso`) e para o histórico da conversa');
+        assert(/tipo === 'progresso'/.test(controller) && /recordAssistantMessage\(\{ channel: tipoDoCanal, userId: userId \|\| chatId \}, texto/.test(controller),
+            'AgentController: entrega vai para a fila do canal (sem `progresso`) e para o histórico, pelo usuário do turno (grupo: chatId é o grupo)');
+        const bus = fs.readFileSync(path.join(process.cwd(), 'src', 'channels', 'MessageBus.ts'), 'utf-8');
+        assert(/recordAssistantMessage\(sessionKey, AgentLoop\.semMarcaConferindo\(responseText/.test(bus), 'o histórico guarda a resposta sem a marca');
+        const iSupl = bus.indexOf("log.info('message_supplemented_active_goal'");
+        const iInt = bus.indexOf('this.agentLoop?.interromperValidacoesDaConversa?.(msg.userId)');
+        assert(iSupl > -1 && iInt > iSupl, 'complemento de objetivo em andamento não interrompe as validações dos passos');
+    }
+
+    console.log('\nA marca não vai para o histórico (code-review de 19/11/2026)');
+    {
+        for (const idioma of ['pt-BR', 'en-US', 'es-ES']) {
+            const com = AgentLoop.comMarcaConferindo('Resposta.', idioma);
+            assert(AgentLoop.semMarcaConferindo(com) === 'Resposta.', `tira a marca em ${idioma}`);
+        }
+        assert(AgentLoop.semMarcaConferindo('Resposta sem marca.') === 'Resposta sem marca.', 'texto sem marca fica igual');
     }
 
     console.log(`\n${passed} passaram, ${failed} falharam\n`);

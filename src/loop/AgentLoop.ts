@@ -1037,6 +1037,19 @@ export class AgentLoop {
         return AgentLoop.TEXTOS_DO_JUIZ_DEPOIS[idioma] ?? AgentLoop.TEXTOS_DO_JUIZ_DEPOIS['pt-BR'];
     }
 
+    /**
+     * ADR-042 (code-review de 19/11/2026): a resposta como vai para o HISTÓRICO, sem a marca. Com a marca gravada, o modelo a
+     * via nas próprias respostas anteriores e podia passar a escrevê-la sozinho (em objetivo, sem juiz nenhum depois).
+     * Retirada exata das marcas que o próprio núcleo escreve, nos três idiomas — não interpreta texto.
+     */
+    static semMarcaConferindo(texto: string): string {
+        for (const t of Object.values(AgentLoop.TEXTOS_DO_JUIZ_DEPOIS)) {
+            const sufixo = `\n\n${t.marca}`;
+            if (texto.endsWith(sufixo)) return texto.slice(0, -sufixo.length);
+        }
+        return texto;
+    }
+
     /** ADR-042: a resposta que sai na hora, com a marca de que a conferência está em curso. */
     static comMarcaConferindo(resposta: string, idioma?: string): string {
         return `${resposta.trimEnd()}\n\n${AgentLoop.textosDoJuizDepois(idioma).marca}`;
@@ -1702,8 +1715,8 @@ export class AgentLoop {
      * `tipo`: 'progresso' (ADR-027, relato de andamento; o canal web mostra só o último enquanto o trabalho roda) ou
      * 'entrega' (ADR-042, a 2ª mensagem do juiz depois da entrega: vai para a fila de entregas e para o histórico da conversa).
      */
-    private avisarUsuario?: (canal: string, chatId: string, texto: string, tipo?: 'progresso' | 'entrega') => Promise<void>;
-    setAvisoAoUsuario(avisar: (canal: string, chatId: string, texto: string, tipo?: 'progresso' | 'entrega') => Promise<void>): void {
+    private avisarUsuario?: (canal: string, chatId: string, texto: string, tipo?: 'progresso' | 'entrega', userId?: string) => Promise<void>;
+    setAvisoAoUsuario(avisar: (canal: string, chatId: string, texto: string, tipo?: 'progresso' | 'entrega', userId?: string) => Promise<void>): void {
         this.avisarUsuario = avisar;
     }
 
@@ -1723,7 +1736,7 @@ export class AgentLoop {
         const t = AgentLoop.textosDoJuizDepois();
         const contexto = { traceId: a.traceId, conversationId: a.conversationId, goalId: undefined, stepId: undefined };
         const enviar = async (texto: string): Promise<void> => {
-            try { await this.avisarUsuario?.(canal, chatId, texto, 'entrega'); }
+            try { await this.avisarUsuario?.(canal, chatId, texto, 'entrega', a.channelContext.userId); }
             catch (err) { log.warn(`[${this.ts()}] [GROUNDING] A3: falha ao enviar o aviso posterior (${errorMessage(err)})`); }
         };
         let g: Awaited<ReturnType<ObserverValidator['validateGrounding']>>;

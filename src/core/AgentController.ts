@@ -352,7 +352,7 @@ export class AgentController {
         this.messageBus.setGoalOrchestrator(this.goalOrchestrator);
         this.agentLoop.setGoalOrchestrator(this.goalOrchestrator);
         // ADR-027: relato de progresso do turno de conversa longo — o canal/conversa vêm do contexto do turno.
-        this.agentLoop.setAvisoAoUsuario(async (canal, chatId, texto, tipo = 'progresso') => {
+        this.agentLoop.setAvisoAoUsuario(async (canal, chatId, texto, tipo = 'progresso', userId?: string) => {
             const tipoDoCanal = canal as import('../channels/ChannelAdapter').ChannelType;
             if (tipo === 'progresso') {
                 await this.messageBus.sendToChat(tipoDoCanal, chatId, { text: texto, format: 'markdown', progresso: true });
@@ -361,7 +361,8 @@ export class AgentController {
             // ADR-042: a 2ª mensagem do juiz é uma entrega — vai para a fila de entregas do canal (outbox no web) e para o
             // histórico da conversa, para o modelo saber da correção no turno seguinte.
             await this.messageBus.sendToChat(tipoDoCanal, chatId, { text: texto, format: 'markdown' });
-            await this.sessionManager.recordAssistantMessage({ channel: tipoDoCanal, userId: chatId }, texto, { model: 'newclaw' }).catch(err =>
+            // Chave do histórico pelo usuário do turno (num grupo, chatId é o grupo); chatId só quando o contexto não trouxe.
+            await this.sessionManager.recordAssistantMessage({ channel: tipoDoCanal, userId: userId || chatId }, texto, { model: 'newclaw' }).catch(err =>
                 log.warn(`[A3] falha ao gravar a correção posterior no histórico: ${String(err)}`));
         });
 
