@@ -67,7 +67,8 @@ async function main() {
         const tool = new SendAudioTool(bus);
         tool.setContext('chat-1', 'web');
         // Simula "acabou de enviar" mexendo no relógio interno do debounce.
-        (tool as unknown as { lastSendTime: number }).lastSendTime = Date.now();
+        // S492: o intervalo é por conversa (canal:chatId).
+        (tool as unknown as { ultimoEnvioPorConversa: Map<string, number> }).ultimoEnvioPorConversa.set('web:chat-1', Date.now());
 
         const result = await tool.execute({ text: CONTEUDO });
 

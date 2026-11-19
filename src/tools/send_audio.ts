@@ -64,7 +64,11 @@ export class SendAudioTool implements ToolExecutor {
     private chatId: string | null = null;
     private channel: ChannelType = 'telegram';
     private bus: MessageBus;
-    private lastSendTime: number = 0;
+    /**
+     * Último envio bem-sucedido POR CONVERSA (canal + chatId). S492 (19/11/2026): era um número só para a instância, que é
+     * única para todas as conversas — um áudio numa conversa fazia o de outra, nos 10 s seguintes, ser pulado sem sair.
+     */
+    private ultimoEnvioPorConversa = new Map<string, number>();
     private static readonly MIN_INTERVAL_MS = 10000; // 10s debounce
     private static readonly KOKORO_TIMEOUT_MS = 120000; // inferência local em CPU pode ser lenta
 
@@ -85,9 +89,14 @@ export class SendAudioTool implements ToolExecutor {
         // porque o debounce respondia success:true achando que já tinha enviado de verdade.
         // Bug real: goal de áudio marcado completed sem NENHUM áudio jamais gerado (edge-tts
         // ENOENT em todas as tentativas) — usuário nunca recebeu nada.
+        // S492 (19/11/2026): destino lido UMA vez, no começo. Antes `this.chatId`/`this.channel` eram lidos depois da geração
+        // do áudio (segundos), e o `setContext` de outra conversa nesse meio mandava o áudio para ela.
+        const chatId = this.chatId;
+        const channel = this.channel;
+        const conversa = `${channel}:${chatId ?? ''}`;
         const now = Date.now();
         const spokenText = (args.text as string) || '';
-        if (now - this.lastSendTime < SendAudioTool.MIN_INTERVAL_MS) {
+        if (now - (this.ultimoEnvioPorConversa.get(conversa) ?? 0) < SendAudioTool.MIN_INTERVAL_MS) {
             // Princípio das ferramentas de entrega (docs/ARCHITECTURE/FERRAMENTAS_DE_ENTREGA.md):
             // o output devolve o CONTEÚDO entregue, não o recibo da operação. O fato de o envio ter
             // sido pulado por debounce é diagnóstico — pertence ao log, não à resposta do usuário.
@@ -149,19 +158,19 @@ export class SendAudioTool implements ToolExecutor {
             ], 15000);
             log.info(`ffmpeg done in ${Date.now() - ffmpegStart}ms`);
 
-            if (!this.chatId) {
-                log.error('Missing channel context: chatId=' + this.chatId);
+            if (!chatId) {
+                log.error('Missing channel context: chatId=' + chatId);
                 this.cleanupFiles([rawAudioFile, oggFile]);
                 return { success: false, output: '', error: 'Contexto de canal não configurado.' };
             }
 
             try {
-                log.info(`Uploading via MessageBus (channel=${this.channel})...`);
+                log.info(`Uploading via MessageBus (channel=${channel})...`);
                 const uploadStart = Date.now();
                 const fileBuffer = readFileSync(oggFile);
-                await this.bus.sendVoice(this.channel, this.chatId, fileBuffer, 'voice.ogg');
+                await this.bus.sendVoice(channel, chatId, fileBuffer, 'voice.ogg');
                 log.info(`Upload done in ${Date.now() - uploadStart}ms`);
-                this.lastSendTime = Date.now();
+                this.ultimoEnvioPorConversa.set(conversa, Date.now());
             } catch (uploadError) {
                 log.error('Upload error:', errorMessage(uploadError));
                 return { success: false, output: '', error: `Upload failed: ${errorMessage(uploadError)}` };

@@ -1539,7 +1539,24 @@ export class AgentLoop {
             .join('\n\n');
     }
 
+    /**
+     * Decisão da operadora (19/11/2026): um áudio por turno também na conversa direta. O objetivo já tinha isso
+     * (`deliveryTracking.isAudioAlreadySent`, S44); a conversa direta não tinha rastreador nenhum, e em 16/11 (VPS) o mesmo
+     * `send_audio` saiu duas vezes numa resposta direta. Este rastreador só registra o áudio entregue neste turno — não
+     * adia nem deduplica documentos (sem `deferSendDocument`).
+     */
+    static rastreadorDeAudioDoTurno(): NonNullable<ChannelContext['deliveryTracking']> {
+        let audioEntregue = false;
+        return {
+            isAudioAlreadySent: () => audioEntregue,
+            onArtifactDelivered: (artefato: string) => { if (artefato === '__send_audio_delivered__') audioEntregue = true; },
+        };
+    }
+
     public async run(conversationId: string, userText: string, userId?: string, context?: ChannelContext, options?: { onStatus?: (event: SemanticStatusEvent) => void }): Promise<string | ProcessedResult> {
+        if (context && !context.goalTrace && !context.deliveryTracking) {
+            context = { ...context, deliveryTracking: AgentLoop.rastreadorDeAudioDoTurno() };
+        }
         // ADR-027: um pedido NOVO nesta conversa interrompe a validação em segundo plano do turno anterior — ela não disputa a
         // GPU/fila com ele. Não no fim do turno: ela começa no meio dele e quase sempre termina depois da resposta (é por isso
         // que roda em segundo plano); abortá-la ali apagaria o que ela grava na ReflectionMemory.
@@ -2797,7 +2814,7 @@ export class AgentLoop {
                     log.info(`[${this.ts()}] [AGENTLOOP-SEND] tool=send_audio decision=skip reason=already_delivered_this_goal path=json_action`);
                     loopMessages.push({
                         role: 'tool',
-                        content: `[JÁ ENVIADO] O áudio para este objetivo já foi entregue ao usuário anteriormente. Não gere nem envie outro áudio. Se não há mais tarefas pendentes, conclua com uma resposta final em texto.`,
+                        content: `[JÁ ENVIADO] O áudio deste pedido já foi entregue ao usuário anteriormente. Não gere nem envie outro áudio. Se não há mais tarefas pendentes, conclua com uma resposta final em texto.`,
                     });
                     return { action: 'continueLoop', dedupAbort, dedupAbortTool, consecutiveToolFailures, guardsTriggered, totalToolCalls, toolFailureCount };
                 }
@@ -3630,7 +3647,7 @@ export class AgentLoop {
             log.info(`[${this.ts()}] [AGENTLOOP-SEND] tool=send_audio decision=skip reason=already_delivered_this_goal`);
             loopMessages.push({
                 role: 'tool',
-                content: `[JÁ ENVIADO] O áudio para este objetivo já foi entregue ao usuário anteriormente. Não gere nem envie outro áudio. Se não há mais tarefas pendentes, conclua com uma resposta final em texto.`,
+                content: `[JÁ ENVIADO] O áudio deste pedido já foi entregue ao usuário anteriormente. Não gere nem envie outro áudio. Se não há mais tarefas pendentes, conclua com uma resposta final em texto.`,
                 tool_call_id: toolCall.id,
             });
             usedToolInputs.add(inputKey);
