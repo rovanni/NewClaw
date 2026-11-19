@@ -482,7 +482,7 @@ export class AgentController {
             log.info('Signal adapter registered');
         }
 
-        this.scheduler.setTriggerHandler(async (task) => {
+        this.scheduler.setTriggerHandler(async (task, info) => {
             try {
                 const chatId = task.chat_id;
                 let prompt = '';
@@ -503,6 +503,19 @@ export class AgentController {
                 } else {
                     const params = JSON.parse(task.action_params || '{}');
                     prompt = `[AGENDADO] ${params.message || task.label}`;
+                }
+                if (info?.atrasadoDe) {
+                    // Fato para o modelo verbalizar no idioma configurado (S489, 19/11/2026): o horário previsto passou
+                    // com o NewClaw fora do ar, e este disparo é o atrasado.
+                    // Horário local com o fuso medido na máquina (etapa 4, 19/11/2026): com só o UTC, o modelo escreveu "11h46 UTC"
+                    // para 11h46 locais (14h46 UTC). Os dois instantes vão prontos; o modelo não converte nada.
+                    const local = (d: Date): string => {
+                        const off = -d.getTimezoneOffset();
+                        const fuso = `UTC${off >= 0 ? '+' : '-'}${String(Math.floor(Math.abs(off) / 60)).padStart(2, '0')}:${String(Math.abs(off) % 60).padStart(2, '0')}`;
+                        const p = (n: number) => String(n).padStart(2, '0');
+                        return `${p(d.getDate())}/${p(d.getMonth() + 1)}/${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())} (${fuso})`;
+                    };
+                    prompt = `[DISPARO ATRASADO: o horário previsto era ${local(info.atrasadoDe)} e agora é ${local(new Date())}, no horário local desta máquina; o NewClaw estava fora do ar. Diga isso ao usuário] ${prompt}`;
                 }
                 log.info(`[Scheduler] Triggering task #${task.id}: ${task.label} → chat ${chatId} (${task.channel})`);
                 this._eventBus.emitAppEvent({

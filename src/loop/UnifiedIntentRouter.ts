@@ -342,11 +342,11 @@ export function buildClassificationMessages(input: string, context?: RouterConte
 - greeting: greetings, farewells, thanks, casual social phrases
 - confirmation: explicit yes/proceed/confirm/authorize
 - rejection: explicit no/cancel/stop/abort
-- creation: creating or generating any content — files, slides, HTML, documents, code, presentations, PDFs
+- creation: creating or generating any content — files, slides, HTML, documents, code, presentations, PDFs (a schedule or reminder is not content: see system_operation)
 - information: factual questions, web searches, explanations, definitions
 - data_analysis: analyzing data, statistics, crypto/market prices, financial data, reports
-- memory_operation: saving to or retrieving from memory/notes
-- system_operation: executing commands, running scripts, servers, deployment, infrastructure, SSH, checking/managing local services or user accounts (e.g. emails, inboxes, gmail, git, docker, database)
+- memory_operation: saving facts to or retrieving facts from memory/notes (a reminder at a date/time is a schedule: see system_operation)
+- system_operation: executing commands, running scripts, servers, deployment, infrastructure, SSH, checking/managing local services or user accounts (e.g. emails, inboxes, gmail, git, docker, database); creating, listing, changing or removing schedules, reminders at a date/time and recurring tasks (e.g. "remind me every Monday at 9", "send me X every day at 8:30")
 - audio: generating audio, TTS, voice narration
 - vision: analyzing images, screenshots, OCR
 - destructive: deleting files/databases, formatting disks, dangerous system commands

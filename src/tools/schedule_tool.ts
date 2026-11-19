@@ -22,7 +22,7 @@ export class ScheduleTool implements ToolExecutor {
             },
             chat_id: { type: 'string', description: 'ID do chat/destinatário (obrigatório para create)' },
             label: { type: 'string', description: 'Nome/descrição do agendamento (create)' },
-            time: { type: 'string', description: 'Horários. Ex: "8h, 12h, 18h" ou "8:30" ou "0 8,12,18 * * *" (cron)' },
+            time: { type: 'string', description: 'Horários. Todo dia: lista só de horários com o mesmo minuto ("8h, 12h, 18h", "8:30", "7:30 e 19:30"). Dia da semana, dia do mês, mês ou intervalo: expressão cron de 5 campos, "minuto hora dia-do-mês mês dia-da-semana" (ex.: "0 9 * * 1" = segundas às 9h; "*/15 * * * *" = a cada 15 min; dia da semana 0 ou 7 = domingo).' },
             type_action: { type: 'string', description: 'Tipo: weather, crypto, custom (create)' },
             params: { type: 'string', description: 'Parâmetros extras em JSON (create)' },
             task_id: { type: 'number', description: 'ID da tarefa (delete/toggle)' },
@@ -48,13 +48,28 @@ export class ScheduleTool implements ToolExecutor {
         try {
             const action = args.action;
 
+            // S489 (18/11/2026, instância isolada com modelo real): o modelo mandou `frequency: "weekly"`, `day: "monday"` e
+            // `time: "09:00"`. Campos fora do esquema eram ignorados sem aviso, e a tarefa nascia diária. Campo desconhecido
+            // agora recusa a chamada inteira, dizendo quais e onde a informação cabe.
+            const aceitos = Object.keys(this.parameters.properties);
+            const desconhecidos = Object.keys(args ?? {}).filter(k => !aceitos.includes(k));
+            if (desconhecidos.length > 0) {
+                return {
+                    success: false, output: '',
+                    error: `Campos que esta ferramenta não tem: ${desconhecidos.join(', ')}. Nada foi feito. Campos aceitos: ${aceitos.join(', ')}. Dia da semana, dia do mês ou mês vão em "time" como expressão cron de 5 campos ("0 9 * * 1" = segundas às 9h); o nome do agendamento vai em "label".`,
+                };
+            }
+
             if (action === 'create') {
                 const chatId = args.chat_id || this.currentChatId;
                 if (!chatId) return { success: false, error: 'chat_id é obrigatório.', output: '' };
                 if (!args.time) return { success: false, error: 'Informe os horários. Ex: "8h, 12h, 18h"', output: '' };
 
                 const cronExpr = this.scheduler.parseTimeInput(args.time);
-                if (!cronExpr) return { success: false, error: `Não consegui entender os horários: "${args.time}"`, output: '' };
+                if (!cronExpr) return {
+                    success: false, output: '',
+                    error: `Horário não aceito: "${args.time}". Formatos aceitos: lista só de horários, todo dia, com o mesmo minuto ("8h, 12h, 18h", "8:30"); ou expressão cron de 5 campos ("0 9 * * 1" = segundas às 9h). Horários com minutos diferentes precisam de um agendamento cada.`,
+                };
 
                 const actionInfo = args.type_action
                     ? { action_type: args.type_action, action_params: args.params || '{}' }
@@ -69,9 +84,13 @@ export class ScheduleTool implements ToolExecutor {
                 );
 
                 const timeDesc = this.scheduler.describeCron(cronExpr);
+                // ADR-028 (18/11/2026): o recibo diz o que ficou gravado, com o horário que vai valer. Caso real
+                // (instância isolada, Bonsai 27B): o pedido era "toda segunda às 9h", a tarefa nasceu diária, o objetivo
+                // terminou em falha e a resposta não contava que a tarefa diária tinha ficado ativa.
                 return {
                     success: true,
-                    output: `✅ Agendamento criado!\n📋 ID: #${task.id}\n🏷️ ${label}\n⏰ ${timeDesc}\n📌 Tipo: ${actionInfo.action_type}\n\nVou te enviar automaticamente nesses horários!`
+                    output: `✅ Agendamento criado!\n📋 ID: #${task.id}\n🏷️ ${label}\n⏰ ${timeDesc}\n📌 Tipo: ${actionInfo.action_type}\n\nVou te enviar automaticamente nesses horários!`,
+                    alteracao: `Criou o agendamento "${label}" (#${task.id}), ativo: ${timeDesc}`,
                 };
             }
 
@@ -95,9 +114,14 @@ export class ScheduleTool implements ToolExecutor {
 
             if (action === 'delete') {
                 if (!args.task_id) return { success: false, error: 'Informe o task_id para deletar.', output: '' };
+                // O nome é lido antes de apagar: depois, só a ferramenta saberia qual era (ADR-028).
+                const antes = this.scheduler.getTask(args.task_id);
                 const deleted = this.scheduler.deleteTask(args.task_id);
                 if (deleted) {
-                    return { success: true, output: `✅ Agendamento #${args.task_id} removido.` };
+                    return {
+                        success: true, output: `✅ Agendamento #${args.task_id} removido.`,
+                        alteracao: antes ? `Apagou o agendamento "${antes.label}" (#${args.task_id})` : `Apagou o agendamento #${args.task_id}`,
+                    };
                 }
                 return { success: false, error: `Agendamento #${args.task_id} não encontrado.`, output: '' };
             }
@@ -107,7 +131,10 @@ export class ScheduleTool implements ToolExecutor {
                 const active = args.active !== false;
                 const task = this.scheduler.toggleTask(args.task_id, active);
                 if (task) {
-                    return { success: true, output: `✅ Agendamento #${args.task_id} ${active ? 'ativado 🟢' : 'desativado 🔴'}.` };
+                    return {
+                        success: true, output: `✅ Agendamento #${args.task_id} ${active ? 'ativado 🟢' : 'desativado 🔴'}.`,
+                        alteracao: `${active ? 'Ativou' : 'Desativou'} o agendamento "${task.label}" (#${args.task_id})`,
+                    };
                 }
                 return { success: false, error: `Agendamento #${args.task_id} não encontrado.`, output: '' };
             }

@@ -332,7 +332,7 @@ console.log('\n=== S175-8 — o prompt do validador continua recebendo só um ex
         usosDaFuncao === 2,
         `os 2 prompts de LLM que listam attempts usam a mesma função, com orçamento comum (encontrados: ${usosDaFuncao})`,
     );
-    assert(/const ORCAMENTO_RESULTADOS_PARA_O_JUIZ = 30_000/.test(SOURCE) && /limiteComum\(sucessos\.map/.test(SOURCE),
+    assert(/const ORCAMENTO_RESULTADOS_PARA_O_JUIZ = 30_000/.test(SOURCE) && /limiteComum\(/.test(SOURCE),   // S490: o comportamento (quem entra) é coberto pelo S490-1
         'o orçamento é um teto declarado, dividido entre os resultados');
     assert(!/a\.output\?\.slice\(0, ATTEMPT_OUTPUT_EVIDENCE_LIMIT\)/.test(SOURCE), 'nenhum corte silencioso de 300 caracteres nos prompts dos juízes');
 }

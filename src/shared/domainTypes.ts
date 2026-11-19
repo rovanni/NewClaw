@@ -224,6 +224,14 @@ export interface GoalAttempt {
     /** Avaliação heurística do resultado */
     evaluation?: { confidence: number; reason?: string };
     /**
+     * Veredito do juiz do passo (`StepSemanticValidator`) quando ele REBAIXOU esta tentativa para `partial`: o motivo e a
+     * confiança, como o juiz escreveu. Gravado na própria tentativa porque a ferramenta rodou e o efeito ficou no sistema
+     * (ex.: um agendamento criado com o horário errado); quem julga a conclusão do objetivo precisa ver os dois juntos.
+     * Ausente = o juiz do passo não rebaixou (ou a tentativa é anterior a 18/11/2026). Separado de `evaluation`, que é a
+     * avaliação heurística e alimenta `uncertainty`/ReflectionMemory.
+     */
+    vereditoDoPasso?: { motivo: string; confianca: number };
+    /**
      * Sprint 0.10 (achado L22): id do `ExecutionTrace` do sub-turno `agentloop` que produziu
      * este attempt (quando `toolName==='agentloop'`) — correlação com `agent_traces`
      * (persistido por `AgentLoop.persistTrace`/`memory.saveTrace`), sem duplicar o conteúdo do
