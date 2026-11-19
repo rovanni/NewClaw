@@ -1318,6 +1318,21 @@ export class AgentLoop {
                     // foi SUPPORTED (inclui sempre o caso UNVALIDATED, cujo claims é sempre []), não
                     // há material para uma resposta parcial — cai direto no bloqueio de sempre.
                     const supportedClaims = g.claims.filter(c => c.verdict === 'SUPPORTED');
+
+                    if (AgentLoop.liberavelComAviso(g)) {
+                        // A1-r (05/11/2026) + decisão da operadora (19/11/2026): o juiz concluiu, não achou contradição, mas não
+                        // confirmou parte das afirmações. Entrega-se a resposta original com o aviso de QUAIS pontos não foram
+                        // confirmados, SEM tentar antes a resposta parcial: a parcial custava uma escrita nova e um 2º julgamento
+                        // (03–16/11 no Windows: 43 revalidações, 15,5 min de espera, 19 descartadas). Contradição apontada — mesmo
+                        // com citação que não conferiu — continua tentando a parcial e, sem ela, bloqueia (abaixo).
+                        const naoConfirmadas = g.claims.filter(c => c.verdict === 'NOT_EVALUABLE').map(c => c.claim);
+                        efeitoDoJuiz('resposta_entregue_com_aviso_nao_confirmada', { estado: g.state, sustentadas: supportedClaims.length, total: g.claims.length, naoConfirmadas: naoConfirmadas.length, tentouParcial: false });
+                        log.warn(`[${this.ts()}] [GROUNDING] NOT_EVALUABLE sem contradição apontada — entregando COM AVISO, sem parcial (${naoConfirmadas.length} ponto(s) não confirmado(s))`);
+                        // A mesma linha de decisão dos outros caminhos: sem ela, a medição do juiz (03–16/11) não contava este.
+                        log.info(`[GROUNDING-TRACE] ${JSON.stringify({ v: 1, phase: 'decision', traceId: trace.id, conversationId, ...channelContext?.goalTrace, state: g.state, claimsTotal: g.claims.length, supported: supportedClaims.length, path: 'delivered_with_notice', unconfirmed: naoConfirmadas.length, evidenceSources: { turn: evidences.length - (channelContext?.priorStepEvidence?.length ?? 0), priorSteps: channelContext?.priorStepEvidence?.length ?? 0 } })}`);
+                        return AgentLoop.comAvisoNaoConfirmado(response, naoConfirmadas);
+                    }
+
                     if (supportedClaims.length > 0) {
                         const naoConfirmadas = g.claims.filter((c): c is GroundedClaim & { verdict: 'NOT_SUPPORTED' | 'NOT_EVALUABLE' } => c.verdict !== 'SUPPORTED');
                         const partial = await this.trySynthesizePartialResponse(userText, supportedClaims, evidences, signal, channelContext?.recentMessages, naoConfirmadas,
@@ -1355,18 +1370,6 @@ export class AgentLoop {
                         efeitoDoJuiz('resposta_entregue_sem_veredito', { estado: g.state, motivo: (g.reason ?? '').slice(0, 120) });
                         log.warn(`[${this.ts()}] [GROUNDING] juiz não concluiu — entregando COM AVISO (${g.reason})`);
                         return AgentLoop.comAvisoSemVeredito(response);
-                    }
-
-                    if (AgentLoop.liberavelComAviso(g)) {
-                        // A1-r (05/11/2026): o juiz concluiu, não achou contradição, mas não confirmou parte das afirmações. A resposta
-                        // parcial já foi tentada acima (só com as sustentadas); sem parcial válida, entrega-se a resposta com o aviso de
-                        // QUAIS pontos não foram confirmados, em vez de deixar a pessoa sem resposta. Produção (22/10–04/11): 19 dos 21
-                        // bloqueios por NOT_EVALUABLE não tinham contradição. Contradição apontada — mesmo com citação que não conferiu —
-                        // continua no bloqueio abaixo.
-                        const naoConfirmadas = g.claims.filter(c => c.verdict === 'NOT_EVALUABLE').map(c => c.claim);
-                        efeitoDoJuiz('resposta_entregue_com_aviso_nao_confirmada', { estado: g.state, sustentadas: supportedClaims.length, total: g.claims.length, naoConfirmadas: naoConfirmadas.length, tentouParcial: supportedClaims.length > 0 });
-                        log.warn(`[${this.ts()}] [GROUNDING] NOT_EVALUABLE sem contradição apontada — entregando COM AVISO (${naoConfirmadas.length} ponto(s) não confirmado(s))`);
-                        return AgentLoop.comAvisoNaoConfirmado(response, naoConfirmadas);
                     }
 
                     log.info(`[GROUNDING-TRACE] ${JSON.stringify({ v: 1, phase: 'decision', traceId: trace.id, conversationId, ...channelContext?.goalTrace, state: g.state, claimsTotal: g.claims.length, supported: supportedClaims.length, path: supportedClaims.length > 0 ? 'blocked_partial_rejected' : 'blocked_no_supported_claims', evidenceSources: { turn: evidences.length - (channelContext?.priorStepEvidence?.length ?? 0), priorSteps: channelContext?.priorStepEvidence?.length ?? 0 } })}`);

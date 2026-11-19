@@ -146,19 +146,20 @@ async function main(): Promise<void> {
             assert(AgentLoop.liberavelComAviso({ state: 'NOT_EVALUABLE', claims: [c('SUPPORTED'), c('NOT_EVALUABLE')] }), 'só NOT_EVALUABLE sem contradição apontada é liberável');
         }
 
-        console.log('\n=== S479-6 — no AgentLoop: depois da parcial, antes do bloqueio; REJECTED continua bloqueando ===');
+        console.log('\n=== S479-6 — no AgentLoop: sem contradição sai com aviso ANTES da parcial (decisão de 19/11/2026); REJECTED continua bloqueando ===');
         {
             const fonte = fs.readFileSync(path.join(process.cwd(), 'src', 'loop', 'AgentLoop.ts'), 'utf-8');
-            const iParcial = fonte.indexOf('const partial = await this.trySynthesizePartialResponse(');
-            const iUnvalidated = fonte.indexOf("if (g.state === 'UNVALIDATED') {", iParcial);
             const iA1r = fonte.indexOf('if (AgentLoop.liberavelComAviso(g)) {');
-            const iBloqueio = fonte.indexOf('turnState.groundingBlock = {', iA1r);
-            assert(iParcial > -1 && iA1r > iParcial, 'a resposta parcial é tentada antes (decisão: parcial primeiro)');
-            assert(iA1r > iUnvalidated && iUnvalidated > -1, 'depois do ramo UNVALIDATED (que mantém o aviso de "não conferida")');
-            assert(iBloqueio > iA1r, 'antes do bloqueio, que continua para REJECTED e para contradição apontada');
-            const bloco = fonte.slice(iA1r, iBloqueio);
-            assert(/comAvisoNaoConfirmado\(response, naoConfirmadas\)/.test(bloco) && /resposta_entregue_com_aviso_nao_confirmada/.test(bloco), 'entrega com o aviso e registra o efeito no gravador de voo');
-            assert(!/validateGrounding\(|trySynthesizePartialResponse\(/.test(bloco), 'nenhum mecanismo novo de recuperação no ramo (sem nova chamada do juiz nem nova síntese)');
+            const iFimA1r = fonte.indexOf('return AgentLoop.comAvisoNaoConfirmado(response, naoConfirmadas);', iA1r);
+            const iParcial = fonte.indexOf('const partial = await this.trySynthesizePartialResponse(');
+            const iBloqueio = fonte.indexOf('turnState.groundingBlock = {', iParcial);
+            assert(iA1r > -1 && iFimA1r > iA1r && iParcial > iFimA1r, 'sem contradição apontada, entrega com aviso ANTES de tentar a parcial (19/11/2026: a parcial custava escrita + 2º julgamento)');
+            assert(!AgentLoop.liberavelComAviso({ state: 'UNVALIDATED', claims: [{ verdict: 'NOT_EVALUABLE' }] } as any), 'UNVALIDATED nunca entra neste ramo (segue com o aviso de "não conferida")');
+            assert(iBloqueio > iParcial, 'a parcial e o bloqueio continuam para REJECTED e para contradição apontada');
+            const bloco = fonte.slice(iA1r, iFimA1r + 80);
+            assert(/comAvisoNaoConfirmado\(response, naoConfirmadas\)/.test(bloco) && /resposta_entregue_com_aviso_nao_confirmada/.test(bloco) && /tentouParcial: false/.test(bloco), 'entrega com o aviso e registra o efeito (tentouParcial: false) no gravador de voo');
+            assert(!/validateGrounding\(|trySynthesizePartialResponse\(/.test(bloco), 'nenhuma chamada nova no ramo (nem juiz nem síntese)');
+            assert(/path: 'delivered_with_notice'/.test(bloco), 'grava a linha [GROUNDING-TRACE] de decisão (a medição conta este caminho)');
         }
 
         console.log('\n=== S479-7 — o aviso nos três idiomas ===');
