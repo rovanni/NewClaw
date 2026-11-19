@@ -97,10 +97,22 @@ const NOMES_DA_SEMANA = ['domingos', 'segundas', 'terças', 'quartas', 'quintas'
 /** Teto de um único `setTimeout`: ao chegar nele, o timer recalcula o próximo disparo (não dispara). */
 const TETO_DO_TIMER_MS = 24 * 60 * 60 * 1000;
 
+/** Fato que acompanha um disparo: `atrasadoDe` = horário previsto que passou com o NewClaw fora do ar (S489, 19/11/2026). */
+export interface InfoDoDisparo {
+    atrasadoDe?: Date;
+}
+
+/** `datetime('now')` do SQLite é UTC sem fuso ("AAAA-MM-DD HH:MM:SS"); `null` se ausente ou ilegível. */
+function lerDataDoSqlite(valor: string | null | undefined): Date | null {
+    if (!valor) return null;
+    const d = new Date(`${valor.replace(' ', 'T')}Z`);
+    return Number.isNaN(d.getTime()) ? null : d;
+}
+
 export class SchedulerService {
     private db: Database.Database;
     private timers: Map<number, ReturnType<typeof setTimeout>> = new Map();
-    private onTrigger: ((task: ScheduledTask) => Promise<void>) | null = null;
+    private onTrigger: ((task: ScheduledTask, info?: InfoDoDisparo) => Promise<void>) | null = null;
 
     constructor(dbPath: string, db?: Database.Database) {
         if (db) {
@@ -135,7 +147,7 @@ export class SchedulerService {
         }
     }
 
-    setTriggerHandler(handler: (task: ScheduledTask) => Promise<void>): void {
+    setTriggerHandler(handler: (task: ScheduledTask, info?: InfoDoDisparo) => Promise<void>): void {
         this.onTrigger = handler;
     }
 
@@ -150,6 +162,9 @@ export class SchedulerService {
         // Revisão (18/11/2026): o modelo pode mandar `time: 9` (número); vira texto em vez de lançar TypeError.
         const input = String(entrada ?? '');
         const campos = input.trim().split(/\s+/);
+        // Revisão (19/11/2026): cinco números soltos ("6 8 10 12 3") podem ser cron ou lista de horas, e os dois sentidos
+        // disparam em horários diferentes. Sem como saber, recusa (o erro da ferramenta mostra os dois formatos).
+        if (campos.length === 5 && campos.every(c => /^\d+$/.test(c))) return '';
         if (campos.length === 5 && lerCron(campos.join(' '))) return campos.join(' ');
 
         const itens = input.replace(/\b(e|and)\b/gi, ',').split(/[\s,;]+/).filter(Boolean);
@@ -247,9 +262,38 @@ export class SchedulerService {
     startAll(): void {
         const tasks = this.listTasks().filter(t => t.active);
         for (const task of tasks) {
+            const perdido = this.disparoPerdido(task, new Date());
+            if (perdido) {
+                // Decisão da operadora (19/11/2026): o horário que passou com o NewClaw fora do ar (deploy, PC desligado)
+                // dispara uma vez ao voltar, avisando que é atrasado. Vários perdidos viram um disparo só.
+                log.warn(`[Scheduler] Tarefa #${task.id} perdeu o disparo de ${perdido.toISOString()} (NewClaw fora do ar): disparando agora, uma vez`);
+                void this.disparar(task, { atrasadoDe: perdido });
+            }
             this.startTaskTimer(task);
         }
         log.info(`[Scheduler] Started ${tasks.length} scheduled tasks`);
+    }
+
+    /**
+     * Primeiro horário previsto que passou sem disparo, contado do último disparo gravado (`last_run`) ou, sem ele, da
+     * criação. `null` quando nada passou, quando a expressão é inválida ou quando não há data de referência.
+     */
+    disparoPerdido(task: ScheduledTask, agora: Date): Date | null {
+        const referencia = lerDataDoSqlite(task.last_run) ?? lerDataDoSqlite(task.created_at);
+        if (!referencia) return null;
+        const previsto = proximoDisparo(task.cron_expr, referencia);
+        return previsto && previsto.getTime() <= agora.getTime() ? previsto : null;
+    }
+
+    /** Roda o handler e grava `last_run`; a falha fica no log (o próximo horário continua agendado). */
+    private async disparar(task: ScheduledTask, info?: InfoDoDisparo): Promise<void> {
+        if (!this.onTrigger) return;
+        try {
+            await this.onTrigger(task, info);
+            this.db.prepare("UPDATE scheduled_tasks SET last_run = datetime('now') WHERE id = ?").run(task.id);
+        } catch (e) {
+            log.error(`[Scheduler] Error running task ${task.id}:`, e);
+        }
     }
 
     /** Stop all timers (call on shutdown) */
@@ -299,13 +343,7 @@ export class SchedulerService {
             const alvo = new Date(Date.now() + ms);
             const timer = setTimeout(async () => {
                 if (!this.onTrigger) return;
-
-                try {
-                    await this.onTrigger(task);
-                    this.db.prepare("UPDATE scheduled_tasks SET last_run = datetime('now') WHERE id = ?").run(task.id);
-                } catch (e) {
-                    log.error(`[Scheduler] Error running task ${task.id}:`, e);
-                }
+                await this.disparar(task);
 
                 // Schedule next occurrence
                 const updated = this.getTask(task.id);

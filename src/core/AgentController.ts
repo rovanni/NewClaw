@@ -482,7 +482,7 @@ export class AgentController {
             log.info('Signal adapter registered');
         }
 
-        this.scheduler.setTriggerHandler(async (task) => {
+        this.scheduler.setTriggerHandler(async (task, info) => {
             try {
                 const chatId = task.chat_id;
                 let prompt = '';
@@ -503,6 +503,11 @@ export class AgentController {
                 } else {
                     const params = JSON.parse(task.action_params || '{}');
                     prompt = `[AGENDADO] ${params.message || task.label}`;
+                }
+                if (info?.atrasadoDe) {
+                    // Fato para o modelo verbalizar no idioma configurado (S489, 19/11/2026): o horário previsto passou
+                    // com o NewClaw fora do ar, e este disparo é o atrasado.
+                    prompt = `[DISPARO ATRASADO: o horário previsto era ${info.atrasadoDe.toISOString()} (UTC) e o NewClaw estava fora do ar; diga isso ao usuário] ${prompt}`;
                 }
                 log.info(`[Scheduler] Triggering task #${task.id}: ${task.label} → chat ${chatId} (${task.channel})`);
                 this._eventBus.emitAppEvent({

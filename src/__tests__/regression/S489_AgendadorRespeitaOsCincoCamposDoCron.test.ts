@@ -38,6 +38,8 @@ const em = (ano: number, mes: number, dia: number, hora: number, min: number): D
 const texto = (d: Date | null): string => d === null ? 'null'
     : `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 
+const lerUtc = (s: string): number => new Date(`${s.replace(' ', 'T')}Z`).getTime();
+
 async function main(): Promise<void> {
     console.log('\n🧪 S489 — agendador respeita os cinco campos do cron\n');
     const db = new Database(':memory:');
@@ -64,7 +66,8 @@ async function main(): Promise<void> {
     }
 
     console.log('\nO que não é horário nem cron é recusado (nada some sem aviso)');
-    for (const entrada of ['toda segunda 9h', 'às 8h', '8:30, 12h', '25h', '8:61', '61 8 * * *', '0 24 * * *', '0 9 * * 8', '* * *', 'MON 9']) {
+    for (const entrada of ['toda segunda 9h', 'às 8h', '8:30, 12h', '25h', '8:61', '61 8 * * *', '0 24 * * *', '0 9 * * 8', '* * *', 'MON 9',
+        '6 8 10 12 3']) {   // revisão 19/11: cinco números soltos são ambíguos (cron ou lista de horas)
         const gravado = svc.parseTimeInput(entrada);
         assert(gravado === '', `"${entrada}" recusado`, gravado);
     }
@@ -159,6 +162,41 @@ async function main(): Promise<void> {
             const segundo = fila.shift();
             assert(!!segundo && segundo.ms >= 60_000, 'o próximo disparo fica um minuto depois do que disparou (sem repetir o mesmo minuto)', { primeiro: primeiro.ms, segundo: segundo?.ms });
             db5.close();
+        } finally {
+            (global as unknown as { setTimeout: unknown }).setTimeout = original;
+        }
+    }
+
+    console.log('\nDisparo perdido com o NewClaw fora do ar dispara uma vez ao voltar (decisão da operadora, 19/11/2026)');
+    {
+        const original = global.setTimeout;
+        (global as unknown as { setTimeout: unknown }).setTimeout = (() => 0) as unknown;
+        try {
+            const db6 = new Database(':memory:');
+            const s7 = new SchedulerService(':memory:', db6);
+            const agoraTeste = em(2026, 11, 19, 17, 30);
+            const sqlite = (d: Date) => d.toISOString().slice(0, 19).replace('T', ' ');
+            const base = { id: 1, chat_id: 'c', channel: 'web', label: 'x', cron_expr: '0 17 * * *', action_type: 'custom', action_params: '{}', active: 1 } as any;
+            const perdido = s7.disparoPerdido({ ...base, last_run: sqlite(em(2026, 11, 18, 17, 0)), created_at: sqlite(em(2026, 11, 1, 10, 0)) }, agoraTeste);
+            assert(texto(perdido) === '19/11/2026 17:00', 'último disparo ontem 17h, agora 17h30: perdeu o de hoje 17h', texto(perdido));
+            assert(s7.disparoPerdido({ ...base, last_run: sqlite(em(2026, 11, 19, 17, 0)), created_at: null }, agoraTeste) === null, 'já disparou hoje: nada perdido');
+            assert(s7.disparoPerdido({ ...base, last_run: null, created_at: sqlite(em(2026, 11, 19, 17, 10)) }, agoraTeste) === null, 'criada depois do horário: nada perdido');
+            assert(s7.disparoPerdido({ ...base, last_run: null, created_at: null }, agoraTeste) === null, 'sem data de referência: não adivinha');
+            assert(texto(s7.disparoPerdido({ ...base, last_run: sqlite(em(2026, 11, 10, 17, 0)), created_at: null }, agoraTeste)) === '11/11/2026 17:00',
+                'vários perdidos: devolve o primeiro (um disparo só)');
+
+            // startAll de verdade: tarefa com last_run de 3 dias atrás dispara uma vez, com o fato do atraso.
+            db6.prepare("INSERT INTO scheduled_tasks (chat_id, channel, label, cron_expr, active, last_run) VALUES ('c', 'web', 'diaria', '0 17 * * *', 1, datetime('now', '-3 days'))").run();
+            db6.prepare("INSERT INTO scheduled_tasks (chat_id, channel, label, cron_expr, active, last_run) VALUES ('c', 'web', 'em-dia', '* * * * *', 1, datetime('now', '+1 minute'))").run();
+            const disparos: Array<{ label: string; atrasadoDe?: Date }> = [];
+            s7.setTriggerHandler(async (t, info) => { disparos.push({ label: t.label, atrasadoDe: info?.atrasadoDe }); });
+            s7.startAll();
+            await new Promise(r => setImmediate(r));
+            assert(disparos.length === 1 && disparos[0].label === 'diaria' && disparos[0].atrasadoDe instanceof Date,
+                'startAll dispara só a tarefa atrasada, uma vez, com atrasadoDe', disparos);
+            const depois = db6.prepare("SELECT last_run FROM scheduled_tasks WHERE label = 'diaria'").get() as { last_run: string };
+            assert(Date.now() - (lerUtc(depois.last_run)) < 60_000, 'o disparo atrasado grava last_run (não repete no próximo boot)', depois.last_run);
+            db6.close();
         } finally {
             (global as unknown as { setTimeout: unknown }).setTimeout = original;
         }
