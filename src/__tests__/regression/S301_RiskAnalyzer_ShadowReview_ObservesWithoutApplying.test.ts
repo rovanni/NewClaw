@@ -92,8 +92,32 @@ async function main(): Promise<void> {
     } as unknown as import('../../core/ProviderFactory').ProviderFactory;
     const analyzer = new RiskAnalyzer(provider, ToolRegistry, fakeReflectionMemory, noStub);
 
-    console.log('\n=== S301-1 — flag desligada: comportamento de sempre (revisão aplicada) ===');
-    delete process.env.RISK_REVIEW_SHADOW;
+    console.log('\n=== S301-0 — padrão (19/11/2026): revisor por LLM desligado, nenhuma chamada ===');
+    delete process.env.RISK_REVIEW_LLM;
+    {
+        let chamadas = 0;
+        const contador = { ...provider, chatWithFallback: async (...a: unknown[]) => { chamadas++; return (provider as any).chatWithFallback(...a); } } as unknown as import('../../core/ProviderFactory').ProviderFactory;
+        const semLLM = new RiskAnalyzer(contador, ToolRegistry, fakeReflectionMemory, noStub);
+        const plan = realPlan();
+        const { value: report, lines } = await captureLogs(async () => {
+            const r = await semLLM.analyze(makeGoal('x'), plan, []);
+            await new Promise(res => setTimeout(res, 50));
+            return r;
+        });
+        assert(chamadas === 0, 'nenhuma chamada de LLM (nem em segundo plano)', chamadas);
+        assert(report.planAdjusted === false && report.adjustedPlan.length === 2 && !report.planRejected, 'plano do Planner intacto', report.adjustedPlan.length);
+        assert(shadowRecords(lines).length === 0, 'nenhuma linha [RISK-SHADOW]');
+        process.env.RISK_REVIEW_SHADOW = 'true';   // a variável antiga não religa nada
+        const antigo = await captureLogs(async () => { const r = await semLLM.analyze(makeGoal('x'), realPlan(), []); await new Promise(res => setTimeout(res, 50)); return r; });
+        assert(chamadas === 0 && shadowRecords(antigo.lines).length === 0, 'RISK_REVIEW_SHADOW=true sozinha não liga a sombra', chamadas);
+        delete process.env.RISK_REVIEW_SHADOW;
+        process.env.RISK_REVIEW_LLM = 'qualquer';
+        const estranho = await captureLogs(() => semLLM.analyze(makeGoal('x'), realPlan(), []));
+        assert(chamadas === 0 && estranho.lines.map(strip).some(l => l.includes('RISK_REVIEW_LLM="qualquer"')), 'valor desconhecido: fica desligado e diz o fato no log', chamadas);
+    }
+
+    console.log('\n=== S301-1 — RISK_REVIEW_LLM=aplicar: revisão aplicada ===');
+    process.env.RISK_REVIEW_LLM = 'aplicar';
     {
         const plan = realPlan();
         const { value: report, lines } = await captureLogs(() => analyzer.analyze(makeGoal('x'), plan, []));
@@ -102,8 +126,8 @@ async function main(): Promise<void> {
         assert(shadowRecords(lines).length === 0, 'nenhuma linha [RISK-SHADOW]');
     }
 
-    console.log('\n=== S301-2 — flag ligada: plano real é o do Planner; nada da revisão o atravessa ===');
-    process.env.RISK_REVIEW_SHADOW = 'true';
+    console.log('\n=== S301-2 — RISK_REVIEW_LLM=sombra: plano real é o do Planner; nada da revisão o atravessa ===');
+    process.env.RISK_REVIEW_LLM = 'sombra';
     {
         const plan = realPlan();
         const goal = makeGoal('x');
@@ -181,7 +205,7 @@ async function main(): Promise<void> {
         assert(!/\[RiskAnalyzer\] (LLM review|adjusted step)/.test(txt), 'sem prefixo "[RiskAnalyzer]" de efeito real nas linhas da revisão', txt.match(/\[RiskAnalyzer\][^\n]{0,60}/g));
     }
 
-    delete process.env.RISK_REVIEW_SHADOW;
+    delete process.env.RISK_REVIEW_LLM;
     console.log(`\nS301 RESULTADO: ✅ ${passed} passou | ❌ ${failed} falhou`);
     if (failed > 0) process.exitCode = 1;
 }

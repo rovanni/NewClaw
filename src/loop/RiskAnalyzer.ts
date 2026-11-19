@@ -123,9 +123,30 @@ function stableStringify(value: unknown): string {
     return `{${keys.map(k => `${JSON.stringify(k)}:${stableStringify((value as Record<string, unknown>)[k])}`).join(',')}}`;
 }
 
+// ── Modo da revisão por LLM: `RISK_REVIEW_LLM` = desligado (padrão) | sombra | aplicar ────────
+//
+// Decisão da operadora (19/11/2026), depois da medição da sombra: de 22/10 a 16/11, 51 revisões, 0 rejeições e
+// 12 reescritas não aplicadas; na VPS as 8 reescritas concluíram mesmo sem a reescrita. Antes da sombra, com a revisão
+// aplicada, os planos reescritos concluíram 42 de 115 e os mantidos 13 de 13. Por isso o padrão passou a ser
+// DESLIGADO: nenhuma chamada de LLM, só as checagens determinísticas acima. O bloqueio de comando perigoso
+// (`isDestructive`, modo SAFE) não depende deste modo. `sombra` e `aplicar` continuam disponíveis para medir de novo.
+// Valor desconhecido: registra o fato no log e fica no padrão. `RISK_REVIEW_SHADOW` (a variável antiga) não é mais lida.
+export type ModoDaRevisaoDeRisco = 'desligado' | 'sombra' | 'aplicar';
+let modoDesconhecidoAvisado = '';
+export function modoDaRevisaoDeRisco(): ModoDaRevisaoDeRisco {
+    const v = (process.env.RISK_REVIEW_LLM ?? '').trim().toLowerCase();
+    if (v === '' || v === 'desligado') return 'desligado';
+    if (v === 'sombra' || v === 'aplicar') return v;
+    if (modoDesconhecidoAvisado !== v) {
+        modoDesconhecidoAvisado = v;
+        log.warn(`[RiskAnalyzer] RISK_REVIEW_LLM="${process.env.RISK_REVIEW_LLM}" não é desligado, sombra nem aplicar — usando o padrão (desligado)`);
+    }
+    return 'desligado';
+}
+
 // ── Modo sombra da revisão por LLM (campanha S-D, issue 048) ─────────────────────────────────
 //
-// Opt-in EXPLÍCITO (`RISK_REVIEW_SHADOW=true`, lido a cada chamada, mesmo padrão de
+// Opt-in EXPLÍCITO (`RISK_REVIEW_LLM=sombra`, lido a cada chamada, mesmo padrão de
 // `COGNITIVE_KERNEL_APPLY_DECISION` em CognitiveKernelGate.ts: observar sem aplicar). Desligado —
 // o padrão — `analyze()` é exatamente o que era. Ligado, o revisor roda em segundo plano sobre
 // CÓPIAS do plano e do goal, e o que ele propõe NÃO chega ao plano real, aos `risks` nem ao
@@ -222,7 +243,7 @@ export class RiskAnalyzer {
 
     /** Opt-in explícito da campanha S-D — desligado por padrão (ver "Modo sombra" acima). */
     static shadowModeEnabled(): boolean {
-        return process.env.RISK_REVIEW_SHADOW === 'true';
+        return modoDaRevisaoDeRisco() === 'sombra';
     }
 
     /**
@@ -504,7 +525,10 @@ export class RiskAnalyzer {
         // cá — `llmResult` fica neutro (plano original, sem riscos de LLM, sem rejeição). O plano
         // real é o do Planner. Ver o bloco "Modo sombra" acima de `RiskAnalyzer`.
         let llmResult: Awaited<ReturnType<RiskAnalyzer['reviewPlanWithLLM']>>;
-        if (RiskAnalyzer.shadowModeEnabled()) {
+        const modo = modoDaRevisaoDeRisco();
+        if (modo === 'desligado') {
+            llmResult = { risks: [], adjustedPlan: plan, planAdjusted: false };
+        } else if (modo === 'sombra') {
             void this.observeShadowReview(goal, plan);
             llmResult = { risks: [], adjustedPlan: plan, planAdjusted: false };
         } else {

@@ -32,6 +32,9 @@ import { ProviderFactory } from '../../core/ProviderFactory';
 import { ReflectionMemory } from '../../memory/ReflectionMemory';
 import { vereditoRisco, tipoDaPerguntaDoMotor, orcamentoDeTeste } from './_fixtures/veredito';
 
+// Este teste exercita a revisão de risco por LLM aplicada; desde 19/11/2026 o padrão é desligado (RISK_REVIEW_LLM).
+process.env.RISK_REVIEW_LLM = "aplicar";
+
 let passed = 0;
 let failed = 0;
 function assert(condition: boolean, message: string, detail?: unknown): void {

@@ -1,5 +1,7 @@
 # ADR-025 — O trabalho não se perde: comando em segundo plano e raciocínio que continua
 
+> **Decisão da operadora (19/11/2026): continua experimental e desligada.** Medição de 01/10 a 18/11 (tabela `tool_decisions`): no Windows, 61 `exec_command` passaram de 60 s, somando 296 min (o maior, 85 min), e 115 teriam ido para segundo plano (`[EXEC-SEGUNDO-PLANO-SOMBRA]`); na VPS, 2 passaram de 60 s (o maior, 98 s). Ligar não encurta a resposta: o passo direto do objetivo continua esperando o comando, e na conversa cada `consultar`/`aguardar` é mais uma chamada do modelo. O corte por relógio, que fazia o trabalho se perder, saiu com a ADR-027.
+
 > **Estado conferido em 05/11/2026 (Operação Zero Pendências):** **implementada em modo experimental**, desligada por padrão (`EXEC_EM_SEGUNDO_PLANO=1`; `exec_command` com `acompanhar`). Conferido em 05/11/2026: desligada nas duas produções. Ligar por padrão é decisão da operadora, depois de medição (relatório da Operação Zero Pendências). O status original fica abaixo, como histórico.
 
 Data: 16/10/2026. Status: **proposta** (direção aprovada pela operadora; fases de medição e implementação a seguir).

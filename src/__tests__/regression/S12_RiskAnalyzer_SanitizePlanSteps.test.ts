@@ -37,6 +37,9 @@ import { SendDocumentTool } from '../../tools/send_document';
 import { Goal, PlanStep } from '../../loop/GoalTypes';
 import { vereditoRiscoDaRevisao, tipoDaPerguntaDoMotor, orcamentoDeTeste } from './_fixtures/veredito';
 
+// Este teste exercita a revisão de risco por LLM aplicada; desde 19/11/2026 o padrão é desligado (RISK_REVIEW_LLM).
+process.env.RISK_REVIEW_LLM = "aplicar";
+
 let passed = 0;
 let failed = 0;
 
