@@ -74,6 +74,15 @@ function main(): void {
         assert(comEnv.codigo === 0, 'sai com 0', comEnv);
         assert(j.workspace === path.resolve(inst, '../meu-workspace'), 'workspace do .env, resolvido a partir da instalação', j);
         assert(j.skills === path.resolve(inst, 'minhas-skills'), 'skills do .env (aspas removidas)', j);
+
+        console.log('\n=== S496-4 — .env salvo no Windows (CRLF e BOM) também vale ===');
+        // Achado na validação real da sprint 12: com CRLF, readEnv() não casava nenhuma linha e a CLI ignorava o .env.
+        fs.writeFileSync(path.join(inst, '.env'), '\uFEFFWORKSPACE_DIR=../ws-crlf\r\nSKILLS_DIR=./sk-crlf\r\n');
+        const crlf = rodar(inst);
+        try { j = JSON.parse(crlf.saida); } catch { j = {}; }
+        assert(crlf.codigo === 0, 'sai com 0', crlf);
+        assert(j.workspace === path.resolve(inst, '../ws-crlf'), 'WORKSPACE_DIR lido de .env com CRLF e BOM', j);
+        assert(j.skills === path.resolve(inst, 'sk-crlf'), 'SKILLS_DIR lido de .env com CRLF', j);
     } finally {
         try { fs.rmSync(base, { recursive: true, force: true }); } catch { /* ok */ }
     }
