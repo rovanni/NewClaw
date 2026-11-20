@@ -38,7 +38,7 @@ Requisitos que continuam valendo:
 | **Medido** | TTS, STT, conexão WebRTC, tempo até a primeira fala e interrupção (tabela de latência). Linha de base do NewClaw a partir dos logs |
 | **Achados que pedem decisão** | Binários **GPL** (`libx264`, `libx265`) dentro do pacote PyAV para Linux, que o WebRTC do Pipecat exige; LGPL em `soxr` e `num2words`; o Kokoro do lab não envia o áudio em partes (texto longo espera tudo e dispara um aviso de "contexto sem áudio" aos ~3 s) |
 | **Não provado ainda** | Interrupção por voz real (precisa de microfone real; o protótipo dela já faz isso); pacotes do Pipecat no Windows; tempo de aceitação, de progresso e de polling no NewClaw (exige instância isolada do NewClaw) |
-| **Decisões** | R1, L1, H1, H3, D1–D8 e D15 aprovadas e D9 adiada em 29/10 (seções "Decisões da operadora" e "Decisões D1–D8"); H2 aprovada pela D4; H4 segue proposta |
+| **Decisões** | R1, L1, H1, H3, D1–D8 e D15 aprovadas e D9 adiada em 29/10 (seções "Decisões da operadora" e "Decisões D1–D8"); H2 aprovada pela D4; em 19/11, H4 aprovada como implementada e D9 recusada |
 
 ## Etapa 0 — Resultados por prioridade
 
@@ -253,7 +253,7 @@ precisar de mais de um formato.
 | H1 | Forma do harness | Um processo: interface + login + repasse + sinalização + motor de voz | **aprovada** (29/10) — subprocesso permitido se uma dependência exigir |
 | H2 | Frase a frase no TTS | Sim (por pontuação) | **aprovada** pela D4 (29/10) |
 | H3 | HTTPS para acesso remoto | O harness termina TLS com certificado do usuário, opcional; sem ele, só `localhost` com microfone | **aprovada com critérios** (29/10) |
-| H4 | STUN/TURN | Nenhum por padrão; `enableDefaultIceServers: false` | proposta |
+| H4 | STUN/TURN | Nenhum por padrão (proposta original: `enableDefaultIceServers: false`) | **aprovada** (19/11) como implementada no newclaw-ivox: nenhum servidor por padrão, nenhum servidor público embutido; `VOZ_ICE_SERVIDORES` opcional (`stun:`, `turn:`, `turns:`), validada em `configuracao.py`; vazia, o servidor não passa ICE nenhum |
 | D1 | Onde o Pipecat roda | Na infraestrutura que o usuário configurar, de preferência junto ao harness; nenhuma máquina nem sistema como requisito | **aprovada** (29/10) |
 | D2 | STT | Em tempo real, no harness/Pipecat, com provedor configurável; o texto vai ao NewClaw pela API existente; o Core não muda | **aprovada** (29/10); **revista** em 29/10 — transcrição local no harness (seção "Revisão de 29/10/2026") |
 | D3 | Cancelar | Botão Parar, separando "interromper o áudio" de "cancelar a tarefa" (esta com confirmação); comando de voz depois | **aprovada** (29/10) |
@@ -262,7 +262,7 @@ precisar de mais de um formato.
 | D6 | Progresso | Só eventos significativos confirmados pelo backend; nada repetitivo nem fictício | **aprovada** (29/10) |
 | D7 | Som e voz | Sinal curto, independente do TTS, quando o pedido é aceito; Kokoro como opção inicial, voz e idioma configuráveis; sem TTS, modo texto | **aprovada** (29/10); **revista** em 29/10 — síntese local no harness (seção "Revisão de 29/10/2026") |
 | D8 | Modelo | Roteamento do Cognitive Kernel preservado; nenhum modelo fixo no harness; mudança só depois de medir por etapa | **aprovada** (29/10) |
-| D9 | Link no painel | Nenhum link específico da interface de voz no painel | **adiada** (29/10) — o harness é acessado diretamente |
+| D9 | Link no painel | Nenhum link específico da interface de voz no painel | **recusada** (19/11; adiada em 29/10) — o harness é acessado diretamente |
 | D10 | Ao reabrir | Mostrar sem falar, pelo histórico (com o `id` que a lista de conversas dá para o `sessionId`) | mantida, alinhada à D5 |
 | D11 | Ação perigosa | Só por clique; nunca por voz (coerente com a D3: nada de efeito por comando de voz nesta fase) | mantida |
 | D12–D13 | Supervisão e transporte | O harness cuida de si (sem PM2 do núcleo); SmallWebRTC | revistas |
@@ -300,8 +300,9 @@ precisar de mais de um formato.
   - preserva os consumidores existentes e tem testes de conformidade;
   - é independente da interface de voz e de qualquer fornecedor de voz;
   - não mexe em memória, roteamento de modelos nem execução.
-- **D9 — adiada.** Nenhum link da interface de voz no painel agora. Uma integração futura pode vir por um mecanismo genérico de
-  extensões, sem o núcleo depender da interface de voz.
+- **D9 — adiada** em 29/10; **recusada** pela operadora em 19/11/2026. Não haverá link da interface de voz no painel: a
+  voz continua aberta pelo endereço dela. Se um dia o painel ganhar um mecanismo genérico de extensões, isso vira uma ADR
+  nova, sem o núcleo depender da interface de voz.
 
 **Etapa 1 autorizada** só para o contrato público de turnos no repositório do NewClaw, sem push nem deploy, sem Pipecat, React
 ou dependência do harness no Core, e sem migrar painel nem suplemento. Resultado: `docs/CONTRATO_DO_TURNO.md`.
