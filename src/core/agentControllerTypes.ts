@@ -44,6 +44,8 @@ export interface NewClawConfig {
     localModelsDir?: string;
     /** Modelo de embedding escolhido pelo usuário (EMBED_MODEL). Vazio = embeddings desligados; a busca segue por palavras. */
     embedModel?: string;
+    /** Configurações → Validadores (CONFERENCIA_DA_CONVERSA): a conversa direta é conferida contra a evidência? Sem a variável, não. */
+    conferenciaDaConversa?: 'ligada' | 'desligada';
     /** Opções extras de carregamento por arquivo de modelo: `{ "modelo.gguf": "-fit off --n-gpu-layers 12" }`.
      *  Nunca vem preenchido de fábrica — o valor certo depende da GPU e da RAM de CADA máquina
      *  (`--n-gpu-layers 12` é a divisão ideal numa placa de 16GB e errada em outra), então é

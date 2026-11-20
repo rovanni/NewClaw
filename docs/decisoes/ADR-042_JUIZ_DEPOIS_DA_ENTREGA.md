@@ -88,3 +88,23 @@ Riscos que ficam:
 - Reverter é tirar um `if`: o caminho síncrono continua no código e é usado quando a A3 não se aplica.
 - Critério de sucesso: na conversa direta, o tempo até a resposta deixa de incluir o juiz. Medir a mediana e o p90 de
   `message_received → processing_done` por duas semanas e comparar com 03–16/11.
+
+## Revisão de 19/11/2026 (noite) — a conferência da conversa vira opção, desligada por padrão
+
+Testando a produção, a operadora achou que a marca "Conferindo esta resposta…" deveria ser opcional, e decidiu:
+
+- **Sem a marca, sem o juiz.** A opção desliga a conferência inteira da conversa direta: não há marca, não há juiz contra
+  a evidência, nem antes nem depois da entrega, e não chega correção depois. Ela recusou deixar o juiz rodando sem a marca,
+  porque uma correção que chega sem aviso surpreende.
+- **No painel**, em Configurações → Validadores: "Conferir as respostas da conversa". Vale na hora, para todos os canais, e
+  fica gravada no `.env` como `CONFERENCIA_DA_CONVERSA=ligada|desligada`.
+- **Desligada por padrão.** Sem a variável, a conversa direta não é conferida. Ligada, o comportamento é o das D1–D3 acima.
+- **O passo de objetivo continua sempre conferido**: o veredito alimenta o replanejamento, e a opção não o alcança.
+- **A tarefa agendada segue a opção**, porque chega ao `AgentLoop` como turno direto, sem passo de objetivo (achado do
+  code-review). O texto do painel diz isso.
+
+Responsabilidade: é escolha da operadora (`docs/ARCHITECTURE/SOBERANIA_DA_CONFIGURACAO.md`). O NewClaw não troca a escolha
+sozinho, e o caminho desligado grava `[GROUNDING-TRACE]` com `path: conversation_check_off`, para a medição separar os
+turnos que não foram conferidos.
+
+`JUIZ_DEPOIS_DA_ENTREGA=desligado` não muda: com a conferência ligada, põe o juiz de volta na frente da resposta.

@@ -109,6 +109,8 @@ function makeExecLoop(attempts: GoalAttempt[], plans: PlanStep[][]): GoalExecuti
 }
 
 async function main(): Promise<void> {
+// Este teste julga a conversa direta, que desde 19/11/2026 só é conferida com a opção do painel ligada (S494).
+process.env.CONFERENCIA_DA_CONVERSA = 'ligada';
 
 console.log('\n=== S320-1 — AgentLoop: bloqueio sai como fato estruturado, com o estado e as afirmações não confirmadas ===');
 {

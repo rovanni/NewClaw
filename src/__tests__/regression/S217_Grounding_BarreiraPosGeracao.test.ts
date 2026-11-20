@@ -321,7 +321,9 @@ console.log('\n=== S217-16 — exceção do próprio gate → UNVALIDATED → bl
     // 17/08/2026: evidences passou a mesclar priorStepEvidence (evidência de steps anteriores do
     // mesmo goal — ver S248) antes de chamar o juiz; o texto exato mudou, mas o locator continua
     // ancorado na mesma declaração (agora multi-linha), não em heurística de proximidade.
-    const ini = agent.indexOf('const evidences = [...AgentLoop.evidencesFromTrace(trace)');
+    // 19/11/2026 (S494): logo depois de `evidences` vem o desvio da conferência da conversa desligada (sem juiz, `return
+    // response;`); o gate do juiz começa depois dele, no desvio da A3.
+    const ini = agent.indexOf('if (AgentLoop.juizDepoisDaEntrega(channelContext', agent.indexOf('const evidences = [...AgentLoop.evidencesFromTrace(trace)'));
     const gate = agent.slice(ini, agent.indexOf('return response;', ini));
     assert(ini > 0 && gate.length > 0, 'o gate foi localizado no fonte', { ini, len: gate.length });
     assert(/try\s*\{[\s\S]*validateGrounding\(/.test(gate), 'a chamada ao juiz está dentro de um try próprio', gate.slice(0, 200));
