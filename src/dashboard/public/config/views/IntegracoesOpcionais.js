@@ -30,7 +30,7 @@ export function renderOpcionais(alvo) {
     try {
       const { integracoes } = await json(API);
       if (parado) return;
-      alvo.innerHTML = '';
+      alvo.replaceChildren();
       for (const i of integracoes) {
         const card = document.createElement('div');
         card.className = 'provider-card wide';
@@ -124,7 +124,7 @@ export function renderOpcionais(alvo) {
       const completas = () => opcoes.filter(visivel).every((o) => escolhas[o.id]);
       const verLicencas = card.querySelector('[data-ver-licencas]');
       const redesenhar = () => {
-        caixa.innerHTML = '';
+        caixa.replaceChildren();
         for (const o of opcoes.filter(visivel)) {
           const linha = document.createElement('label');
           linha.style.cssText = 'display: grid; gap: 4px; font-size: 0.9rem;';
@@ -137,7 +137,7 @@ export function renderOpcionais(alvo) {
             escolhas[o.id] = ev.target.value || undefined;
             // Esconder uma escolha apaga o valor dela: só vai para a instalação o que está na tela.
             for (const x of opcoes) if (!visivel(x)) delete escolhas[x.id];
-            card.querySelector('.opc-licencas').innerHTML = '';
+            card.querySelector('.opc-licencas').replaceChildren();
             redesenhar();
           });
           caixa.appendChild(linha);

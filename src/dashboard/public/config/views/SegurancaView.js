@@ -105,7 +105,7 @@ export function render(container) {
     } else if (auth.envManaged && auth.enabled) {
       sourceEl.innerHTML = `<br>${t('auth_env_managed_note')}`;
     } else {
-      sourceEl.innerHTML = '';
+      sourceEl.replaceChildren();
     }
   }
 

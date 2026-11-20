@@ -645,7 +645,7 @@ export function createMaintenanceRouter(ctx: { controller?: unknown } = {}): Rou
                     const m = lerManifesto(path.join(cfg.pasta!, e.name));
                     if (e.name === minha) { meuManifesto = m; continue; }
                     if (!m) continue;
-                    const ultimo = [...m.pacotes].sort((a, b) => b.numero - a.numero)[0];
+                    const ultimo = m.pacotes.toSorted((a, b) => b.numero - a.numero)[0];
                     outras.push({ subpasta: e.name, id: m.id, nome: m.nome, sistema: m.sistema, app: m.app, atualizadoEm: m.atualizadoEm, ultimoPacote: ultimo?.numero, contagens: ultimo?.contagens });
                 }
             }
@@ -654,7 +654,7 @@ export function createMaintenanceRouter(ctx: { controller?: unknown } = {}): Rou
                 const db = new Database(path.join(DIR, 'data', 'newclaw.db'), { readonly: true });
                 try { soDestaMaquina = (db.prepare('SELECT COUNT(*) n FROM memory_nodes WHERE so_desta_maquina = 1').get() as { n: number }).n; } finally { db.close(); }
             } catch { /* coluna ainda não migrada */ }
-            const ultimo = meuManifesto ? [...meuManifesto.pacotes].sort((a, b) => b.numero - a.numero)[0] : undefined;
+            const ultimo = meuManifesto ? meuManifesto.pacotes.toSorted((a, b) => b.numero - a.numero)[0] : undefined;
             res.json({
                 success: true,
                 config: cfg,

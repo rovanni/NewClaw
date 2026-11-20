@@ -148,7 +148,7 @@ export function mountLocalModelWizard(container, { ensureLocalProvider, computeS
         </div>`;
       document.getElementById('ml-wizardScanBtn')?.addEventListener('click', saveDirAndRefresh('ml-wizardDir'));
       document.getElementById('ml-wizardDir')?.addEventListener('keydown', e => {
-        if (e.key === 'Enter') document.getElementById('ml-wizardScanBtn')?.click();
+        if (e.key === 'Enter') { e.preventDefault(); if (e.isComposing || e.keyCode === 229) return; document.getElementById('ml-wizardScanBtn')?.click(); }
       });
     } else if (state.step === 'folder_error') {
       panel.className = 'ml-test-result ml-test-fail';

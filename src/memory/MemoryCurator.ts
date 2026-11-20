@@ -162,7 +162,7 @@ export class MemoryCurator {
         }
 
         // Chain daily nodes chronologically
-        const sorted = [...dailyOrphans].sort((a, b) => a.id.localeCompare(b.id));
+        const sorted = dailyOrphans.toSorted((a, b) => a.id.localeCompare(b.id));
         for (let i = 0; i < sorted.length - 1; i++) {
             if (!edges.some(e => e.from_node === sorted[i].id && e.to_node === sorted[i + 1].id && e.relation === 'next')) {
                 this.addEdgeSafe(sorted[i].id, sorted[i + 1].id, 'next');
@@ -812,7 +812,7 @@ export class MemoryCurator {
         domainId: string,
         type: string
     ): { id: string; type: 'fact' | 'preference' | 'skill' | 'knowledge'; name: string; content: string; confidence: number; weight: number; metadata: Record<string, string>; last_updated: string } {
-        const sorted = [...nodes].sort((a, b) => (b.confidence ?? 0) - (a.confidence ?? 0));
+        const sorted = nodes.toSorted((a, b) => (b.confidence ?? 0) - (a.confidence ?? 0));
         const domainName = getDomainById(domainId)?.name ?? domainId.replace('domain_', '').toUpperCase();
 
         const topContent = sorted

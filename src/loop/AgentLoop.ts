@@ -2664,7 +2664,7 @@ export class AgentLoop {
                 const targetTool = successfulExecutions[0].tool;
                 const turnState = this.getTurnState(conversationId);
                 const directOutput = turnState.lastToolExecution?.toolOutput
-                    ?? loopMessages.slice().reverse().find(m => m.role === 'tool')?.content;
+                    ?? loopMessages.findLast(m => m.role === 'tool')?.content;
 
                 if (typeof directOutput === 'string' && directOutput.trim().length > 0) {
                     log.info(`[${this.ts()}] [SYNTHESIS-BYPASS] Direct delivery of ${targetTool} result (${directOutput.length} chars)`);
@@ -2747,8 +2747,8 @@ export class AgentLoop {
             // For info-retrieval, include ALL tool outputs (budget 2400 chars) so the LLM has actual
             // data to synthesize — not just the last result (which may be an error).
             // For other cases, include only the last tool output to keep context lean.
-            const _synthLastUser = loopMessages.slice().reverse().find(m => m.role === 'user');
-            const _synthLastTool = loopMessages.slice().reverse().find(m => m.role === 'tool');
+            const _synthLastUser = loopMessages.findLast(m => m.role === 'user');
+            const _synthLastTool = loopMessages.findLast(m => m.role === 'tool');
             const synthToolMessages: LLMMessage[] = [];
             if (isInfoRetrieval) {
                 const toolMsgs = loopMessages.filter(m => m.role === 'tool');
@@ -2835,8 +2835,8 @@ export class AgentLoop {
         move('SYNTHESIS_REQUIRED', { step: stepCount, reason: 'fallback' });
         // Same trim as post-loop synthesis to prevent thinking timeout on large contexts.
         // Include last tool output (truncated) so the model has real data to reference.
-        const _fbLastUser = loopMessages.slice().reverse().find(m => m.role === 'user');
-        const _fbLastTool = loopMessages.slice().reverse().find(m => m.role === 'tool');
+        const _fbLastUser = loopMessages.findLast(m => m.role === 'user');
+        const _fbLastTool = loopMessages.findLast(m => m.role === 'tool');
         const fallbackSynthMessages: LLMMessage[] = [
             loopMessages[0],
             ...(_fbLastUser ? [_fbLastUser] : []),

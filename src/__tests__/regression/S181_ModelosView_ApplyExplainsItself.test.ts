@@ -87,11 +87,13 @@ console.log('\n=== S181-3 — verificação de rede tem teto de espera ===');
         'o teto é uma constante nomeada, não um número solto',
     );
     assert(
-        /new AbortController\(\)/.test(API) && /signal: ctrl\.signal/.test(API),
+        (/new AbortController\(\)/.test(API) && /signal: ctrl\.signal/.test(API)) ||
+        /signal:\s*AbortSignal\.timeout\(TIMEOUT_VERIFICACAO_MS\)/.test(API),
         'a requisição é abortável e o sinal é de fato passado',
     );
     assert(
-        /\} finally \{\s*clearTimeout\(timer\);\s*\}/.test(API),
+        /\} finally \{\s*clearTimeout\(timer\);\s*\}/.test(API) ||
+        /AbortSignal\.timeout\(TIMEOUT_VERIFICACAO_MS\)/.test(API),
         'o timer é limpo em qualquer desfecho — sucesso, erro ou abort',
     );
 }

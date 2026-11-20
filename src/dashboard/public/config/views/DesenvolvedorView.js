@@ -85,7 +85,7 @@ function renderPatterns(s) {
   const pEl = document.getElementById('dashPatterns');
   if (!pEl) return;
   if (!patterns.length) { pEl.innerHTML = `<div class="empty">${t('no_patterns_yet')}</div>`; return; }
-  const recent = [...patterns].sort((a, b) => ((b.success_count||0)+(b.fail_count||0)) - ((a.success_count||0)+(a.fail_count||0))).slice(0, 8);
+  const recent = patterns.toSorted((a, b) => ((b.success_count||0)+(b.fail_count||0)) - ((a.success_count||0)+(a.fail_count||0))).slice(0, 8);
   pEl.innerHTML = recent.map(p => {
     const total = (p.success_count||0)+(p.fail_count||0);
     const name = p.pattern.length > 42 ? p.pattern.slice(0, 40) + '…' : p.pattern;

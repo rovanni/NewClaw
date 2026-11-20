@@ -560,13 +560,12 @@ export class GoalStore {
             // correção aplicados a `buildResult()`/`resolveStepRefs()`. `?? 0` preserva goals
             // legados nunca replanejados (0 contra 0) e fecha a exceção para os que replanejam.
             const currentGeneration = goal.planGeneration ?? 0;
-            const idxFromEnd = [...goal.attempts].reverse().findIndex(a =>
+            const realIdx = goal.attempts.findLastIndex(a =>
                 a.planStepId === planStepId &&
                 (a.planGeneration ?? 0) === currentGeneration &&
                 predicate(a)
             );
-            if (idxFromEnd === -1) return;
-            const realIdx = goal.attempts.length - 1 - idxFromEnd;
+            if (realIdx === -1) return;
             const attempts = goal.attempts.map((a, i) => i === realIdx ? { ...a, ...patch } : a);
             this.update(goalId, { attempts });
             log.info(`[GoalStore] goal=${goalId} attempt updated: step=${planStepId} attemptId=${attempts[realIdx].id} patch=${JSON.stringify(patch)}`);

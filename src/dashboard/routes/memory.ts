@@ -374,9 +374,9 @@ export function createMemoryRouter(ctx: DashboardContext): Router {
             const maxEdges = nodes.length * (nodes.length - 1);
             const density = maxEdges > 0 ? totalEdges / maxEdges : 0;
 
-            const topByDegree = [...nodes].sort((a, b) => (b.degree || 0) - (a.degree || 0)).slice(0, 10).map(n => ({ id: n.id, name: n.name, type: n.type, value: n.degree }));
-            const topByBetweenness = [...nodes].sort((a, b) => (b.betweenness || 0) - (a.betweenness || 0)).slice(0, 10).map(n => ({ id: n.id, name: n.name, type: n.type, value: Math.round((n.betweenness || 0) * 100) / 100 }));
-            const topByCloseness = [...nodes].sort((a, b) => (b.closeness || 0) - (a.closeness || 0)).slice(0, 10).map(n => ({ id: n.id, name: n.name, type: n.type, value: Math.round((n.closeness || 0) * 100) / 100 }));
+            const topByDegree = nodes.toSorted((a, b) => (b.degree || 0) - (a.degree || 0)).slice(0, 10).map(n => ({ id: n.id, name: n.name, type: n.type, value: n.degree }));
+            const topByBetweenness = nodes.toSorted((a, b) => (b.betweenness || 0) - (a.betweenness || 0)).slice(0, 10).map(n => ({ id: n.id, name: n.name, type: n.type, value: Math.round((n.betweenness || 0) * 100) / 100 }));
+            const topByCloseness = nodes.toSorted((a, b) => (b.closeness || 0) - (a.closeness || 0)).slice(0, 10).map(n => ({ id: n.id, name: n.name, type: n.type, value: Math.round((n.closeness || 0) * 100) / 100 }));
 
             res.json({
                 success: true,

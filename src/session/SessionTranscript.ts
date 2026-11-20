@@ -346,9 +346,8 @@ export class SessionTranscript {
         // Optimize: If we are replaying from a sequence number, check if we have a checkpoint offset
         if (from !== undefined && from > 1) {
             // Find the closest checkpoint BEFORE or AT 'from'
-            const checkpoint = [...this.index.checkpoints]
-                .reverse()
-                .find(c => c.seq < from);
+            const checkpoint = this.index.checkpoints
+                .findLast(c => c.seq < from);
             
             if (checkpoint) {
                 startOffset = checkpoint.offset;

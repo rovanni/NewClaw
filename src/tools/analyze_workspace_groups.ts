@@ -390,7 +390,7 @@ export function discoverGroups(
         groups.push({
             id: gid,
             name,
-            files: members.slice().sort(),
+            files: members.toSorted(),
             confidence,
             reasons,
         });

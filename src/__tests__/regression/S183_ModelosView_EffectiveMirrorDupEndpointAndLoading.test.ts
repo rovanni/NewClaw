@@ -145,7 +145,7 @@ console.log('\n=== S183-6 — o handler de Enter no chat continua onde estava ==
     // pessoa que suspeitar disso encontre a resposta aqui em vez de reabrir a investigação.
     const INDEX = fs.readFileSync(PUB('index.html'), 'utf-8');
     assert(
-        /messageInput\.addEventListener\('keydown', \(e\) => \{ if \(e\.key === 'Enter' && !e\.shiftKey\) \{ e\.preventDefault\(\); sendMessage\(\); \} \}\);/.test(INDEX),
+        /messageInput\.addEventListener\('keydown', \(e\) => \{ if \(e\.key === 'Enter' && !e\.shiftKey\) \{ e\.preventDefault\(\); (?:if \(e\.isComposing \|\| e\.keyCode === 229\) return; )?sendMessage\(\); \} \}\);/.test(INDEX),
         'Enter sem Shift envia; Shift+Enter quebra linha',
     );
 }

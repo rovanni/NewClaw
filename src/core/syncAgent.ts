@@ -252,7 +252,7 @@ function outrasInstalacoes(pasta: string, minha: string): Array<{ dir: string; m
 function aplicarRetencao(dir: string, pasta: string, minha: string, idMeu: string, manifesto: ManifestoDaInstalacao): string[] {
     const outras = outrasInstalacoes(pasta, minha).filter(o => o.manifesto);
     const menorCursor = outras.length === 0 ? Infinity : Math.min(...outras.map(o => Number(o.manifesto!.importados?.[idMeu]) || 0));
-    const ordenados = [...manifesto.pacotes].sort((a, b) => b.numero - a.numero);
+    const ordenados = manifesto.pacotes.toSorted((a, b) => b.numero - a.numero);
     const manter = new Set(ordenados.slice(0, PACOTES_SEMPRE_MANTIDOS).map(p => p.numero));
     const apagar = ordenados.filter(p => !manter.has(p.numero) && p.numero < menorCursor);
     if (apagar.length === 0) return [];
@@ -356,7 +356,7 @@ async function importarDasOutras(cfg: ConfiguracaoDoSync, c: Caminhos, idMeu: st
         Object.assign(relato, { id: m.id, nome: m.nome, sistema: m.sistema, importadoAte: estado.importados[m.id] ?? 0 });
         if (m.id === idMeu) { relato.erros.push('a subpasta traz o id desta instalação (cópia da pasta de outra máquina?)'); continue; }
         if (!relato.subpasta.endsWith(`-${m.id.replace(/-/g, '').slice(0, 8)}`)) { relato.erros.push('o id do manifest.json não bate com o nome da subpasta'); continue; }
-        const maisNovo = [...m.pacotes].sort((a, b) => b.numero - a.numero)[0];
+        const maisNovo = m.pacotes.toSorted((a, b) => b.numero - a.numero)[0];
         if (!maisNovo) continue;
         relato.ultimoPacote = maisNovo.numero;
         if (maisNovo.numero <= (estado.importados[m.id] ?? 0)) continue;

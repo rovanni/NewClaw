@@ -228,7 +228,7 @@ export class ValidationEngine {
         // mudar a QUALIDADE (5 casos comparados é pouco) — por isso, por padrão, só registra (sombra); troca de verdade só com
         // JUIZ_MODO_PELO_CUSTO=1.
         if (modos.length > 1 && modos.every(m => pelaMedicao.has(m) && this.perfil.confiavel(chaveDoModelo, m))) {
-            const pelosTokens = [...modos].sort((a, b) => pelaMedicao.get(a)!.tokens - pelaMedicao.get(b)!.tokens);
+            const pelosTokens = modos.toSorted((a, b) => pelaMedicao.get(a)!.tokens - pelaMedicao.get(b)!.tokens);
             if (pelosTokens[0] !== modos[0]) {
                 const ativo = process.env.JUIZ_MODO_PELO_CUSTO === '1';
                 log.info(`[JUIZ-MODO-${ativo ? 'CUSTO' : 'SOMBRA'}] tipo=${d.tipo} modelo=${chaveDoModelo} hoje=${modos[0]} pelo_custo=${pelosTokens[0]} (${pelosTokens.map(m => `${m}=${pelaMedicao.get(m)!.tokens} tokens`).join(', ')})${ativo ? ' — usando o mais barato' : ' — só registrado (JUIZ_MODO_PELO_CUSTO desligado)'}`);

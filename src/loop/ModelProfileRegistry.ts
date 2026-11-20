@@ -249,12 +249,10 @@ Category:`;
             }
 
             // Fallback legado: Ollama direto, bypassa fila de geração
-            const controller = new AbortController();
-            const timeout = setTimeout(() => controller.abort(), 60000);
             const response = await fetch(`${this.config.classifierServer}/api/chat`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                signal: controller.signal,
+                signal: AbortSignal.timeout(60000),
                 body: JSON.stringify({
                     model: this.config.classifierModel,
                     messages: [{ role: 'user', content: prompt }],
@@ -262,7 +260,6 @@ Category:`;
                     options: { temperature: 0.1, num_predict: 10 }
                 })
             });
-            clearTimeout(timeout);
 
             if (!response.ok) throw new Error(`API error: ${response.status}`);
 
