@@ -85,3 +85,6 @@ skills/aprendida_*/
 ARCHITECTURE_REVIEW.md
 AUDIT_PART*.md
 AUDITORIA_ARQUITETURAL_COMPLETA.md
+
+# Trava local das skills do Claude Code instaladas em .claude/skills (já ignorada acima)
+skills-lock.json
