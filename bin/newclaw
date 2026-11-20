@@ -223,7 +223,9 @@ function isRunning() {
 function readEnv() {
   const env = {};
   if (fs.existsSync(ENV_FILE)) {
-    fs.readFileSync(ENV_FILE, 'utf8').split('\n').forEach(line => {
+    // CRLF e BOM como em updateEnvFile: com split('\n'), o '\r' no fim de cada linha de um .env salvo no Windows
+    // fazia a regex falhar e a CLI ignorava o arquivo inteiro, sem aviso (medido em 20/11/2026, S496).
+    fs.readFileSync(ENV_FILE, 'utf8').replace(/^\uFEFF/, '').split(/\r?\n/).forEach(line => {
       const m = line.match(/^([^#=]+)=(.*)$/);
       if (m) env[m[1].trim()] = m[2].trim().replace(/^(['"])(.*)\1$/, '$2');
     });
@@ -577,10 +579,19 @@ function updateChannelFlow(args) {
 
 // ── ADR-020: backup do conhecimento ─────────────────────────────────────────────────────────────────────────────────────
 // O módulo vive no código compilado (dist/), o mesmo que o painel usa — um só formato de pacote para os dois caminhos.
+/**
+ * Falha de comando: mensagem no stderr E código de saída 1. Sem o código, quem automatiza a CLI (o AIGESYNC roda
+ * `newclaw backup` e `newclaw import --sim`) via exit 0 e tratava uma importação que falhou como feita.
+ */
+function falharComando(mensagem) {
+  console.error(`❌ ${mensagem}`);
+  process.exitCode = 1;
+}
+
 function carregarBackupDoConhecimento() {
   const modPath = path.join(DIR, 'dist', 'core', 'backupDoConhecimento.js');
   if (!fs.existsSync(modPath)) {
-    console.error('❌ O NewClaw ainda não foi compilado nesta pasta. Rode: npm run build');
+    falharComando('O NewClaw ainda não foi compilado nesta pasta. Rode: npm run build');
     return null;
   }
   return require(modPath);
@@ -597,10 +608,10 @@ async function restaurarConhecimento(arquivo, args) {
   const mod = carregarBackupDoConhecimento();
   if (!mod) return;
   const alvo = path.resolve(arquivo);
-  if (!fs.existsSync(alvo)) { console.error(`❌ Arquivo não encontrado: ${alvo}`); return; }
+  if (!fs.existsSync(alvo)) { falharComando(`Arquivo não encontrado: ${alvo}`); return; }
   let lido;
   try { lido = await mod.lerPacote(alvo); }
-  catch (e) { console.error(`❌ ${e.message}`); return; }
+  catch (e) { falharComando(e.message); return; }
   const m = lido.manifesto, c = m.contagens || {};
   console.log(`🧠 Backup de ${m.criadoEm} (sistema ${m.sistema}, NewClaw ${m.app})`);
   console.log(`   ${c.memorias} memórias · ${c.skills} skills · ${c.conversas} conversas · ${c.arquivosDoWorkspace} arquivos de trabalho`);
@@ -618,7 +629,7 @@ async function restaurarConhecimento(arquivo, args) {
   // ADR-034: nunca ao mesmo tempo que o Sync Agent ou outra importação (trava data/sync.lock).
   let r;
   try { r = await mod.comTravaDeSync(caminhos, () => mod.restaurarPacote(alvo, { restaurarSegredos }, caminhos)); }
-  catch (e) { console.error(`❌ ${e.message}`); return; }
+  catch (e) { falharComando(e.message); return; }
   console.log(`✅ Restaurado: ${r.skills} skills${r.banco ? ', banco (aplicado no próximo início)' : ''}${r.env ? ', .env' : ''}.`);
   if (r.skillsParaRevisar.length) console.log(`⚠️  ${r.skillsParaRevisar.length} skill(s) de outro sistema ficaram para revisão (SKILL.md.revisar): ${r.skillsParaRevisar.join(', ')}`);
   console.log(`   Estado anterior guardado em: ${r.pacoteDeSeguranca}`);
@@ -630,10 +641,10 @@ async function importarConhecimento(arquivo, args) {
   const mod = carregarBackupDoConhecimento();
   if (!mod) return;
   const alvo = path.resolve(arquivo);
-  if (!fs.existsSync(alvo)) { console.error(`❌ Arquivo não encontrado: ${alvo}`); return; }
+  if (!fs.existsSync(alvo)) { falharComando(`Arquivo não encontrado: ${alvo}`); return; }
   let lido;
   try { lido = await mod.lerPacote(alvo); }
-  catch (e) { console.error(`❌ ${e.message}`); return; }
+  catch (e) { falharComando(e.message); return; }
   const m = lido.manifesto, c = m.contagens || {};
   console.log(`🔀 Conhecimento de ${m.criadoEm} (sistema ${m.sistema}, NewClaw ${m.app})`);
   console.log(`   ${c.memorias} memórias · ${c.skills} skills · ${c.conversas} conversas`);
@@ -649,7 +660,7 @@ async function importarConhecimento(arquivo, args) {
   const caminhos = caminhosParaBackup(mod);
   let r;
   try { r = await mod.comTravaDeSync(caminhos, () => mod.importarPacote(alvo, caminhos)); }
-  catch (e) { console.error(`❌ ${e.message}`); return; }
+  catch (e) { falharComando(e.message); return; }
   console.log(`✅ Memórias: ${r.memorias.importadas} novas, ${r.memorias.jaExistiam} já existiam, ${r.memorias.paraRevisar} para revisar.`);
   console.log(`   Skills: ${r.skills.novas} novas, ${r.skills.iguais} iguais, ${r.skillsAprendidas} aprendidas (banco).`);
   if (r.skills.comDiferenca.length) console.log(`   Diferentes (a local ficou; a importada em SKILL.md.importada): ${r.skills.comDiferenca.join(', ')}`);
@@ -668,7 +679,7 @@ async function migrarSkills(args) {
   const modPath = path.join(DIR, 'dist', 'skills', 'migracaoDePortabilidade.js');
   const bk = carregarBackupDoConhecimento();
   if (!bk) return;
-  if (!fs.existsSync(modPath)) { console.error('❌ O NewClaw ainda não foi compilado nesta pasta. Rode: npm run build'); return; }
+  if (!fs.existsSync(modPath)) { falharComando('O NewClaw ainda não foi compilado nesta pasta. Rode: npm run build'); return; }
   const mod = require(modPath);
   const iRaiz = args.indexOf('--raiz');
   const raiz = iRaiz >= 0 && args[iRaiz + 1] ? path.resolve(args[iRaiz + 1]) : DIR;
@@ -720,8 +731,19 @@ const commands = {
 
   async import(args = []) {
     const pacote = args.find(a => a.toLowerCase().endsWith('.zip'));
-    if (!pacote) { console.log('Use: newclaw import <arquivo.zip> — mescla o conhecimento de outra instalação.'); return; }
+    if (!pacote) { console.log('Use: newclaw import <arquivo.zip> — mescla o conhecimento de outra instalação.'); process.exitCode = 2; return; }
     return importarConhecimento(pacote, args);
+  },
+
+  /**
+   * `newclaw caminhos`: as pastas desta instalação, em JSON (uma linha). A regra que decide cada pasta (WORKSPACE_DIR e
+   * SKILLS_DIR do .env, relativos à instalação) vive só aqui; o AIGESYNC pergunta em vez de copiar a regra.
+   */
+  caminhos() {
+    const mod = carregarBackupDoConhecimento();
+    if (!mod) return;
+    const c = caminhosParaBackup(mod);
+    console.log(JSON.stringify({ raiz: c.raiz, dados: c.dados, skills: c.skills, workspace: c.workspace }));
   },
 
   start(args) {
@@ -1403,7 +1425,7 @@ const commands = {
     const scriptPath = path.join(DIR, 'scripts', script);
     
     if (!fs.existsSync(scriptPath)) {
-      console.error(`❌ Erro: Script de restauração não encontrado em ${scriptPath}`);
+      falharComando(`Erro: Script de restauração não encontrado em ${scriptPath}`);
       return;
     }
 
@@ -1421,7 +1443,7 @@ const commands = {
     const scriptPath = path.join(DIR, script);
     
     if (!fs.existsSync(scriptPath)) {
-      console.error(`❌ Erro: Script de desinstalação não encontrado em ${scriptPath}`);
+      falharComando(`Erro: Script de desinstalação não encontrado em ${scriptPath}`);
       return;
     }
 
@@ -1444,7 +1466,7 @@ const commands = {
 
     const scriptPath = path.join(DIR, 'scripts', 'fix-windows-autostart.ps1');
     if (!fs.existsSync(scriptPath)) {
-      console.error(`❌ Erro: Script de reparo não encontrado em ${scriptPath}`);
+      falharComando(`Erro: Script de reparo não encontrado em ${scriptPath}`);
       return;
     }
 
@@ -1842,6 +1864,7 @@ newclaw backup          Salva tudo o que o NewClaw aprendeu num arquivo .zip
                         (opções: --historico --workspace --segredos)
 newclaw restore <a.zip> Restaura o conhecimento de um arquivo .zip
 newclaw import <a.zip>  Mescla o conhecimento de outra instalação (não apaga nada)
+newclaw caminhos        Mostra em JSON as pastas desta instalação (dados, skills, workspace)
 newclaw skills-migrar   Planeja (ou, com --aplicar, aplica) o cabeçalho de portabilidade das skills
                         (opções: --raiz <cópia> --prefixos-de <raiz original> --pasta nome=CAMINHO
                          --adotar-soltas --aplicar)
@@ -1867,7 +1890,8 @@ Exemplos:
 
 Dicas:
   - Use --debug para ver logs detalhados (LOG_LEVEL=debug)
-  - Backups são armazenados em: ~/newclaw-backups (Linux) ou %USERPROFILE%\\newclaw-backups (Windows)
+  - "newclaw backup" grava o .zip em <pasta do NewClaw>/data/backups
+  - O instalador guarda as cópias dele em: ~/newclaw-backups (Linux) ou %USERPROFILE%\\newclaw-backups (Windows)
   - Logs detalhados em: ./logs/newclaw-stdout.log
 `);
   },
