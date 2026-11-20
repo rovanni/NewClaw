@@ -733,6 +733,17 @@ const commands = {
     return importarConhecimento(pacote, args);
   },
 
+  /**
+   * `newclaw caminhos`: as pastas desta instalação, em JSON (uma linha). A regra que decide cada pasta (WORKSPACE_DIR e
+   * SKILLS_DIR do .env, relativos à instalação) vive só aqui; o AIGESYNC pergunta em vez de copiar a regra.
+   */
+  caminhos() {
+    const mod = carregarBackupDoConhecimento();
+    if (!mod) return;
+    const c = caminhosParaBackup(mod);
+    console.log(JSON.stringify({ raiz: c.raiz, dados: c.dados, skills: c.skills, workspace: c.workspace }));
+  },
+
   start(args) {
     const debug = args.includes('--debug');
     const tail = args.includes('--tail');
@@ -1851,6 +1862,7 @@ newclaw backup          Salva tudo o que o NewClaw aprendeu num arquivo .zip
                         (opções: --historico --workspace --segredos)
 newclaw restore <a.zip> Restaura o conhecimento de um arquivo .zip
 newclaw import <a.zip>  Mescla o conhecimento de outra instalação (não apaga nada)
+newclaw caminhos        Mostra em JSON as pastas desta instalação (dados, skills, workspace)
 newclaw skills-migrar   Planeja (ou, com --aplicar, aplica) o cabeçalho de portabilidade das skills
                         (opções: --raiz <cópia> --prefixos-de <raiz original> --pasta nome=CAMINHO
                          --adotar-soltas --aplicar)
