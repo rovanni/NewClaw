@@ -1073,8 +1073,8 @@ export class AgentLoop {
      * contra a evidência (`CONFERENCIA_DA_CONVERSA=ligada`). Sem a variável, não é — padrão decidido por ela. Lida a cada turno,
      * para a troca no painel valer na hora. O passo de objetivo é sempre conferido: o veredito alimenta o replanejamento.
      */
-    static conferenciaDaConversaLigada(): boolean {
-        return (process.env.CONFERENCIA_DA_CONVERSA ?? '').trim().toLowerCase() === 'ligada';
+    static conferenciaDaConversaLigada(valor: string | undefined = process.env.CONFERENCIA_DA_CONVERSA): boolean {
+        return (valor ?? '').trim().toLowerCase() === 'ligada';
     }
 
     static juizDepoisDaEntrega(ctx: { goalTrace?: unknown; channel?: string; chatId?: string } | undefined, temAviso: boolean): boolean {

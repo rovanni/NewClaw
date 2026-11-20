@@ -98,7 +98,7 @@ const config = {
     customProviders: parseCustomProviders(process.env.CUSTOM_PROVIDERS),
     localModelsDir: process.env.LOCAL_MODELS_DIR || '',
     embedModel: (process.env.EMBED_MODEL || '').trim(),
-    conferenciaDaConversa: (AgentLoop.conferenciaDaConversaLigada() ? 'ligada' : 'desligada') as 'ligada' | 'desligada',   // uma regra só (S494)
+    conferenciaDaConversa: (AgentLoop.conferenciaDaConversaLigada(process.env.CONFERENCIA_DA_CONVERSA) ? 'ligada' : 'desligada') as 'ligada' | 'desligada',   // uma regra só (S494)
     localModelOptions: parseLocalModelOptions(process.env.LOCAL_MODEL_OPTIONS),
     // Política (NEWCLAW_NATIVE_DIRECTORY_PICKER) é lida direto de process.env dentro de
     // DirectoryPickerService — nunca guardada aqui, propositalmente (ver docstring do módulo).
