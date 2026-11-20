@@ -167,11 +167,15 @@
     .reasoning-chevron { font-size: 0.7rem; transition: transform 0.15s; color: var(--text-soft); }
     .reasoning-chip.open .reasoning-chevron { transform: rotate(90deg); }
     .reasoning-body {
-      max-height: 0; overflow: hidden; font-size: 0.8125rem; line-height: 1.55; color: var(--text-muted);
-      background: var(--bg-muted); border-radius: var(--radius-sm); transition: max-height 0.2s ease, padding 0.2s ease, margin 0.2s ease;
+      interpolate-size: allow-keywords;
+      block-size: 0; max-block-size: 320px; overflow: hidden; font-size: 0.8125rem; line-height: 1.55; color: var(--text-muted);
+      background: var(--bg-muted); border-radius: var(--radius-sm); transition: block-size 0.2s ease, padding 0.2s ease, margin 0.2s ease;
       padding: 0 12px; margin-bottom: 0;
     }
-    .reasoning-body.open { max-height: 320px; overflow-y: auto; padding: 10px 12px; margin-bottom: 8px; }
+    .reasoning-body.open { block-size: auto; overflow-y: auto; padding: 10px 12px; margin-bottom: 8px; }
+    @media (prefers-reduced-motion: reduce) {
+      .reasoning-body { transition: none; }
+    }
 
     .tool-card {
       display: flex; align-items: center; gap: 8px; padding: 8px 12px; margin-bottom: 8px;
@@ -349,9 +353,21 @@
     .listening-bar.active { display: flex; align-items: center; gap: 4px; }
 
     /* Scrollbars */
-    .chat-scroll::-webkit-scrollbar, .sidebar-list::-webkit-scrollbar, .reasoning-body::-webkit-scrollbar { width: 6px; }
-    .chat-scroll::-webkit-scrollbar-track, .sidebar-list::-webkit-scrollbar-track { background: transparent; }
-    .chat-scroll::-webkit-scrollbar-thumb, .sidebar-list::-webkit-scrollbar-thumb { background: var(--border-color-strong); border-radius: 3px; }
+    .chat-scroll, .sidebar-list, .reasoning-body {
+      scrollbar-width: thin;
+      scrollbar-color: var(--border-color-strong) transparent;
+    }
+    @supports not (scrollbar-color: auto) {
+      .chat-scroll, .sidebar-list, .reasoning-body { scrollbar-width: auto; }
+      .chat-scroll::-webkit-scrollbar, .sidebar-list::-webkit-scrollbar, .reasoning-body::-webkit-scrollbar { width: 6px; }
+      .chat-scroll::-webkit-scrollbar-track, .sidebar-list::-webkit-scrollbar-track { background: transparent; }
+      .chat-scroll::-webkit-scrollbar-thumb, .sidebar-list::-webkit-scrollbar-thumb { background: var(--border-color-strong); border-radius: 3px; }
+    }
+    #messageInput {
+      field-sizing: content;
+      height: auto;
+      max-block-size: 140px;
+    }
 
     @media (max-width: 640px) {
       .chat-scroll, .composer-outer { padding-left: 12px; padding-right: 12px; }
@@ -598,7 +614,6 @@
     function setComposerText(text) {
       const input = document.getElementById('messageInput');
       input.value = text;
-      input.style.height = 'auto'; input.style.height = Math.min(input.scrollHeight, 140) + 'px';
     }
     function stopVoiceInput(discardPending = false) {
       dictationStopRequested = true;
@@ -852,8 +867,7 @@
     const messageInput = document.getElementById('messageInput');
     const sendBtn = document.getElementById('sendBtn');
 
-    messageInput.addEventListener('input', () => { messageInput.style.height = 'auto'; messageInput.style.height = Math.min(messageInput.scrollHeight, 140) + 'px'; });
-    messageInput.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } });
+    messageInput.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (e.isComposing || e.keyCode === 229) return; sendMessage(); } });
 
     // === Botão "ir para o final" ===
     // Margem de 80px: sem ela o botão piscaria a cada pequeno movimento perto do fim, e a rolagem
@@ -1373,7 +1387,7 @@
     function renderPendingAuth(pending) {
       const slot = document.getElementById('authPendingSlot');
       if (!slot) return;
-      if (!pending || !pending.length) { slot.innerHTML = ''; return; }
+      if (!pending || !pending.length) { slot.replaceChildren(); return; }
       slot.innerHTML = pending.map(p => `
         <div class="auth-pending-card">
           <div class="auth-pending-title">${esc(t('auth_pending_title'))}</div>

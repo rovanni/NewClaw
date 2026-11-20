@@ -63,7 +63,7 @@ export class LifecycleManager {
         }
         this.timers.clear();
 
-        for (const service of [...this.services].reverse()) {
+        for (const service of this.services.toReversed()) {
             try {
                 await service.stop();
                 log.info('service_stopped', service.name);

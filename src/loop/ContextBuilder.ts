@@ -256,7 +256,7 @@ export class ContextBudget {
         const MINIMO_PARA_CORTAR = 50;          // abaixo disto, um pedaço do bloco não informa nada: ele sai inteiro
         const RESERVA_DA_DECLARACAO = 60;       // a linha que declara os blocos que saíram
         const posicao = new Map(blocks.map((b, i) => [b, i]));
-        const porPrioridade = [...blocks].sort((a, b) => b.priority - a.priority || posicao.get(a)! - posicao.get(b)!);
+        const porPrioridade = blocks.toSorted((a, b) => b.priority - a.priority || posicao.get(a)! - posicao.get(b)!);
         const orcamento = Math.max(0, limite - RESERVA_DA_DECLARACAO);
         const ficam = new Set<ContextBlock>();
         const sairam: ContextBlock[] = [];
@@ -501,7 +501,7 @@ function matchesAnyEntity(entities: string[], entry: MemoryIndexEntry): boolean 
 }
 
 function sortByImportance(entries: MemoryIndexEntry[]): MemoryIndexEntry[] {
-    return [...entries].sort((a, b) => b.importance - a.importance);
+    return entries.toSorted((a, b) => b.importance - a.importance);
 }
 
 /**

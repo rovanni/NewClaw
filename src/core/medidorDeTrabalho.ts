@@ -86,12 +86,12 @@ export function pontoDePartidaEmTokens(tipo: string): number | undefined {
 
 const mediana = (v: number[]): number | undefined => {
     if (!v.length) return undefined;
-    const s = [...v].sort((a, b) => a - b);
+    const s = v.toSorted((a, b) => a - b);
     return s[Math.floor(s.length / 2)];
 };
 const percentil = (v: number[], p: number): number | undefined => {
     if (!v.length) return undefined;
-    const s = [...v].sort((a, b) => a - b);
+    const s = v.toSorted((a, b) => a - b);
     return s[Math.min(s.length - 1, Math.ceil(p * s.length) - 1)];
 };
 const empurrar = (v: number[], x: number) => { v.push(x); if (v.length > MAX_AMOSTRAS) v.splice(0, v.length - MAX_AMOSTRAS); };
@@ -159,7 +159,7 @@ export class MedidorDeTrabalho {
     }
 
     /** Fotografia para relatório e testes. */
-    resumo(): Dados { return JSON.parse(JSON.stringify(this.dados)) as Dados; }
+    resumo(): Dados { return structuredClone(this.dados); }
 
     private salvar(): void {
         if (!this.arquivo) return;

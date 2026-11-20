@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="referrer" content="strict-origin-when-cross-origin">
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
@@ -12,7 +13,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/shared.css?v=20260502">
-  <script src="https://unpkg.com/cytoscape@3.26.0/dist/cytoscape.min.js"></script>
+  <script src="https://unpkg.com/cytoscape@3.26.0/dist/cytoscape.min.js" integrity="sha384-+4PsOx8pfCvP2QccNj+4PHhCkQFmbi69UlEi43BHbHopL1unxFMpqiPXNscfoiM5" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -628,8 +629,8 @@
       try {
         const recentEl = document.getElementById('recentNodes');
         if(!recentEl) return;
-        const sorted = [...allNodesList].sort((a,b) => new Date(b.created_at||0) - new Date(a.created_at||0)).slice(0,5);
-        if(!sorted.length) { recentEl.innerHTML = ''; return; }
+        const sorted = allNodesList.toSorted((a,b) => new Date(b.created_at||0) - new Date(a.created_at||0)).slice(0,5);
+        if(!sorted.length) { recentEl.replaceChildren(); return; }
         recentEl.innerHTML = '<div style="font-size:0.68rem;color:var(--text-muted);margin-bottom:6px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;">Nós recentes</div>' +
           sorted.map(n => `<div class="recent-node" onclick="selectGraphNode('${escJs(n.id)}')">
             <span class="recent-dot" style="background:${TYPE_COLORS[n.type]||'#64748b'}"></span>

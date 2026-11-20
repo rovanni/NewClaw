@@ -586,7 +586,7 @@ MARCO ATUAL A SER RESOLVIDO: ${activeMilestone}\n`
         : '';
 
     // P4: dica de retry com args corrigidos quando o blocker é de arg inválido/ausente
-    const lastFailedTool = [...(goal.currentPlan ?? [])].reverse().find(s => s.status === 'failed')?.toolName;
+    const lastFailedTool = (goal.currentPlan ?? []).findLast(s => s.status === 'failed')?.toolName;
     const retryHint = (blocker.kind === 'goal_incomplete' && lastFailedTool)
         ? `\n⚡ DICA DE CORREÇÃO: A ferramenta "${lastFailedTool}" foi executada mas não produziu o resultado esperado. Antes de trocar de estratégia, considere se pode reutilizar "${lastFailedTool}" com argumentos corrigidos (ex: dry_run=false, path completo, etc.).\n`
         : '';
@@ -930,8 +930,8 @@ export class GoalPlanner {
         log.info(`[GoalPlanner] replan start goal=${goal.id} model=${this.model} blocker=${blocker.kind} contextLen=${runtimeContext?.length ?? 0}`);
 
         // P4 observabilidade: registra a decisão de replanejamento com causa raiz detectável
-        const lastFailedStep = [...(goal.currentPlan ?? [])].reverse()
-            .find(s => s.status === 'failed');
+        const lastFailedStep = (goal.currentPlan ?? [])
+            .findLast(s => s.status === 'failed');
         const lastTool = lastFailedStep?.toolName;
         const retryWithCorrectedArgs = blocker.kind === 'goal_incomplete' && lastTool
             ? `retry ${lastTool} with corrected args`

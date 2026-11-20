@@ -123,8 +123,7 @@ export class SessionManager {
         }
 
         const current = this.sessionMutexes.get(sid) || Promise.resolve();
-        let resolve: () => void;
-        const next = new Promise<void>(r => { resolve = r; });
+        const { promise: next, resolve } = Promise.withResolvers<void>();
         this.sessionMutexes.set(sid, next);
 
         this.lastActivity.set(sid, Date.now());

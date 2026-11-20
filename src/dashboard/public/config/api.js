@@ -80,15 +80,11 @@ const TIMEOUT_VERIFICACAO_MS = 4000;
  * verificação não é evidência de ausência (diretriz "Nunca Adivinhar").
  */
 export async function modelExists(name) {
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), TIMEOUT_VERIFICACAO_MS);
   try {
-    const d = await json(f(`/api/ollama/exists/${encodeURIComponent(name)}`, { signal: ctrl.signal }));
+    const d = await json(f(`/api/ollama/exists/${encodeURIComponent(name)}`, { signal: AbortSignal.timeout(TIMEOUT_VERIFICACAO_MS) }));
     return d.exists;
   } catch {
     return null;
-  } finally {
-    clearTimeout(timer);
   }
 }
 

@@ -140,7 +140,7 @@ check(
     'Scenario 10a: produção — bypass = exatamente 1 sucesso + tool de entrega direta (constante real) + requiresReasoning === false',
 );
 check(
-    /const directOutput = turnState\.lastToolExecution\?\.toolOutput \?\? loopMessages\.slice\(\)\.reverse\(\)\.find\(m => m\.role === 'tool'\)\?\.content; if \(typeof directOutput === 'string' && directOutput\.trim\(\)\.length > 0\) \{/.test(producao),
+    /const directOutput = turnState\.lastToolExecution\?\.toolOutput \?\? loopMessages\.(?:slice\(\)\.reverse\(\)\.find|findLast)\(m => m\.role === 'tool'\)\?\.content; if \(typeof directOutput === 'string' && directOutput\.trim\(\)\.length > 0\) \{/.test(producao),
     'Scenario 10b: produção — só entrega direto se houver saída textual não vazia (última saída da tool, senão última mensagem de tool)',
 );
 

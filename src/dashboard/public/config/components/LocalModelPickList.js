@@ -38,7 +38,7 @@ function formatBytes(bytes) {
  * (uso do Assistente Rápido) — ConfigWizard simplesmente ignora o segundo argumento.
  */
 export function renderModelPickList(listEl, models, onPick) {
-    listEl.innerHTML = '';
+    listEl.replaceChildren();
     models.forEach(m => {
         const row = document.createElement('div');
         row.className = 'wizard-model-row';

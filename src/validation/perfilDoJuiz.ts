@@ -129,7 +129,7 @@ export class PerfilDoJuiz {
             const penalidadeFalha = p[m].falhasSeguidas > 0 ? 0.15 * p[m].falhasSeguidas : 0;
             return (p[m].ok + 1) / (p[m].n + 2) + (m === preferido ? 0.01 : 0) - penalidadeFalha;
         };
-        return [...MODOS].sort((a, b) => {
+        return MODOS.toSorted((a, b) => {
             const d = pontos(b) - pontos(a);
             if (Math.abs(d) > 1e-9) return d;
             return (p[a].msOk ?? Infinity) - (p[b].msOk ?? Infinity);
@@ -222,7 +222,7 @@ export class PerfilDoJuiz {
 
     /** Fotografia para log e testes. */
     resumo(chave: string): PerfilDoModelo {
-        return JSON.parse(JSON.stringify(this.perfil(chave))) as PerfilDoModelo;
+        return structuredClone(this.perfil(chave));
     }
 
     private salvar(): void {

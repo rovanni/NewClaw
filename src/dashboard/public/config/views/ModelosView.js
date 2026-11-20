@@ -889,7 +889,7 @@ function renderPendingChanges() {
   };
 
   const alterados = cs.camposPendentes().filter(k => ROTULOS[k]);
-  if (!alterados.length) { box.style.display = 'none'; box.innerHTML = ''; return; }
+  if (!alterados.length) { box.style.display = 'none'; box.replaceChildren(); return; }
 
   const nomes = [...new Set(alterados.map(k => ROTULOS[k]))];
   box.style.display = '';
@@ -937,7 +937,7 @@ function checkDuplicateEndpoints() {
   }
 
   const colisoes = [...grupos.entries()].filter(([, labels]) => labels.length > 1);
-  if (!colisoes.length) { box.style.display = 'none'; box.innerHTML = ''; return; }
+  if (!colisoes.length) { box.style.display = 'none'; box.replaceChildren(); return; }
 
   box.style.display = '';
   box.className = 'ml-test-result ml-test-pending';
@@ -1966,7 +1966,7 @@ function wireModelRegistry(container) {
   // qualquer outro campo da página); buscar varre na hora, sem exigir salvar antes.
   const dirInput = document.getElementById('mr-localDir');
   dirInput?.addEventListener('input', e => configStore.set('localModelsDir', e.target.value));
-  dirInput?.addEventListener('keydown', e => { if (e.key === 'Enter') document.getElementById('mr-localScanBtn')?.click(); });
+  dirInput?.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); if (e.isComposing || e.keyCode === 229) return; document.getElementById('mr-localScanBtn')?.click(); } });
 
   document.getElementById('mr-localScanBtn')?.addEventListener('click', async () => {
     const btn = document.getElementById('mr-localScanBtn');
@@ -2105,7 +2105,7 @@ function renderCategoryPicker() {
     const filtrado = compatible.filter(mostrar);
     compatible = filtrado.length ? filtrado : compatible;
     const ordem = { rapido: 0, sem_medicao: 1, lento: 2 };
-    compatible = [...compatible].sort((a, b) => (ordem[fatoDoJuiz.get(a.id)?.classe] ?? 1) - (ordem[fatoDoJuiz.get(b.id)?.classe] ?? 1));
+    compatible = compatible.toSorted((a, b) => (ordem[fatoDoJuiz.get(a.id)?.classe] ?? 1) - (ordem[fatoDoJuiz.get(b.id)?.classe] ?? 1));
   }
   const wrapTodos = document.getElementById('rt-judgeShowAllWrap');
   if (wrapTodos) wrapTodos.style.display = ehJuiz ? '' : 'none';

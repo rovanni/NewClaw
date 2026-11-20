@@ -804,7 +804,7 @@ export function mountConfigWizard(container, { cloudProviders, provLabels, local
     document.getElementById('ml-cw-localScan')?.addEventListener('click', testLocalFolder);
     document.getElementById('ml-cw-localBrowse')?.addEventListener('click', openDirectoryPicker);
     document.getElementById('ml-cw-localDir')?.addEventListener('keydown', e => {
-      if (e.key === 'Enter') document.getElementById('ml-cw-localScan')?.click();
+      if (e.key === 'Enter') { e.preventDefault(); if (e.isComposing || e.keyCode === 229) return; document.getElementById('ml-cw-localScan')?.click(); }
     });
     invalidateEvidenceOnEdit('ml-cw-localDir');
     bindDraft('ml-cw-localDir', 'localDir');

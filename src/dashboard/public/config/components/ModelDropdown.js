@@ -66,7 +66,7 @@ function _renderDropdown(inputId, input, dropdown, onPull) {
   const fc     = f(clouds);
   const fl     = f(locals);
 
-  dropdown.innerHTML = '';
+  dropdown.replaceChildren();
 
   const addRow = (className, onClick, build) => {
     const row = document.createElement('div');

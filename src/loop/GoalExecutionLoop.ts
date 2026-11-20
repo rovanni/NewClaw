@@ -1984,7 +1984,7 @@ export class GoalExecutionLoop {
             (pendingStep.toolName === 'read' || pendingStep.toolName === 'read_document') &&
             cycleResult.outcome !== 'success'
         ) {
-            const lastAttempt = [...goal.attempts].reverse().find(a => a.planStepId === pendingStep.id);
+            const lastAttempt = goal.attempts.findLast(a => a.planStepId === pendingStep.id);
             const isEmptyArtifact = lastAttempt?.error?.includes('[ARQUIVO VAZIO]') ?? false;
             if (isEmptyArtifact && this.isModificationGoal(goal.userIntent)) {
                 const requiredPath = String(pendingStep.toolArgs?.path ?? pendingStep.toolArgs?.filename ?? '(desconhecido)');
@@ -2012,7 +2012,7 @@ export class GoalExecutionLoop {
         // P6: cobre também steps agentloop (sem toolName) — output do AgentLoop também é validado
         if (cycleResult.outcome === 'success' && cycleResult.output) {
             // Issue 056 (F3): fatos estruturais da tentativa que acabou de ser gravada para este step.
-            const lastAttempt = [...goal.attempts].reverse().find(a => a.planStepId === pendingStep.id);
+            const lastAttempt = goal.attempts.findLast(a => a.planStepId === pendingStep.id);
             const stepFacts: StepExecutionFacts | undefined = lastAttempt ? {
                 toolsCalled: lastAttempt.subToolCalls ?? (lastAttempt.toolName && lastAttempt.toolName !== 'agentloop' ? [lastAttempt.toolName] : []),
                 toolsFailed: (lastAttempt.subToolFailures ?? []).map(f => f.tool),
@@ -2640,7 +2640,7 @@ export class GoalExecutionLoop {
         alteracoes?: string[],
     ): CycleResult {
         const ERROR_PREFIX = 'provider_unavailable:';
-        const previous = [...goal.attempts].reverse().find(a => a.planStepId === step.id);
+        const previous = goal.attempts.findLast(a => a.planStepId === step.id);
         const repeated = previous?.result === 'failure' && (previous.error ?? '').startsWith(ERROR_PREFIX);
 
         this.recordFailedAttempt(goal, step, cycle, startMs, { error: `${ERROR_PREFIX}${failure.status}${failure.reason ? `:${failure.reason}` : ''}`, alteracoes });
@@ -3426,7 +3426,7 @@ export class GoalExecutionLoop {
         } else if (attemptRecording === 'finalize') {
             this.goalStore.finalizeLastAttemptAsSuccess(goal.id, step.id, output);
         } else {
-            const existing = [...goal.attempts].reverse().find(a => a.planStepId === step.id);
+            const existing = goal.attempts.findLast(a => a.planStepId === step.id);
             if (existing) {
                 reflectionOutcome = existing.result;
                 reflectionConfidence = existing.evaluation?.confidence ?? 0.9;
@@ -5184,7 +5184,7 @@ Se a intenção original pedia uma explicação condicional (ex: "se não conseg
         overrideOutput?: string
     ): GoalResult {
         // Fallback extra: resultado armazenado no plan step (via markStepDone)
-        const lastCompletedStep = [...goal.currentPlan].reverse().find(s => s.status === 'completed');
+        const lastCompletedStep = goal.currentPlan.findLast(s => s.status === 'completed');
         // GENERIC_CRITERIA_SUMMARY não carrega nenhuma informação sobre o que foi entregue —
         // quando validateGoalCompletion cai nesse fallback (nenhum critério "de conteúdo" restou
         // após filtrar os de auto-delivery), prefira a saída real da última tool bem-sucedida
@@ -5253,7 +5253,7 @@ Se a intenção original pedia uma explicação condicional (ex: "se não conseg
             : Date.now() - goal.createdAt;
         const toolsUsed = [...new Set(goal.attempts.map(a => a.toolName))].join(',');
         const blockerKinds = goal.blockers.map(b => b.kind).join(',');
-        const lastError = [...goal.attempts].reverse().find(a => a.result === 'failure')?.error?.slice(0, 100) ?? '';
+        const lastError = goal.attempts.findLast(a => a.result === 'failure')?.error?.slice(0, 100) ?? '';
         log.info(
             `[GoalAudit] id=${goal.id} success=${success}` +
             ` cycles=${totalCycles} replans=${totalReplans} attempts=${goal.attempts.length}` +

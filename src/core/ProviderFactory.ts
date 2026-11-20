@@ -441,7 +441,7 @@ export class ProviderFactory {
             // caminho não-streaming não diz o modelo, e aí o registro some em vez de mostrar um palpite.
             const conversa = opts?.diag?.respostaDaConversa && result.status === 'success' ? conversaDoTurno() : undefined;
             if (conversa) {
-                const respondeu = [...(result.attempts ?? [])].reverse().find(a => a.status === 'success');
+                const respondeu = (result.attempts ?? []).findLast(a => a.status === 'success');
                 if (respondeu && respondeu.model !== 'non-streaming-fallback') registrarModeloQueRespondeu(conversa, respondeu.provider, respondeu.model);
                 else esquecerModeloQueRespondeu(conversa);
             }

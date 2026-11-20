@@ -69,7 +69,7 @@ async function navigate(page) {
   if (currentCleanup) { try { currentCleanup(); } catch {} currentCleanup = null; }
 
   const container = document.getElementById('page-view');
-  container.innerHTML = '';
+  container.replaceChildren();
 
   try {
     const mod = await import('./views/' + VIEW_MAP[page] + '.js');
