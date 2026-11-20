@@ -49,6 +49,7 @@ export function persistConfigToEnv(ctx: DashboardContext): string[] | null {
             'CUSTOM_MODELS':      (ctx.config.customModels || []).join(','),
             'LOCAL_MODELS_DIR':   ctx.config.localModelsDir || '',
             'EMBED_MODEL':        ctx.config.embedModel || '',
+            'CONFERENCIA_DA_CONVERSA': ctx.config.conferenciaDaConversa === 'ligada' ? 'ligada' : 'desligada',
             'DIRECTORY_PICKER_PREFERENCE': ctx.config.directoryPickerPreference || 'native',
             'LOCAL_MODEL_OPTIONS': JSON.stringify(ctx.config.localModelOptions || {}),
             'CUSTOM_PROVIDERS':   JSON.stringify(ctx.config.customProviders || []),
@@ -147,6 +148,7 @@ export function createConfigRouter(ctx: DashboardContext): Router {
                 localModelsDir: ctx.config.localModelsDir || '',
                 modelosNativos: ctx.config.modelosNativos || {},
                 embedModel: ctx.config.embedModel || '',
+                conferenciaDaConversa: ctx.config.conferenciaDaConversa === 'ligada' ? 'ligada' : 'desligada',
                 localModelOptions: ctx.config.localModelOptions || {},
                 customProviders: (ctx.config.customProviders || []).map(p => ({ label: p.label, baseUrl: p.baseUrl, hasKey: !!p.apiKey, model: p.model, thinking: p.thinking })),
                 // Política (ENV, nunca guardada em config — lida ao vivo) + preferência (persistida).
@@ -163,7 +165,8 @@ export function createConfigRouter(ctx: DashboardContext): Router {
 
     router.post('/', (req: Request, res: Response) => {
         const { language, defaultProvider, maxIterations, memoryWindowSize, systemPrompt, ollamaModel, ollamaApiKey, ollamaUrl, telegramAllowedUserIds, modelRouter,
-                localModelsDir, localModelOptions, geminiKey, deepseekKey, groqKey, openrouterKey, anthropicKey, directoryPickerPreference, modelosNativos, embedModel } = req.body;
+                localModelsDir, localModelOptions, geminiKey, deepseekKey, groqKey, openrouterKey, anthropicKey, directoryPickerPreference, modelosNativos, embedModel,
+                conferenciaDaConversa } = req.body;
 
         log.info(`POST /api/config — ollamaModel="${ollamaModel}" provider="${defaultProvider}"`);
 
@@ -185,6 +188,14 @@ export function createConfigRouter(ctx: DashboardContext): Router {
         if (typeof embedModel === 'string') {
             ctx.config.embedModel = embedModel.trim();
             process.env.EMBED_MODEL = ctx.config.embedModel;   // lido a cada uso (modeloDeEmbedding)
+        }
+        if (conferenciaDaConversa !== undefined) {
+            if (conferenciaDaConversa !== 'ligada' && conferenciaDaConversa !== 'desligada') {
+                return res.status(400).json({ success: false, error: 'conferenciaDaConversa aceita só "ligada" ou "desligada".' });
+            }
+            ctx.config.conferenciaDaConversa = conferenciaDaConversa;
+            process.env.CONFERENCIA_DA_CONVERSA = conferenciaDaConversa;   // lido a cada turno (AgentLoop.conferenciaDaConversaLigada)
+            log.info(`Conferência da conversa: ${conferenciaDaConversa}`);
         }
         // Objeto inteiro substitui o anterior: a UI sempre manda o mapa completo, e um merge aqui
         // impediria APAGAR as opções de um modelo (a chave removida simplesmente não chegaria).

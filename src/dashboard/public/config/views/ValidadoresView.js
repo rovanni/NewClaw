@@ -1,5 +1,6 @@
-import { getValidatorReports } from '../api.js';
+import { getValidatorReports, getConfig, saveConfig } from '../api.js';
 import { guideBox } from '../app.js';
+import { showToast } from '../components/Toast.js';
 
 function esc(str) {
   return String(str ?? '')
@@ -31,8 +32,37 @@ export function render(container) {
         <p>${t('validators_page_desc')}</p>
       </div>
       ${guideBox(t('validators_guide'))}
+      <details class="cfg-details" open>
+        <summary>${t('validators_check_title')}</summary>
+        <div class="cfg-details-body">
+          <label style="display:flex;gap:8px;align-items:center;margin:4px 0"><input type="checkbox" id="vl-conferencia" disabled> ${t('validators_check_label')}</label>
+          <div class="form-hint" style="margin-top:6px;">${t('validators_check_hint')}</div>
+        </div>
+      </details>
       <div id="vl-body"><div class="form-hint">${t('validators_loading')}</div></div>
     </div>`;
+
+  // ADR-042 (revisão 19/11/2026): conferência da conversa direta contra a evidência — liga/desliga na hora, gravada no .env.
+  const caixa = container.querySelector('#vl-conferencia');
+  getConfig().then(cfg => {
+    caixa.checked = cfg.conferenciaDaConversa === 'ligada';
+    caixa.disabled = false;
+  }).catch(e => showToast(e.message, 'error'));
+  caixa.addEventListener('change', async () => {
+    const valor = caixa.checked ? 'ligada' : 'desligada';
+    caixa.disabled = true;
+    try {
+      const r = await saveConfig({ conferenciaDaConversa: valor });
+      if (r.envError) showToast(r.envError, 'error');
+      else if (r.envWarnings) showToast(r.envWarnings.message, 'error');
+      else showToast(t(caixa.checked ? 'validators_check_on_toast' : 'validators_check_off_toast'), 'success');
+    } catch (e) {
+      caixa.checked = !caixa.checked;
+      showToast(e.message, 'error');
+    } finally {
+      caixa.disabled = false;
+    }
+  });
 
   let dados = null;
   let filtro = '';

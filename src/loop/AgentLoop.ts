@@ -1068,6 +1068,15 @@ export class AgentLoop {
      * ADR-042: o juiz roda depois da entrega? Só na conversa direta (o objetivo usa o veredito para replanejar), com canal e
      * conversa conhecidos (sem para onde mandar a correção, ele continua na frente) e sem `JUIZ_DEPOIS_DA_ENTREGA=desligado`.
      */
+    /**
+     * ADR-042, revisão de 19/11/2026: a operadora escolhe em Configurações → Validadores se a conversa direta é conferida
+     * contra a evidência (`CONFERENCIA_DA_CONVERSA=ligada`). Sem a variável, não é — padrão decidido por ela. Lida a cada turno,
+     * para a troca no painel valer na hora. O passo de objetivo é sempre conferido: o veredito alimenta o replanejamento.
+     */
+    static conferenciaDaConversaLigada(): boolean {
+        return (process.env.CONFERENCIA_DA_CONVERSA ?? '').trim().toLowerCase() === 'ligada';
+    }
+
     static juizDepoisDaEntrega(ctx: { goalTrace?: unknown; channel?: string; chatId?: string } | undefined, temAviso: boolean): boolean {
         if ((process.env.JUIZ_DEPOIS_DA_ENTREGA ?? '').trim().toLowerCase() === 'desligado') return false;
         return temAviso && !ctx?.goalTrace && !!ctx?.channel && !!ctx?.chatId;
@@ -1343,6 +1352,11 @@ export class AgentLoop {
             // independentemente, e o juiz recebe uma lista só, sem rótulos duplicados.
             const evidences = [...AgentLoop.evidencesFromTrace(trace), ...(channelContext?.priorStepEvidence ?? [])]
                 .map((e, i) => ({ ...e, id: `E${i + 1}` }));
+            if (!channelContext?.goalTrace && !AgentLoop.conferenciaDaConversaLigada()) {
+                // Escolha da operadora no painel: conversa direta sem o juiz contra a evidência — nem antes, nem depois da entrega.
+                log.info(`[GROUNDING-TRACE] ${JSON.stringify({ v: 1, phase: 'decision', traceId: trace.id, conversationId, path: 'conversation_check_off', evidences: evidences.length })}`);
+                return response;
+            }
             if (AgentLoop.juizDepoisDaEntrega(channelContext, !!this.avisarUsuario)) {
                 // ADR-042 (A3): a resposta sai agora, com a marca; o mesmo julgamento roda em segundo plano, preso ao sinal da
                 // conversa (ADR-027: o próximo pedido dela o interrompe — D3), e o desfecho vira uma 2ª mensagem (D1/D2).
