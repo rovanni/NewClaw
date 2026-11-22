@@ -36,14 +36,22 @@ const PALAVRA_DE_CREDENCIAL = /\b(senhas?|password|passwd|pwd|contrase(ñ|n)as?|
  * de fora porque o assistente as usa o tempo todo em outro sentido ("palavra-chave", "as chaves do JSON"), e a resposta curta
  * seguinte (um nome de arquivo, por exemplo) iria para o cofre.
  */
-const CREDENCIAL_PEDIDA = /\b(senhas?|password|passwd|contrase(ñ|n)as?|tokens?|api[ _-]?keys?|secret|segredo)\b/i;
+const CREDENCIAL_PEDIDA = /\b(senhas?|password|passwd|contrase(ñ|n)as?|token|api[ _-]?keys?|secret|segredo)\b/i;
+
+/**
+ * Fala do assistente instruindo o usuário a desfazer um falso positivo do cofre (`/segredo_apagar …` e reenviar):
+ * não é um pedido de credencial — tratá-la como tal criava um laço em que o reenvio do mesmo link/código virava
+ * `senha_2`, `senha_3`… (VPS, 22/11/2026, S497).
+ */
+const INSTRUCAO_DE_DESFAZER_COFRE = /\/segredo_apagar\b/i;
 
 /**
  * "senha: X", "password = X", "a senha é X", "a senha do servidor de teste é X", "my password is X", "la contraseña es X".
  * Até 6 palavras entre o rótulo e o verbo/sinal. O verbo é procurado depois de ESPAÇO, não de `\b`: sem o modo unicode,
  * `\b` não vê fronteira antes de "é" — achado na validação real de 14/10/2026 (a frase acima passou em claro).
+ * `:(?!\/\/)` evita partir URLs (`http://`, `https://`) no `:` do esquema quando aparecem após um rótulo (S497).
  */
-const VALOR_ROTULADO = /\b(?:senhas?|password|passwd|pwd|contrase(?:ñ|n)as?|claves?|chaves?|token|api[ _-]?key|secret)\b(?:\s+[^\s:=]+){0,6}?(?:\s*[:=]|\s+(?:é|e|is|es|será|são|son))\s*["'`]?([^\s"'`]{6,})/gi;
+const VALOR_ROTULADO = /\b(?:senhas?|password|passwd|pwd|contrase(?:ñ|n)as?|claves?|chaves?|token|api[ _-]?key|secret)\b(?:\s+[^\s:=]+){0,6}?(?:\s*(?::(?!\/\/)|=)|\s+(?:é|e|is|es|será|são|son))\s*["'`]?([^\s"'`]{6,})/gi;
 
 /**
  * "senha 123456789", "password Xy9!q2w3e": o rótulo seguido direto do valor, sem sinal nem verbo (S458 — achado de 22/10/2026,
@@ -70,10 +78,32 @@ const PREFIXO = 'SEGREDO_';
 const MARCADOR = /<SEGREDO:([A-Za-z0-9_]+)>/g;
 
 /**
+ * Um endereço HTTP(S) sem credencial embutida na autoridade (`usuario:senha@host`) é um link, nunca uma senha inteira.
+ * Tokens dentro do link (`/private-…`, `?token=…`) já têm regra própria (`TOKEN_EM_LINK`, S459) que mascara só o token e
+ * deixa o resto do endereço legível.
+ *
+ * Examina só a autoridade (entre `://` e o primeiro `/`, `?` ou `#`): `@` no caminho (ex.: `tiktok.com/@usuario/video/…`)
+ * não é credencial. Laço linear, sem backtracking (CodeQL ReDoS).
+ */
+function ehLinkSemCredencialNaAutoridade(v: string): boolean {
+    const m = /^https?:\/\//i.exec(v);
+    if (!m) return false;
+    const inicio = m[0].length;
+    let fim = v.length;
+    for (let i = inicio; i < v.length; i++) {
+        const c = v[i];
+        if (c === '/' || c === '?' || c === '#') { fim = i; break; }
+    }
+    const autoridade = v.slice(inicio, fim);
+    return autoridade.length > 0 && !autoridade.includes('@');
+}
+
+/**
  * Um valor rotulado só conta se tiver cara de senha — "a senha é complicada" não guarda "complicada". Só dígitos, a partir de 6,
  * também conta (PIN, código, "senha 123456789"): depois de um rótulo de credencial, um número não é prosa (S458).
  */
 function temCaraDeSenha(v: string): boolean {
+    if (ehLinkSemCredencialNaAutoridade(v)) return false;
     if (/^[0-9]{6,}$/.test(v)) return true;
     if (v.length < 8) return false;
     const classes = [/[a-z]/, /[A-Z]/, /[0-9]/, /[^A-Za-z0-9]/].filter((r) => r.test(v)).length;
@@ -197,7 +227,10 @@ export function detectarSegredos(texto: string, contexto: ContextoDaEntrada = {}
         for (const m of texto.match(g) ?? []) achados.add(m);
     }
     for (const f of TOKEN_EM_LINK) for (const m of texto.matchAll(f)) achados.add(m[1]);
-    const pedidaAgora = !!contexto.ultimaFalaDoAssistente && CREDENCIAL_PEDIDA.test(contexto.ultimaFalaDoAssistente);
+    const falaAnterior = contexto.ultimaFalaDoAssistente;
+    const pedidaAgora = !!falaAnterior
+        && !INSTRUCAO_DE_DESFAZER_COFRE.test(falaAnterior)
+        && CREDENCIAL_PEDIDA.test(falaAnterior);
     if (PALAVRA_DE_CREDENCIAL.test(texto) || pedidaAgora) {
         if (PALAVRA_DE_CREDENCIAL.test(texto)) for (const m of texto.match(SENHA_DE_APP) ?? []) achados.add(m);
         for (const re of [VALOR_ROTULADO, VALOR_COLADO_NO_ROTULO]) {

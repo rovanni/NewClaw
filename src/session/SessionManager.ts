@@ -268,9 +268,20 @@ export class SessionManager {
         return entradas.find(e => e.role === 'user' && typeof e.meta?.cliente === 'string')?.meta?.cliente;
     }
 
-    ultimaFalaDoAssistente(key: SessionKey): string | null {
+    /** Janela em que uma resposta isolada ainda conta como resposta direta ao último pedido do assistente (S460/S497). */
+    static readonly JANELA_FALA_ANTERIOR_MS = 30 * 60 * 1000;
+
+    ultimaFalaDoAssistente(key: SessionKey, agoraMs: number = Date.now()): string | null {
         const [ultima] = this.memory.getRecentMessages(this.conversationId(key), 1);
-        return ultima && ultima.role === 'assistant' ? ultima.content : null;
+        if (!(ultima && ultima.role === 'assistant')) return null;
+        if (ultima.created_at) {
+            const iso = /(Z|[+-]\d\d:?\d\d)$/i.test(ultima.created_at)
+                ? ultima.created_at
+                : `${ultima.created_at.replace(' ', 'T')}Z`;
+            const ts = Date.parse(iso);
+            if (!Number.isNaN(ts) && agoraMs - ts > SessionManager.JANELA_FALA_ANTERIOR_MS) return null;
+        }
+        return ultima.content;
     }
 
     async recordSystemMessage(key: SessionKey, content: string, meta?: TranscriptMeta): Promise<number> {
