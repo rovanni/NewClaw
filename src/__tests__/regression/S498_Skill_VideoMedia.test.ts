@@ -223,24 +223,24 @@ async function main(): Promise<void> {
                     chamadaPrincipal++;
                     req.resume();
                     req.on('end', () => {
-                        res.writeHead(statusPrincipal, { 'Content-Type': 'application/json' });
+                        res.writeHead(statusPrincipal, { 'Content-Type': 'application/json', Connection: 'close' });
                         res.end(JSON.stringify(statusPrincipal === 200 ? { text: 'Transcrição vinda da API principal.' } : { error: 'fail' }));
                     });
                     return;
                 }
-                res.writeHead(404).end();
+                res.writeHead(404, { Connection: 'close' }).end();
             });
             const srv2 = http.createServer((req, res) => {
                 if (req.url === '/inference' && req.method === 'POST') {
                     chamadaFallback++;
                     req.resume();
                     req.on('end', () => {
-                        res.writeHead(200, { 'Content-Type': 'application/json' });
+                        res.writeHead(200, { 'Content-Type': 'application/json', Connection: 'close' });
                         res.end(JSON.stringify({ text: 'Transcrição via fallback.' }));
                     });
                     return;
                 }
-                res.writeHead(404).end();
+                res.writeHead(404, { Connection: 'close' }).end();
             });
             await new Promise<void>(r => srv1.listen(0, '127.0.0.1', r));
             await new Promise<void>(r => srv2.listen(0, '127.0.0.1', r));
@@ -299,8 +299,11 @@ async function main(): Promise<void> {
                     && fs.readFileSync(String(t3.srtPath), 'utf-8').includes('00:00:01,000 --> 00:00:04,500'),
                     '--legendas ignora Whisper API e gera .txt + .srt via faster-whisper', t3);
             } finally {
-                srv1.close();
-                srv2.close();
+                const fecharServidor = (srv: http.Server): Promise<void> => new Promise<void>(resolve => {
+                    (srv as http.Server & { closeAllConnections?: () => void }).closeAllConnections?.();
+                    srv.close(() => resolve());
+                });
+                await Promise.all([fecharServidor(srv1), fecharServidor(srv2)]);
             }
         }
 
@@ -326,7 +329,7 @@ async function main(): Promise<void> {
 
     console.log(`\n${'─'.repeat(60)}`);
     console.log(`S498 RESULTADO: ✅ ${passed} passou | ❌ ${failed} falhou`);
-    process.exit(failed > 0 ? 1 : 0);
+    process.exitCode = failed > 0 ? 1 : 0;
 }
 
-main().catch(e => { console.error(e); process.exit(1); });
+main().catch(e => { console.error(e); process.exitCode = 1; });

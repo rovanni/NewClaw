@@ -611,6 +611,11 @@ export async function transcreverMidia(opcoes, deps = {}) {
 
         if (!opcoes.legendas && whisperUrls.length > 0 && typeof fetchImpl === 'function') {
             for (const url of whisperUrls) {
+                const ac = new AbortController();
+                const reqTimeout = setTimeout(
+                    () => ac.abort(new Error('Tempo limite da API Whisper atingido (600s).')),
+                    600_000,
+                );
                 const heartbeat = setInterval(() => {
                     process.stderr.write('[video-media] aguardando transcrição da API Whisper...\n');
                 }, HEARTBEAT_MS);
@@ -624,9 +629,11 @@ export async function transcreverMidia(opcoes, deps = {}) {
                     const res = await fetchImpl(`${url}/inference`, {
                         method: 'POST',
                         body: form,
-                        signal: AbortSignal.timeout(600_000),
+                        headers: { Connection: 'close' },
+                        signal: ac.signal,
                     });
                     if (!res.ok) {
+                        try { await res.body?.cancel(); } catch { /* noop */ }
                         tentativas.push(`whisper_api: HTTP ${res.status}`);
                         continue;
                     }
@@ -648,6 +655,7 @@ export async function transcreverMidia(opcoes, deps = {}) {
                 } catch (err) {
                     tentativas.push(`whisper_api: ${err instanceof Error ? err.message : String(err)}`);
                 } finally {
+                    clearTimeout(reqTimeout);
                     clearInterval(heartbeat);
                 }
             }
