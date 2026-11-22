@@ -19,9 +19,10 @@ Use o script unificado `{NEWCLAW}/scripts/video-media.mjs` em vez de criar scrip
 exec_command: node "{NEWCLAW}/scripts/video-media.mjs" baixar "<URL>" --whatsapp
 ```
 
+Opcional: adicione `--nome <slug_unico>` para escolher o nome base sem sobrescrever outros vídeos.
 Use `timeout: 600000` e `tolerancia_sem_atividade: 120`.
 - O script valida a faixa de vídeo com `ffprobe` (evita MP4 só com áudio) e imprime `ARQUIVO_GERADO: <caminho>`.
-- Envie exatamente esse caminho com `send_document`.
+- NUNCA presuma o nome do arquivo antes do `exec_command` terminar nem reaproveite arquivos antigos do workspace: use exatamente o caminho impresso em `ARQUIVO_GERADO:` para chamar `send_document`.
 
 ## 2. Transcrever vídeo ou áudio
 

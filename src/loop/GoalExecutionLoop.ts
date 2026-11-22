@@ -4276,13 +4276,33 @@ export class GoalExecutionLoop {
                     // erra para o lado de pular uma reprovação semântica real.
                     const pendingSendSteps = this.getPendingSteps(goal.currentPlan, 'send_document');
                     const hasPriorBlocker = goal.blockers.length > 0;
+                    // Quando este goal executou com sucesso uma tool produtora de artefato
+                    // (ex: exec_command/ssh_exec/write), um arquivo antigo no workspace cujo
+                    // mtime antecede goal.createdAt NÃO foi gerado por este goal — bloquear
+                    // o bypass impede despachar um arquivo errado de outra sessão sem passar
+                    // pelo validador para escolher o artefato realmente gerado nesta execução.
+                    const hasProducerAttempt = goal.attempts.some(a =>
+                        a.result === 'success' &&
+                        (a.toolName === 'exec_command' || a.toolName === 'ssh_exec' || a.toolName === 'write')
+                    );
+                    let staleAfterProducer = false;
                     const allVerified = !hasPriorBlocker && pendingSendSteps.length > 0 && pendingSendSteps.every(s => {
                         const fp = String(s.toolArgs?.file_path ?? s.toolArgs?.path ?? '');
                         if (!fp) return false;
                         if (!isExpectedDeliverableFile(goal.userIntent, fp)) return false;
                         try {
                             const { resolved } = resolvePath(fp);
-                            return fs.statSync(resolved).size >= MIN_DELIVERABLE_SIZE;
+                            const st = fs.statSync(resolved);
+                            if (st.size < MIN_DELIVERABLE_SIZE) return false;
+                            if (
+                                hasProducerAttempt &&
+                                typeof goal.createdAt === 'number' &&
+                                st.mtimeMs < goal.createdAt - 2000
+                            ) {
+                                staleAfterProducer = true;
+                                return false;
+                            }
+                            return true;
                         } catch {
                             return false;
                         }
@@ -4322,6 +4342,11 @@ export class GoalExecutionLoop {
                                 `[VALIDATION-BYPASS-SKIPPED] goal=${goal.id}` +
                                 ` reason=prior_blocker_exists` +
                                 ` blockers=${goal.blockers.length}`
+                            );
+                        } else if (staleAfterProducer) {
+                            log.info(
+                                `[VALIDATION-BYPASS-SKIPPED] goal=${goal.id}` +
+                                ` reason=stale_artifact_after_producer`
                             );
                         }
                         criterion.status = 'unverifiable';

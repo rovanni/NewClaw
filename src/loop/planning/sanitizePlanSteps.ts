@@ -77,6 +77,15 @@ const DATA_PRODUCING_TOOLS = new Set([
     'read', 'read_document', 'memory_search', 'exec_command', 'ssh_exec',
 ]);
 
+// Subconjunto de DATA_PRODUCING_TOOLS que produz artefatos em disco de nome frequentemente
+// dinâmico/imprevisível em tempo de planejamento (timestamp, slug do scraper, stdout etc.).
+// Um `send_document` após uma dessas tools não pode confiar apenas em `fs.existsSync(path)`
+// porque um arquivo antigo com nome semelhante ou plausível no workspace faria o sanitizer
+// fixar o envio estático do artefato errado de outra sessão.
+const SHELL_PRODUCER_TOOLS = new Set([
+    'exec_command', 'ssh_exec',
+]);
+
 /**
  * Duas naturezas DIFERENTES de "este argumento depende de algo que um step anterior ainda não
  * produziu", consolidadas num único mapa (27/07/2026 — antes eram dois mapas quase-espelhados,
@@ -173,6 +182,7 @@ export async function sanitizePlanSteps(
     // buscar/produzir dado dinâmico em runtime, ainda não disponível no momento em que este
     // plano está sendo montado.
     let sawDataProducingTool = false;
+    let sawShellProducer = false;
 
     // Paths (resolvidos, não string literal — evita falso-positivo tipo "workspace/x" vs "x")
     // que algum step 'write' ANTERIOR no plano já vai produzir DIRETAMENTE — mesmo que ainda não
@@ -401,17 +411,23 @@ export async function sanitizePlanSteps(
         const fileRefDepSpec = resolvedTool ? TOOL_DEPENDENCY_ARG[resolvedTool] : undefined;
         if (resolvedTool && toolArgs && fileRefDepSpec?.kind === 'file_reference' && typeof toolArgs[fileRefDepSpec.arg] === 'string' && toolArgs[fileRefDepSpec.arg]) {
             const { resolved: resolvedFilePath } = resolvePath(String(toolArgs[fileRefDepSpec.arg]));
-            if (!writtenPaths.has(resolvedFilePath) && !fs.existsSync(resolvedFilePath)) {
+            const existsOnDisk = fs.existsSync(resolvedFilePath);
+            if (!writtenPaths.has(resolvedFilePath) && (sawShellProducer || !existsOnDisk)) {
+                const staleRiskAfterShell = existsOnDisk && sawShellProducer;
+                const detail = staleRiskAfterShell
+                    ? `"${toolArgs[fileRefDepSpec.arg]}" já existia em disco antes de exec_command/ssh_exec anterior no plano — evitar envio prematuro de arquivo antigo de outra sessão`
+                    : `"${toolArgs[fileRefDepSpec.arg]}" não existe; nenhum 'write' anterior no plano produz esse path`;
                 log.warn(
                     `${logPrefix} step ${i + 1}: '${resolvedTool}.${fileRefDepSpec.arg}'="${toolArgs[fileRefDepSpec.arg]}" ` +
-                    `ainda não existe em disco e nenhum 'write' anterior no plano produz esse path ` +
-                    `— convertendo para AgentLoop step`
+                    (staleRiskAfterShell
+                        ? `já existia em disco, mas um step shell anterior no plano produz artefato dinâmico — convertendo para AgentLoop step para não enviar arquivo antigo`
+                        : `ainda não existe em disco e nenhum 'write' anterior no plano produz esse path — convertendo para AgentLoop step`)
                 );
                 mutations.push({
                     stepId: String(s.id ?? `step_${i + 1}`),
                     originalTool: resolvedTool,
                     reason: 'missing_file_reference',
-                    detail: `"${toolArgs[fileRefDepSpec.arg]}" não existe; nenhum 'write' anterior no plano produz esse path`,
+                    detail,
                     description: String(s.description ?? 'Execute step'),
                 });
                 resolvedTool = undefined;
@@ -424,6 +440,9 @@ export async function sanitizePlanSteps(
         // realmente rodar, então não produz dado nenhum pros steps seguintes.
         if (resolvedTool && DATA_PRODUCING_TOOLS.has(resolvedTool)) {
             sawDataProducingTool = true;
+            if (SHELL_PRODUCER_TOOLS.has(resolvedTool)) {
+                sawShellProducer = true;
+            }
         }
 
         const baseDescription = String(s.description ?? 'Execute step');
