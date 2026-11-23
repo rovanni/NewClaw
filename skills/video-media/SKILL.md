@@ -19,7 +19,10 @@ Use o script unificado `{NEWCLAW}/scripts/video-media.mjs` em vez de criar scrip
 exec_command: node "{NEWCLAW}/scripts/video-media.mjs" baixar "<URL>" --whatsapp
 ```
 
-Opcional: adicione `--nome <slug_unico>` para escolher o nome base sem sobrescrever outros vídeos.
+Opções úteis:
+- `--whatsapp` ou `--telegram`: garante H.264/AAC (`yuv420p`, `+faststart`) e aplica teto padrão de 48 MB (compatível com o limite de 50 MB do Telegram e com WhatsApp), limitando o bitrate automaticamente em vídeos mais longos.
+- `--max-mb <MB>`: sobrescreve o teto de tamanho em MB (ex.: `--max-mb 18` para envio no chat web, que tem limite de 20 MB).
+- `--nome <slug_unico>`: escolhe o nome base sem sobrescrever outros vídeos.
 Use `timeout: 600000` e `tolerancia_sem_atividade: 120`.
 - O script valida a faixa de vídeo com `ffprobe` (evita MP4 só com áudio) e imprime `ARQUIVO_GERADO: <caminho>`.
 - NUNCA presuma o nome do arquivo antes do `exec_command` terminar nem reaproveite arquivos antigos do workspace: use exatamente o caminho impresso em `ARQUIVO_GERADO:` para chamar `send_document`.
