@@ -18,7 +18,8 @@ export const INSTALL_ROOT_PADRAO = path.resolve(__dirname, '..');
 
 const ENV_PERMITIDAS = new Set(['WHISPER_API_URL', 'WHISPER_API_FALLBACK', 'WHISPER_PATH', 'WORKSPACE_DIR']);
 const HEARTBEAT_MS = 15_000;
-const LIMITE_WHATSAPP_BYTES = 60_000_000;
+// 48 MB em bytes decimais fica com folga abaixo do teto de 50 MiB da Bot API do Telegram e do WhatsApp.
+const LIMITE_ENVIO_PADRAO_BYTES = 48_000_000;
 const LIMITE_DURACAO_LEVE_S = 900;
 
 const SCRIPT_FASTER_WHISPER = String.raw`
@@ -191,6 +192,7 @@ export function parseArgs(argv) {
         saida: null,
         nome: null,
         altura: 720,
+        maxMb: null,
         lang: 'pt',
         model: 'base',
     };
@@ -200,15 +202,21 @@ export function parseArgs(argv) {
     };
     for (let i = 0; i < rest.length; i++) {
         const a = rest[i];
-        if (a === '--whatsapp') opcoes.whatsapp = true;
+        if (a === '--whatsapp' || a === '--telegram') opcoes.whatsapp = true;
         else if (a === '--legendas') opcoes.legendas = true;
         else if (a === '--saida') opcoes.saida = precisaValor(a, i++);
         else if (a === '--nome') opcoes.nome = precisaValor(a, i++);
         else if (a === '--lang') opcoes.lang = precisaValor(a, i++);
         else if (a === '--model') opcoes.model = precisaValor(a, i++);
-        else if (a === '--altura') {
-            const n = Number(precisaValor(a, i++));
-            if (!Number.isFinite(n) || n <= 0) throw new Error(`Valor inválido para --altura: ${rest[i]}`);
+        else if (a === '--max-mb') {
+            const bruto = precisaValor(a, i++);
+            const n = Number(bruto);
+            if (!Number.isFinite(n) || n <= 0) throw new Error(`Valor inválido para --max-mb: ${bruto}`);
+            opcoes.maxMb = n;
+        } else if (a === '--altura') {
+            const bruto = precisaValor(a, i++);
+            const n = Number(bruto);
+            if (!Number.isFinite(n) || n <= 0) throw new Error(`Valor inválido para --altura: ${bruto}`);
             opcoes.altura = Math.round(n);
         } else if (a.startsWith('-')) {
             throw new Error(`Opção desconhecida: ${a}`);
@@ -481,31 +489,43 @@ export async function baixarVideo(opcoes, deps = {}) {
     const rawHeight = Number(infoRaw.video.height || 0);
     const retrato = rawWidth > 0 && rawHeight > rawWidth;
     const ladoMenor = (rawWidth > 0 && rawHeight > 0) ? Math.min(rawWidth, rawHeight) : rawHeight;
-    const precisaRecodificar = Boolean(opcoes.whatsapp) && (
+    const temMaxMb = opcoes.maxMb != null && Number.isFinite(Number(opcoes.maxMb)) && Number(opcoes.maxMb) > 0;
+    const limiteBytes = temMaxMb ? Math.round(Number(opcoes.maxMb) * 1_000_000) : LIMITE_ENVIO_PADRAO_BYTES;
+    const aplicarLimiteTamanho = Boolean(opcoes.whatsapp) || temMaxMb;
+    const precisaRecodificar = aplicarLimiteTamanho && (
         vCodec !== 'h264'
         || (Boolean(infoRaw.audio) && aCodec !== 'aac')
         || (ladoMenor > altura)
-        || infoRaw.tamanhoBytes > LIMITE_WHATSAPP_BYTES
+        || infoRaw.tamanhoBytes > limiteBytes
     );
 
     let finalPath;
     if (precisaRecodificar) {
         if (!sonda.ffmpeg?.found) {
             try { fs.rmSync(rawFile, { force: true }); } catch { /* noop */ }
-            throw new Error('ffmpeg não encontrado para converter o vídeo para H.264/AAC (--whatsapp).');
+            throw new Error('ffmpeg não encontrado para converter o vídeo para H.264/AAC (--whatsapp/--telegram).');
         }
         finalPath = path.join(outDir, `${base}.mp4`);
-        const modoLeve = infoRaw.tamanhoBytes > LIMITE_WHATSAPP_BYTES || infoRaw.duracaoS > LIMITE_DURACAO_LEVE_S;
+        const modoLeve = infoRaw.tamanhoBytes > limiteBytes || infoRaw.duracaoS > LIMITE_DURACAO_LEVE_S;
         const targetH = modoLeve ? Math.min(altura, 480) : altura;
         const crf = modoLeve ? '28' : '26';
-        const audioBitrate = modoLeve ? '64k' : '128k';
+        const audioKbps = infoRaw.audio ? (modoLeve ? 64 : 128) : 0;
+        const audioBitrate = `${audioKbps || 64}k`;
+        let bitrateArgs = [];
+        if (infoRaw.tamanhoBytes > limiteBytes && infoRaw.duracaoS > 0) {
+            const totalAlvoKbps = Math.floor(((limiteBytes * 8 * 0.9) / infoRaw.duracaoS) / 1000);
+            const videoMaxKbps = Math.max(150, totalAlvoKbps - audioKbps);
+            if (videoMaxKbps < 2500) {
+                bitrateArgs = ['-maxrate', `${videoMaxKbps}k`, '-bufsize', `${videoMaxKbps * 2}k`];
+            }
+        }
         const vf = (ladoMenor > targetH || ladoMenor === 0)
             ? (retrato ? `scale=${targetH}:-2` : `scale=-2:${targetH}`)
             : 'scale=trunc(iw/2)*2:trunc(ih/2)*2';
         const ffArgs = [
             '-y', '-i', rawFile,
             '-vf', vf,
-            '-c:v', 'libx264', '-crf', crf, '-preset', 'veryfast', '-pix_fmt', 'yuv420p',
+            '-c:v', 'libx264', '-crf', crf, '-preset', 'veryfast', ...bitrateArgs, '-pix_fmt', 'yuv420p',
             ...(infoRaw.audio ? ['-c:a', 'aac', '-b:a', audioBitrate, '-ac', '2'] : ['-an']),
             '-movflags', '+faststart',
             finalPath,
@@ -517,7 +537,7 @@ export async function baixarVideo(opcoes, deps = {}) {
             throw new Error(`ffmpeg falhou (código ${ffRes.code}): ${(ffRes.stderr || ffRes.stdout).trim().slice(-600)}`);
         }
     } else {
-        const ext = opcoes.whatsapp ? '.mp4' : (path.extname(rawFile) || '.mp4');
+        const ext = aplicarLimiteTamanho ? '.mp4' : (path.extname(rawFile) || '.mp4');
         finalPath = path.join(outDir, `${base}${ext}`);
         moverArquivo(rawFile, finalPath);
     }
@@ -535,6 +555,8 @@ export async function baixarVideo(opcoes, deps = {}) {
         altura: Number(infoFinal.video.height || 0),
         duracaoS: Number(infoFinal.duracaoS.toFixed(1)),
         tamanhoBytes: infoFinal.tamanhoBytes,
+        limiteBytes: aplicarLimiteTamanho ? limiteBytes : null,
+        dentroDoLimite: !aplicarLimiteTamanho || infoFinal.tamanhoBytes <= limiteBytes,
         validadoVideo: true,
     };
 }
@@ -722,7 +744,7 @@ async function main() {
         console.log([
             'Uso:',
             '  node scripts/video-media.mjs sondar',
-            '  node scripts/video-media.mjs baixar <url> [--whatsapp] [--saida <dir>] [--nome <base>] [--altura <px>]',
+            '  node scripts/video-media.mjs baixar <url> [--whatsapp|--telegram] [--max-mb <mb>] [--saida <dir>] [--nome <base>] [--altura <px>]',
             '  node scripts/video-media.mjs transcrever <url_ou_arquivo> [--legendas] [--lang <cod>] [--model <nome>] [--saida <dir>] [--nome <base>]',
         ].join('\n'));
         return;
@@ -737,6 +759,7 @@ async function main() {
         const r = await baixarVideo({
             url: opcoes.entrada,
             whatsapp: opcoes.whatsapp,
+            maxMb: opcoes.maxMb,
             saida: opcoes.saida,
             nome: opcoes.nome,
             altura: opcoes.altura,
@@ -749,6 +772,9 @@ async function main() {
             `ALTURA_PX: ${r.altura}`,
             `DURACAO_S: ${r.duracaoS}`,
             `TAMANHO_BYTES: ${r.tamanhoBytes}`,
+            ...(r.dentroDoLimite === false && r.limiteBytes
+                ? [`AVISO_TAMANHO: arquivo final (${(r.tamanhoBytes / 1_000_000).toFixed(1)} MB) excede o limite de ${(r.limiteBytes / 1_000_000).toFixed(1)} MB`]
+                : []),
             `VALIDADO_VIDEO: ${r.validadoVideo}`,
         ].join('\n'));
         return;

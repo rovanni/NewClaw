@@ -34,6 +34,7 @@ const SKILLS_DIR = path.join(ROOT, 'skills');
 
 interface VideoMediaModule {
     carregarEnvSeFaltar: (installRoot?: string, env?: Record<string, string | undefined>) => Record<string, string | undefined>;
+    parseArgs: (argv: string[]) => Record<string, unknown>;
     baixarVideo: (opcoes: Record<string, unknown>, deps?: Record<string, unknown>) => Promise<Record<string, unknown>>;
     transcreverMidia: (opcoes: Record<string, unknown>, deps?: Record<string, unknown>) => Promise<Record<string, unknown>>;
 }
@@ -105,9 +106,19 @@ async function main(): Promise<void> {
 
             const missingFile = spawnSync(process.execPath, [SCRIPT_PATH, 'transcrever', path.join(tmp, 'inexistente_s498.mp4')], { encoding: 'utf-8', cwd: ROOT, windowsHide: true });
             assert(missingFile.status === 1, 'transcrever arquivo inexistente sai com código 1', missingFile.status);
+
+            const badMaxMbZero = spawnSync(process.execPath, [SCRIPT_PATH, 'baixar', 'https://video.example/v', '--max-mb', '0'], { encoding: 'utf-8', cwd: ROOT, windowsHide: true });
+            assert(badMaxMbZero.status === 1, 'baixar --max-mb 0 sai com código 1', badMaxMbZero.status);
+
+            const badMaxMbAlpha = spawnSync(process.execPath, [SCRIPT_PATH, 'baixar', 'https://video.example/v', '--max-mb', 'abc'], { encoding: 'utf-8', cwd: ROOT, windowsHide: true });
+            assert(badMaxMbAlpha.status === 1, 'baixar --max-mb abc sai com código 1', badMaxMbAlpha.status);
         }
 
         const mod = await importarModulo();
+        {
+            const parsedTg = mod.parseArgs(['baixar', 'https://video.example/v', '--telegram', '--max-mb', '18']);
+            assert(parsedTg.whatsapp === true && parsedTg.maxMb === 18, 'parseArgs aceita --telegram e --max-mb', parsedTg);
+        }
 
         console.log('\n=== S498-4 — baixarVideo: -- antes da URL, rejeita só-áudio, recodifica --whatsapp ===');
         {
@@ -208,6 +219,82 @@ async function main(): Promise<void> {
                 'vp9 com --whatsapp aciona ffmpeg com libx264, yuv420p e +faststart', ffArgsUsados);
             assert(rVp9.codecVideo === 'h264' && !fs.existsSync(path.join(dirVp9, 'aula_raw.webm')),
                 'revalida saída como h264 e remove _raw intermediário', rVp9);
+
+            // 4d) Vídeo de 52 MB em 1800s com --whatsapp/--telegram excede teto padrão de 48 MB e limita bitrate
+            const dirLimiteTg = path.join(tmp, 'limite-tg-48mb');
+            let ffArgsLimiteTg: string[] = [];
+            let size52Count = 0;
+            const rTg = await mod.baixarVideo(
+                { url: 'https://www.youtube.example/watch?v=longo', whatsapp: true, saida: dirLimiteTg, nome: 'longo' },
+                {
+                    sonda: sondaFake,
+                    runAsync: async (bin: string, args: string[]) => {
+                        if (bin === 'yt-dlp') {
+                            fs.writeFileSync(path.join(dirLimiteTg, 'longo_raw.mp4'), 'h264-52mb');
+                        } else if (bin === 'ffmpeg') {
+                            ffArgsLimiteTg = args;
+                            fs.writeFileSync(String(args[args.length - 1]), 'h264-compactado');
+                        }
+                        return { code: 0, stdout: '', stderr: '' };
+                    },
+                    runSync: () => {
+                        size52Count++;
+                        return {
+                            status: 0,
+                            stdout: JSON.stringify({
+                                streams: [
+                                    { codec_type: 'video', codec_name: 'h264', width: 1280, height: 720 },
+                                    { codec_type: 'audio', codec_name: 'aac' },
+                                ],
+                                format: { duration: '1800', size: size52Count === 1 ? '52000000' : '42000000' },
+                            }),
+                            stderr: '',
+                        };
+                    },
+                },
+            );
+            assert(ffArgsLimiteTg.includes('-maxrate') && ffArgsLimiteTg.includes('-bufsize'),
+                '52 MB em 1800s excede 48 MB e aciona ffmpeg com -maxrate e -bufsize', ffArgsLimiteTg);
+            assert(rTg.limiteBytes === 48_000_000 && rTg.dentroDoLimite === true,
+                'baixarVideo retorna limiteBytes=48000000 e dentroDoLimite=true após compactar', rTg);
+
+            // 4e) --max-mb 18 em vídeo de 25 MB H.264+AAC também aciona recodificação
+            const dirMaxMb = path.join(tmp, 'limite-18mb');
+            let ffArgsMaxMb: string[] = [];
+            let maxMbCount = 0;
+            const rMaxMb = await mod.baixarVideo(
+                { url: 'https://www.youtube.example/watch?v=web18', maxMb: 18, saida: dirMaxMb, nome: 'webclip' },
+                {
+                    sonda: sondaFake,
+                    runAsync: async (bin: string, args: string[]) => {
+                        if (bin === 'yt-dlp') {
+                            fs.writeFileSync(path.join(dirMaxMb, 'webclip_raw.mp4'), 'h264-25mb');
+                        } else if (bin === 'ffmpeg') {
+                            ffArgsMaxMb = args;
+                            fs.writeFileSync(String(args[args.length - 1]), 'h264-15mb');
+                        }
+                        return { code: 0, stdout: '', stderr: '' };
+                    },
+                    runSync: () => {
+                        maxMbCount++;
+                        return {
+                            status: 0,
+                            stdout: JSON.stringify({
+                                streams: [
+                                    { codec_type: 'video', codec_name: 'h264', width: 1280, height: 720 },
+                                    { codec_type: 'audio', codec_name: 'aac' },
+                                ],
+                                format: { duration: '120', size: maxMbCount === 1 ? '25000000' : '15000000' },
+                            }),
+                            stderr: '',
+                        };
+                    },
+                },
+            );
+            assert(ffArgsMaxMb.length > 0 && ffArgsMaxMb.includes('libx264') && ffArgsMaxMb.includes('-maxrate'),
+                'maxMb=18 em H.264 de 25 MB aciona recodificação com -maxrate', ffArgsMaxMb);
+            assert(rMaxMb.limiteBytes === 18_000_000 && rMaxMb.dentroDoLimite === true,
+                'baixarVideo respeita limiteBytes=18000000 e marca dentroDoLimite=true', rMaxMb);
         }
 
         console.log('\n=== S498-5 — transcreverMidia: Whisper API local, fallback e faster-whisper --legendas ===');
