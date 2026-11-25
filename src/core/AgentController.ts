@@ -22,6 +22,7 @@ import { caminhosDaInstalacao } from './backupDoConhecimento';
 import { ExecCommandTool } from '../tools/exec_command';
 import { WebSearchTool } from '../tools/web_search';
 import { WebNavigateTool } from '../tools/web_navigate';
+import { BrowserTool } from '../tools/browser';
 import { WriteTool } from '../tools/write_tool';
 import { EditTool } from '../tools/edit_tool';
 import { ReadTool } from '../tools/read_tool';
@@ -748,6 +749,9 @@ export class AgentController {
         ToolRegistry.register(new ExecCommandTool(), { dangerous: true });
         ToolRegistry.register(new WebSearchTool());
         ToolRegistry.register(new WebNavigateTool());
+        // S501: navegador real (Chrome headless). `dangerous: true` — clica e digita, logo envia formulários;
+        // mesmo tratamento de exec_command/api_request (aprovação em modo SAFE).
+        ToolRegistry.register(new BrowserTool(), { dangerous: true });
         ToolRegistry.register(new WriteTool());
         ToolRegistry.register(new EditTool());
         ToolRegistry.register(new ReadTool());

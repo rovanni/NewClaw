@@ -26,6 +26,7 @@ import { StrategyDiversityGuard } from '../shared/StrategyDiversityGuard';
 import { PLACEHOLDER_ARG_PATTERN } from '../shared/placeholderPatterns';
 import { makeContentStubClassifier, ContentStubClassifier } from '../shared/contentStubClassifier';
 import { sanitizePlanSteps } from './planning/sanitizePlanSteps';
+import { faltaArgumentoDoNavegador } from '../tools/browser';
 import { isWindows } from '../utils/crossPlatform';
 import { permissionRegistry } from '../core/PermissionRegistry';
 import { OperationalKnowledge } from '../memory/OperationalKnowledge';
@@ -729,6 +730,11 @@ export function detectMissingRequiredArgs(tool: string, args: Record<string, unk
     }
     if (tool === 'read_document' && !args['filename'] && !args['file_path'] && !args['path']) {
         return "sem 'filename' obrigatório";
+    }
+    if (tool === 'browser') {
+        // S501: a mesma regra que a própria tool aplica (fonte única: faltaArgumentoDoNavegador).
+        const falta = faltaArgumentoDoNavegador(args);
+        if (falta) return falta;
     }
     if (tool === 'web_navigate') {
         const action = String(args['action'] ?? '').trim();
