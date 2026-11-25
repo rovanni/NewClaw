@@ -37,6 +37,7 @@ const quiet = async <T>(fn: () => Promise<T>): Promise<T> => {
 function orquestradorFalso(opts: { goalAtivo?: boolean } = {}) {
     const o = Object.create(GoalOrchestrator.prototype) as any;
     o.turnosAtivos = new Map();
+    o.complementosAntesDoGoal = new Map();   // S500: o cancelamento descarta o que chegou junto com o turno
     const abandonados: string[] = [];
     o.goalStore = {
         getActiveBySession: () => opts.goalAtivo ? { id: 'goal_1', status: 'executing' } : null,

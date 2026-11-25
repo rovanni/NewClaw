@@ -421,14 +421,19 @@ export class MessageBus {
         // mid-flight equivalente (whisper/vision rodam só no início de um turno).
         if (this.goalOrchestrator && msg.type === 'text' && !msg.text.startsWith('/') && msg.text.trim()) {
             const capturedGoal = this.goalOrchestrator.trySupplementActiveGoal(msg.channel, msg.userId, msg.text);
-            if (capturedGoal) {
+            // Turno rodando mas goal ainda não criado (extração/roteador/suficiência): o texto fica guardado para o goal
+            // desse turno — sem isto ele virava um pedido separado (ver GoalOrchestrator.complementosAntesDoGoal).
+            const guardadoNoTurno = !capturedGoal
+                && this.goalOrchestrator.guardarComplementoDoTurnoEmAndamento(msg.channel, msg.userId, msg.text);
+            if (capturedGoal || guardadoNoTurno) {
                 if (adapter) {
                     await adapter.send(
                         { text: '📎 Anotado — vou considerar isso no que já está em andamento.', format: 'plain' },
                         msg.rawContext
                     ).catch(() => {});
                 }
-                log.info('message_supplemented_active_goal', `goal=${capturedGoal.id}`, { queueId, correlationId });
+                if (capturedGoal) log.info('message_supplemented_active_goal', `goal=${capturedGoal.id}`, { queueId, correlationId });
+                else log.info('message_supplemented_turn_before_goal', 'goal ainda não criado', { queueId, correlationId });
                 markDone();
                 return;
             }
@@ -541,12 +546,13 @@ export class MessageBus {
             const sessionKey = composeSessionKey({ channel: msg.channel, userId: msg.userId });
             const goalStore = this.goalOrchestrator.getGoalStore();
             const [recentGoal] = goalStore.getRecentBySession(sessionKey, 1);
-            if (!recentGoal || !goalStore.hasSupplements(recentGoal.id)) return;
-
-            const orphaned = goalStore.consumeSupplements(recentGoal.id);
+            const doGoal = recentGoal && goalStore.hasSupplements(recentGoal.id) ? goalStore.consumeSupplements(recentGoal.id) : [];
+            // Guardados enquanto o turno não tinha goal e que nenhum goal herdou (o turno virou conversa ou esclarecimento).
+            const semGoal = this.goalOrchestrator.consumirComplementosSemGoal(msg.channel, msg.userId);
+            const orphaned = [...doGoal, ...semGoal];
             if (orphaned.length === 0) return;
 
-            log.info('orphaned_supplement_reprocessed', `goal=${recentGoal.id} count=${orphaned.length}`, { queueId, correlationId });
+            log.info('orphaned_supplement_reprocessed', `goal=${doGoal.length > 0 ? recentGoal!.id : '(nenhum)'} count=${orphaned.length} sem_goal=${semGoal.length}`, { queueId, correlationId });
             const syntheticMsg: NormalizedMessage = {
                 messageId: crypto.randomUUID(),
                 channel: msg.channel,
