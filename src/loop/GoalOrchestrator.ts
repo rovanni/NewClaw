@@ -73,6 +73,16 @@ export class GoalOrchestrator {
      * a resposta foi "nada em andamento" e o pedido seguiu, criou o goal e rodou por minutos.
      */
     private readonly turnosAtivos = new Map<string, AbortController>();
+    /**
+     * Complementos chegados enquanto o turno da sessão ainda NÃO tem goal (extração/roteador/suficiência). Achado real
+     * (24/11/2026, log de produção): o link do TikTok chegou sozinho e, 17 s depois, "Baixe e me envie esse vídeo". A
+     * segunda mensagem caiu entre os dois desvios do MessageBus — a primeira já estava rodando (o `collect` só junta com
+     * quem ESPERA na fila) e o goal só nasceu 31 s após o início do turno (trySupplementActiveGoal não achou goal). Virou
+     * turno novo, e o vídeo foi baixado e enviado duas vezes. Ao criar o goal, os textos daqui viram complementos dele
+     * (mesmo caminho de trySupplementActiveGoal); se o turno acabar sem goal, o MessageBus os reprocessa como mensagem nova
+     * (consumirComplementosSemGoal) — nada se perde.
+     */
+    private readonly complementosAntesDoGoal = new Map<string, string[]>();
     private readonly extractor: GoalExtractor;
     /** ADR-014/015: motor único de validação, com os tipos registrados em validation/motorPadrao. */
     private readonly motorDeValidacao: ValidationEngine;
@@ -199,6 +209,8 @@ export class GoalOrchestrator {
             ctrl.abort();
             log.info(`[GoalOrchestrator] turno da sessão ${chave} cancelado pelo usuário (trigger=user_cancel)`);
         }
+        // O que chegou junto com o turno cancelado é descartado com ele (mesma regra do MessageBus para `textosEmEspera`).
+        this.complementosAntesDoGoal.delete(chave);
         const goal = this.cancelActiveGoal(channel, userId);
         return { turno: !!ctrl, goal };
     }
@@ -624,6 +636,7 @@ export class GoalOrchestrator {
             allowRoadmapAdjustment: classification.isConstruction ?? false,
             successCriteria: [],   // preenchido pelo GoalPlanner no plan inicial
         });
+        this.herdarComplementosAntesDoGoal(sessionKey, goal.id);
 
         // ── Cognitive Kernel Gate (COGNITIVE_KERNEL_ENABLED, default off) ───────────
         // Único ponto onde a Decision do Cognitive Kernel pode mudar o comportamento real
@@ -974,6 +987,47 @@ export class GoalOrchestrator {
         this.goalStore.addSupplement(goal.id, message);
         log.info(`[GoalOrchestrator] goal=${goal.id} recebeu complemento do usuário durante execução`);
         return goal;
+    }
+
+    /**
+     * Segundo desvio do MessageBus, para quando trySupplementActiveGoal() não achou goal: se a sessão tem um turno em
+     * andamento (ainda sem goal — extração, roteador, suficiência), guarda o texto para o goal que esse turno criar. Retorna
+     * true se guardou. Sem turno em andamento (ou turno já cancelado) retorna false e o MessageBus segue o fluxo normal.
+     */
+    guardarComplementoDoTurnoEmAndamento(channel: string, userId: string, message: string): boolean {
+        const sessionKey = composeSessionKey({ channel, userId });
+        const turno = this.turnosAtivos.get(sessionKey);
+        if (!turno || turno.signal.aborted) return false;
+        const lista = this.complementosAntesDoGoal.get(sessionKey) ?? [];
+        lista.push(message);
+        this.complementosAntesDoGoal.set(sessionKey, lista);
+        log.info(`[GoalOrchestrator] sessão ${sessionKey} recebeu complemento antes de o goal existir (${lista.length} guardado(s))`);
+        return true;
+    }
+
+    /**
+     * Chamado logo após criar o goal do turno: os complementos que chegaram antes de o goal existir passam a ser dele — o
+     * GoalExecutionLoop os consome no próximo checkpoint de ciclo, como qualquer complemento (ver complementosAntesDoGoal).
+     */
+    private herdarComplementosAntesDoGoal(sessionKey: string, goalId: string): void {
+        const antesDoGoal = this.complementosAntesDoGoal.get(sessionKey);
+        if (!antesDoGoal) return;
+        this.complementosAntesDoGoal.delete(sessionKey);
+        for (const texto of antesDoGoal) this.goalStore.addSupplement(goalId, texto);
+        log.info(`[GoalOrchestrator] goal=${goalId} herdou ${antesDoGoal.length} complemento(s) chegados antes de o goal existir`);
+    }
+
+    /**
+     * Devolve (e remove) os complementos que o turno guardou mas não chegou a entregar a um goal — o turno virou conversa,
+     * pedido de esclarecimento ou falhou antes do goal. O MessageBus chama depois que o turno termina e os reprocessa como
+     * mensagem nova. Enquanto o turno ainda roda, devolve vazio (eles ainda podem ir para o goal).
+     */
+    consumirComplementosSemGoal(channel: string, userId: string): string[] {
+        const sessionKey = composeSessionKey({ channel, userId });
+        if (this.turnosAtivos.has(sessionKey)) return [];
+        const lista = this.complementosAntesDoGoal.get(sessionKey) ?? [];
+        this.complementosAntesDoGoal.delete(sessionKey);
+        return lista;
     }
 
     getGoalStore(): GoalStore { return this.goalStore; }
