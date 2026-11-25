@@ -15,7 +15,8 @@
   },
   "//optionalDependencies": "newclaw-kernel-adapter é um pacote NÃO publicado, resolvido por caminho relativo (file:../newclaw-kernel-adapter) que só existe quando os dois repositórios são irmãos na mesma máquina. Como dependência normal, quebrava `npm run build` em toda instalação que não fosse a do autor — inclusive qualquer clone do GitHub. Fica como opcional: npm ignora a falha de instalação, e CognitiveKernelGate carrega o pacote sob demanda, desativando o gate quando ausente.",
   "optionalDependencies": {
-    "newclaw-kernel-adapter": "file:../newclaw-kernel-adapter"
+    "newclaw-kernel-adapter": "file:../newclaw-kernel-adapter",
+    "playwright": "^1.49.0"
   },
   "dependencies": {
     "@types/better-sqlite3": "^7.6.13",

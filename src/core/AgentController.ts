@@ -35,6 +35,7 @@ import { CryptoAnalysisTool } from '../tools/crypto_analysis';
 import { ApiRequestTool } from '../tools/api_request';
 import { SshExecTool } from '../tools/ssh_exec';
 import { WeatherTool } from '../tools/weather';
+import { ComputerControlTool } from '../tools/computer_control';
 import { ToolRegistry } from './ToolRegistry';
 import { SessionManager } from '../session/SessionManager';
 import { composeSessionKey } from '../session/SessionKeyFactory';
@@ -693,6 +694,10 @@ export class AgentController {
         // URL ou corpo controlado pelo LLM), exige aprovação em modo SAFE por padrão.
         ToolRegistry.register(new ApiRequestTool(), { dangerous: true });
         ToolRegistry.register(new WeatherTool());
+        // computer_control: controla ESTA máquina (tela, mouse, teclado) e um navegador Playwright
+        // isolado. `dangerous: true` pela mesma razão de exec_command/ssh_exec — clicar e digitar
+        // pode apagar, comprar ou enviar. Aprovação obrigatória em modo SAFE.
+        ToolRegistry.register(new ComputerControlTool(), { dangerous: true });
         ToolRegistry.register(new ScheduleTool(this.scheduler));
 
         for (const tool of ToolRegistry.getEnabled()) {
