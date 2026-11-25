@@ -73,7 +73,7 @@ function plannedPathIntent(tool: string | undefined, args: Record<string, unknow
 }
 
 const DATA_PRODUCING_TOOLS = new Set([
-    'weather', 'crypto_analysis', 'web_search', 'web_navigate',
+    'weather', 'crypto_analysis', 'web_search', 'web_navigate', 'browser',
     'read', 'read_document', 'memory_search', 'exec_command', 'ssh_exec',
 ]);
 

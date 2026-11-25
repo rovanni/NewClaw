@@ -417,7 +417,7 @@ export class RiskAnalyzer {
             if (!step.toolName) continue;
 
             // Web tools requerem internet
-            if (step.toolName === 'web_search' || step.toolName === 'web_navigate') {
+            if (step.toolName === 'web_search' || step.toolName === 'web_navigate' || step.toolName === 'browser') {
                 const netOk = capReg.canSync('network.outbound');
                 if (netOk === false) {
                     risks.push(`Step "${step.description}": sem acesso à internet (network.outbound=false)`);
